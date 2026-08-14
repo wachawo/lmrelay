@@ -1,0 +1,56 @@
+# lmrelay configuration.
+#
+# Looked for, first hit wins:
+#   $LMRELAY_CONFIG  ->  ./lmrelay.toml  ->  ~/.lmrelay/lmrelay.toml
+#
+# ${VAR} in any header value is read from the process environment, so API
+# keys can stay out of this file.
+
+[server]
+host             = "127.0.0.1"   # 0.0.0.0 only with a token set below
+port             = 11434         # the port Ollama clients already expect
+default_upstream = "ollama"      # used when the path has no upstream prefix
+connect_timeout  = 10            # seconds to reach the upstream; there is
+                                 # deliberately no read timeout (see README)
+log_level        = "INFO"
+
+# The credential a CALLER must present to lmrelay. Sent as either
+#   Authorization: Bearer <token>       (OpenAI SDKs, curl, Ollama clients)
+#   x-api-key: <token>                  (Anthropic SDKs)
+# It is stripped from the request and never forwarded upstream.
+# LMRELAY_TOKEN overrides this. Leave unset to disable caller auth.
+[auth]
+token = "CHANGE-ME"
+
+
+# Local Ollama. Needs no credential, so it has no headers at all.
+# lmrelay listens on 11434, so move Ollama itself off that port:
+#   OLLAMA_HOST=127.0.0.1:11435 ollama serve
+[upstream.ollama]
+base_url = "http://127.0.0.1:11435"
+dialect  = "ollama"
+
+# OpenAI. Wants a bearer token.
+[upstream.openai]
+base_url = "https://api.openai.com"
+dialect  = "openai"
+headers  = { Authorization = "Bearer ${OPENAI_API_KEY}" }
+
+# Anthropic. Wants x-api-key plus a dated version header, and speaks its
+# own dialect on /v1/messages — not /v1/chat/completions.
+[upstream.anthropic]
+base_url = "https://api.anthropic.com"
+dialect  = "anthropic"
+headers  = { "x-api-key" = "${ANTHROPIC_API_KEY}", "anthropic-version" = "2023-06-01" }
+
+# DeepSeek. OpenAI-compatible wire format, bearer token.
+[upstream.deepseek]
+base_url = "https://api.deepseek.com"
+dialect  = "openai"
+headers  = { Authorization = "Bearer ${DEEPSEEK_API_KEY}" }
+
+# Grok (xAI). OpenAI-compatible wire format, bearer token.
+[upstream.grok]
+base_url = "https://api.x.ai"
+dialect  = "openai"
+headers  = { Authorization = "Bearer ${XAI_API_KEY}" }

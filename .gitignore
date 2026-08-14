@@ -1,0 +1,50 @@
+# IDE
+.idea/
+.vscode/
+.cursor/
+.claude/
+.codex
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+*.csv
+
+# Docs
+*.md
+!README.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+!docs/**/*.md
+
+# Local config — holds the caller token and provider API keys.
+# The shipped example lives inside the package and is not matched by this.
+lmrelay.toml
