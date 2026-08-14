@@ -219,6 +219,19 @@ aliasing. No token accounting, usage database or budgets. No admin API, dashboar
 metrics. No caching or rate limiting. One caller token, not a key ring. No TLS — put nginx
 in front. No config hot reload; restart the process.
 
+## Tests
+
+```sh
+pip install -e '.[test]'
+pytest
+```
+
+Most of the suite drives the app in process against a recording upstream, so it needs no
+network and no Ollama. `tests/test_streaming.py` is the exception: it runs the relay under
+uvicorn in front of an upstream that answers a chunk at a time, because the property it
+checks — that the caller has the first line before the upstream has written the last —
+cannot be seen through an in-process client.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
