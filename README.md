@@ -63,21 +63,28 @@ OLLAMA_HOST=127.0.0.1:11435 ollama list
 Ask the relay for the model list. Either dialect will do; both reach the same Ollama:
 
 ```bash
-curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
-curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+curl http://127.0.0.1:11435/api/tags    # Ollama's shape
+curl http://127.0.0.1:11435/v1/models   # OpenAI's shape
 ```
 
 Then put a model to work. `qwen3:8b` here is whatever `ollama list` shows on your machine:
 
 ```bash
-curl http://127.0.0.1:11435/api/generate \
-  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+curl http://127.0.0.1:11435/api/generate -d '{
+  "model": "qwen3:8b",
+  "prompt": "Reply with exactly: it works",
+  "stream": false,
+  "think": false
+}'
 ```
 
 ```bash
 curl http://127.0.0.1:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+  -d '{
+  "model": "qwen3:8b",
+  "messages": [{"role": "user", "content": "say ok"}]
+}'
 ```
 
 `qwen3` reasons before it answers, and only Ollama's dialect has a switch for that: the `"think": false` above. Through `/v1/chat/completions` the reasoning arrives inside the content as a `<think>` block, because lmrelay forwards what the upstream produced and does not edit it.
@@ -85,13 +92,14 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 With auth on, every one of these needs the credential:
 
 ```bash
-curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+curl http://127.0.0.1:11435/api/tags \
+  -H "Authorization: Bearer $LMRELAY_TOKEN"
 ```
 
 ### Running it for real
 
 ```bash
-lmrelay token gen --label laptop   # prints the token once, turns auth on
+lmrelay token gen --label laptop   # printed once; turns auth on
 lmrelay enable                     # start at login, and start now
 lmrelay status
 ```
@@ -169,7 +177,10 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```bash
 curl http://127.0.0.1:11435/api/chat \
   -H "Authorization: Bearer $LMRELAY_TOKEN" \
-  -d '{"model": "llama3", "messages": [{"role": "user", "content": "hi"}]}'
+  -d '{
+  "model": "llama3",
+  "messages": [{"role": "user", "content": "hi"}]
+}'
 ```
 
 `GET /healthz` answers `{"status": "ok"}` without touching an upstream and without a

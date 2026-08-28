@@ -64,21 +64,28 @@ OLLAMA_HOST=127.0.0.1:11435 ollama list
 릴레이에 모델 목록을 요청합니다. 두 방언 중 어느 쪽이든 같은 Ollama에 도달합니다:
 
 ```bash
-curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
-curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+curl http://127.0.0.1:11435/api/tags    # Ollama's shape
+curl http://127.0.0.1:11435/v1/models   # OpenAI's shape
 ```
 
 그다음 모델을 실제로 돌려봅니다. 여기서 `qwen3:8b`는 각자의 머신에서 `ollama list`가 보여주는 이름입니다:
 
 ```bash
-curl http://127.0.0.1:11435/api/generate \
-  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+curl http://127.0.0.1:11435/api/generate -d '{
+  "model": "qwen3:8b",
+  "prompt": "Reply with exactly: it works",
+  "stream": false,
+  "think": false
+}'
 ```
 
 ```bash
 curl http://127.0.0.1:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+  -d '{
+  "model": "qwen3:8b",
+  "messages": [{"role": "user", "content": "say ok"}]
+}'
 ```
 
 `qwen3`는 답하기 전에 추론하며, 그 스위치는 Ollama 방언에만 있습니다. 위의 `"think": false`가 그것입니다. `/v1/chat/completions`를 거치면 추론은 content 안에 `<think>` 블록으로 도착합니다. lmrelay는 업스트림이 만든 것을 그대로 전달하고 편집하지 않기 때문입니다.
@@ -86,13 +93,14 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 인증을 켜면 이 요청들 모두 자격 증명이 필요합니다:
 
 ```bash
-curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+curl http://127.0.0.1:11435/api/tags \
+  -H "Authorization: Bearer $LMRELAY_TOKEN"
 ```
 
 ### 실제로 운용하기
 
 ```bash
-lmrelay token gen --label laptop   # prints the token once, turns auth on
+lmrelay token gen --label laptop   # printed once; turns auth on
 lmrelay enable                     # start at login, and start now
 lmrelay status
 ```
@@ -170,7 +178,10 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```bash
 curl http://127.0.0.1:11435/api/chat \
   -H "Authorization: Bearer $LMRELAY_TOKEN" \
-  -d '{"model": "llama3", "messages": [{"role": "user", "content": "hi"}]}'
+  -d '{
+  "model": "llama3",
+  "messages": [{"role": "user", "content": "hi"}]
+}'
 ```
 
 `GET /healthz`는 업스트림을 건드리지 않고 자격 증명도 없이 `{"status": "ok"}`를 응답합니다. 나머지는

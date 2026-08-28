@@ -62,21 +62,28 @@ OLLAMA_HOST=127.0.0.1:11435 ollama list
 向中继请求模型列表。两种方言都可以，它们都指向同一个 Ollama：
 
 ```bash
-curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
-curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+curl http://127.0.0.1:11435/api/tags    # Ollama's shape
+curl http://127.0.0.1:11435/v1/models   # OpenAI's shape
 ```
 
 然后让模型干活。这里的 `qwen3:8b` 就是 `ollama list` 在你机器上列出的名字：
 
 ```bash
-curl http://127.0.0.1:11435/api/generate \
-  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+curl http://127.0.0.1:11435/api/generate -d '{
+  "model": "qwen3:8b",
+  "prompt": "Reply with exactly: it works",
+  "stream": false,
+  "think": false
+}'
 ```
 
 ```bash
 curl http://127.0.0.1:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+  -d '{
+  "model": "qwen3:8b",
+  "messages": [{"role": "user", "content": "say ok"}]
+}'
 ```
 
 `qwen3` 会先推理再回答，而只有 Ollama 的方言提供了开关，即上面的 `"think": false`。经由 `/v1/chat/completions` 时，推理会作为 `<think>` 块出现在 content 里，因为 lmrelay 原样转发上游产生的内容，不做修改。
@@ -84,13 +91,14 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 开启鉴权后，上面每一个请求都需要带上凭据：
 
 ```bash
-curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+curl http://127.0.0.1:11435/api/tags \
+  -H "Authorization: Bearer $LMRELAY_TOKEN"
 ```
 
 ### 正式运行
 
 ```bash
-lmrelay token gen --label laptop   # prints the token once, turns auth on
+lmrelay token gen --label laptop   # printed once; turns auth on
 lmrelay enable                     # start at login, and start now
 lmrelay status
 ```
@@ -167,7 +175,10 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```bash
 curl http://127.0.0.1:11435/api/chat \
   -H "Authorization: Bearer $LMRELAY_TOKEN" \
-  -d '{"model": "llama3", "messages": [{"role": "user", "content": "hi"}]}'
+  -d '{
+  "model": "llama3",
+  "messages": [{"role": "user", "content": "hi"}]
+}'
 ```
 
 `GET /healthz` 返回 `{"status": "ok"}`，既不接触上游，也不需要凭据。其余请求一律经由

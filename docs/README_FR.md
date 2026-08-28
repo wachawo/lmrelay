@@ -66,21 +66,28 @@ OLLAMA_HOST=127.0.0.1:11435 ollama list
 Demandez au relais la liste des modèles. L'un ou l'autre dialecte convient ; les deux atteignent le même Ollama :
 
 ```bash
-curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
-curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+curl http://127.0.0.1:11435/api/tags    # Ollama's shape
+curl http://127.0.0.1:11435/v1/models   # OpenAI's shape
 ```
 
 Puis mettez un modèle au travail. Ici `qwen3:8b` correspond à ce qu'affiche `ollama list` sur votre machine :
 
 ```bash
-curl http://127.0.0.1:11435/api/generate \
-  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+curl http://127.0.0.1:11435/api/generate -d '{
+  "model": "qwen3:8b",
+  "prompt": "Reply with exactly: it works",
+  "stream": false,
+  "think": false
+}'
 ```
 
 ```bash
 curl http://127.0.0.1:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+  -d '{
+  "model": "qwen3:8b",
+  "messages": [{"role": "user", "content": "say ok"}]
+}'
 ```
 
 `qwen3` raisonne avant de répondre, et seul le dialecte d'Ollama dispose d'un interrupteur pour cela : le `"think": false` ci-dessus. Via `/v1/chat/completions`, le raisonnement arrive dans le contenu sous forme de bloc `<think>`, car lmrelay transmet ce que l'amont a produit sans le modifier.
@@ -88,13 +95,14 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 Avec l'authentification activée, chacune de ces requêtes exige les identifiants :
 
 ```bash
-curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+curl http://127.0.0.1:11435/api/tags \
+  -H "Authorization: Bearer $LMRELAY_TOKEN"
 ```
 
 ### En conditions réelles
 
 ```bash
-lmrelay token gen --label laptop   # prints the token once, turns auth on
+lmrelay token gen --label laptop   # printed once; turns auth on
 lmrelay enable                     # start at login, and start now
 lmrelay status
 ```
@@ -174,7 +182,10 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```bash
 curl http://127.0.0.1:11435/api/chat \
   -H "Authorization: Bearer $LMRELAY_TOKEN" \
-  -d '{"model": "llama3", "messages": [{"role": "user", "content": "hi"}]}'
+  -d '{
+  "model": "llama3",
+  "messages": [{"role": "user", "content": "hi"}]
+}'
 ```
 
 `GET /healthz` répond `{"status": "ok"}` sans toucher à un upstream et sans identifiant. Tout le
