@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "lmrelay contributors" }]
-keywords = ["ollama", "llm", "proxy", "relay", "openai", "anthropic", "deepseek", "grok"]
+keywords = [
+  "ollama", "llm", "proxy", "reverse-proxy", "relay", "cli", "self-hosted", "fastapi",
+  "openai", "anthropic", "deepseek", "grok",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
