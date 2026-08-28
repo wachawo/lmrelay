@@ -60,6 +60,36 @@ Ollama 不必做任何改动，中继由各客户端自行决定是否接入。
 OLLAMA_HOST=127.0.0.1:11435 ollama list
 ```
 
+### 验证是否正常
+
+向中继请求模型列表。两种方言都可以，它们都指向同一个 Ollama：
+
+```bash
+curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
+curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+```
+
+然后让模型干活。这里的 `qwen3:8b` 就是 `ollama list` 在你机器上列出的名字：
+
+```bash
+curl http://127.0.0.1:11435/api/generate \
+  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+```
+
+```bash
+curl http://127.0.0.1:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+```
+
+`qwen3` 会先推理再回答，而只有 Ollama 的方言提供了开关，即上面的 `"think": false`。经由 `/v1/chat/completions` 时，推理会作为 `<think>` 块出现在 content 里，因为 lmrelay 原样转发上游产生的内容，不做修改。
+
+开启鉴权后，上面每一个请求都需要带上凭据：
+
+```bash
+curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+```
+
 ### 正式运行
 
 ```bash

@@ -63,6 +63,36 @@ Ollama остаётся на 11434, её установку трогать не 
 OLLAMA_HOST=127.0.0.1:11435 ollama list
 ```
 
+### Проверка работы
+
+Запросите у релея список моделей. Подойдёт любой из двух диалектов — оба ведут к одной и той же Ollama:
+
+```bash
+curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
+curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+```
+
+Затем нагрузите модель работой. `qwen3:8b` здесь — это то, что показывает `ollama list` на вашей машине:
+
+```bash
+curl http://127.0.0.1:11435/api/generate \
+  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+```
+
+```bash
+curl http://127.0.0.1:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+```
+
+`qwen3` рассуждает перед ответом, и переключатель для этого есть только в диалекте Ollama: `"think": false` выше. Через `/v1/chat/completions` рассуждение приходит внутри содержимого блоком `<think>`, потому что lmrelay передаёт то, что выдал апстрим, и не правит его.
+
+При включённой авторизации каждый из этих запросов требует учётных данных:
+
+```bash
+curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+```
+
 ### Запуск всерьёз
 
 ```bash

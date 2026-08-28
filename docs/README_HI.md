@@ -62,6 +62,36 @@ client के लिए अलग से चुना जाता है।
 OLLAMA_HOST=127.0.0.1:11435 ollama list
 ```
 
+### जाँचें कि यह काम करता है
+
+relay से models की सूची माँगें। दोनों में से कोई भी dialect चलेगा; दोनों एक ही Ollama तक पहुँचते हैं:
+
+```bash
+curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
+curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+```
+
+फिर किसी model से काम लें। यहाँ `qwen3:8b` वही है जो आपकी मशीन पर `ollama list` दिखाता है:
+
+```bash
+curl http://127.0.0.1:11435/api/generate \
+  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+```
+
+```bash
+curl http://127.0.0.1:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+```
+
+`qwen3` उत्तर देने से पहले तर्क करता है, और इसका switch केवल Ollama के dialect में है: ऊपर वाला `"think": false`। `/v1/chat/completions` से तर्क content के भीतर `<think>` ब्लॉक के रूप में आता है, क्योंकि lmrelay जो upstream ने बनाया उसे ज्यों का त्यों भेजता है और उसमें बदलाव नहीं करता।
+
+auth चालू होने पर इनमें से हर अनुरोध को credential चाहिए:
+
+```bash
+curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+```
+
 ### असल में चलाना
 
 ```bash

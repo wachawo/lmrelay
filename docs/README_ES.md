@@ -64,6 +64,36 @@ funciona:
 OLLAMA_HOST=127.0.0.1:11435 ollama list
 ```
 
+### Comprobar que funciona
+
+Pide al relay la lista de modelos. Sirve cualquiera de los dos dialectos; ambos llegan al mismo Ollama:
+
+```bash
+curl http://127.0.0.1:11435/api/tags     # Ollama's own shape
+curl http://127.0.0.1:11435/v1/models    # the OpenAI-compatible shape
+```
+
+Después pon un modelo a trabajar. Aquí `qwen3:8b` es lo que muestre `ollama list` en tu máquina:
+
+```bash
+curl http://127.0.0.1:11435/api/generate \
+  -d '{"model": "qwen3:8b", "prompt": "Reply with exactly: it works", "stream": false, "think": false}'
+```
+
+```bash
+curl http://127.0.0.1:11435/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "say ok"}]}'
+```
+
+`qwen3` razona antes de responder, y solo el dialecto de Ollama tiene un interruptor para eso: el `"think": false` de arriba. A través de `/v1/chat/completions` el razonamiento llega dentro del contenido como un bloque `<think>`, porque lmrelay reenvía lo que produjo el upstream y no lo edita.
+
+Con la autenticación activada, todas estas peticiones necesitan la credencial:
+
+```bash
+curl -H "Authorization: Bearer $LMRELAY_TOKEN" http://127.0.0.1:11435/api/tags
+```
+
 ### Puesta en marcha real
 
 ```bash
