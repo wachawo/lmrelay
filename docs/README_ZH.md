@@ -153,12 +153,12 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 `default_upstream` 处理该请求，路径原样保留。
 
 ```
-POST /api/chat                      -> ollama    , forwards /api/chat
-POST /v1/chat/completions           -> ollama    , forwards /v1/chat/completions
-POST /openai/v1/chat/completions    -> openai    , forwards /v1/chat/completions
-POST /anthropic/v1/messages         -> anthropic , forwards /v1/messages
-POST /deepseek/v1/chat/completions  -> deepseek  , forwards /v1/chat/completions
-POST /grok/v1/chat/completions      -> grok      , forwards /v1/chat/completions
+POST /api/chat                     -> ollama     /api/chat
+POST /v1/chat/completions          -> ollama     /v1/chat/completions
+POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
+POST /anthropic/v1/messages        -> anthropic  /v1/messages
+POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
+POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
 ```
 
 因此客户端只需记住一次端口，把某个客户端改指到另一个服务商只是一行的事：
@@ -168,7 +168,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
-OpenAI(base_url="http://relay:11435/v1",        api_key=RELAY_TOKEN)   # local Ollama
+OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```
 
@@ -203,8 +203,11 @@ deepseek 和 grok **全部**四个上游。
 在 lmrelay 能确定某个路径在上游根本不存在的地方，它会自己讲明，而不是让服务商的 404
 看起来像是你的错：
 
-```json
-{"error": "lmrelay: upstream 'anthropic' speaks the Anthropic API; '/v1/chat/completions' is an OpenAI-dialect path. lmrelay forwards requests unchanged and does not translate between dialects."}
+```text
+lmrelay: upstream 'anthropic' speaks the Anthropic API;
+'/v1/chat/completions' is an OpenAI-dialect path. lmrelay
+forwards requests unchanged and does not translate between
+dialects.
 ```
 
 lmrelay 产生的每条错误都以 `lmrelay: ` 开头，所以绝不会被误当成服务商说的话。

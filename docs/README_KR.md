@@ -155,12 +155,12 @@ autostart    systemd: enabled, active
 선택합니다. 그 밖에는 `default_upstream`이 요청을 처리하고 경로는 건드리지 않습니다.
 
 ```
-POST /api/chat                      -> ollama    , forwards /api/chat
-POST /v1/chat/completions           -> ollama    , forwards /v1/chat/completions
-POST /openai/v1/chat/completions    -> openai    , forwards /v1/chat/completions
-POST /anthropic/v1/messages         -> anthropic , forwards /v1/messages
-POST /deepseek/v1/chat/completions  -> deepseek  , forwards /v1/chat/completions
-POST /grok/v1/chat/completions      -> grok      , forwards /v1/chat/completions
+POST /api/chat                     -> ollama     /api/chat
+POST /v1/chat/completions          -> ollama     /v1/chat/completions
+POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
+POST /anthropic/v1/messages        -> anthropic  /v1/messages
+POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
+POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
 ```
 
 그래서 클라이언트는 포트를 한 번만 익히면 되고, 하나를 다른 제공자로 돌리는 일은 한 줄이면
@@ -171,7 +171,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
-OpenAI(base_url="http://relay:11435/v1",        api_key=RELAY_TOKEN)   # local Ollama
+OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```
 
@@ -207,8 +207,11 @@ lmrelay는 메서드, 경로, 쿼리 문자열, 본문 바이트를 **그대로*
 어떤 경로가 업스트림에 확실히 존재하지 않는다고 lmrelay가 판단할 수 있으면, 제공자의 404가 사용자의
 실수처럼 보이도록 두지 않고 직접 그렇게 알립니다:
 
-```json
-{"error": "lmrelay: upstream 'anthropic' speaks the Anthropic API; '/v1/chat/completions' is an OpenAI-dialect path. lmrelay forwards requests unchanged and does not translate between dialects."}
+```text
+lmrelay: upstream 'anthropic' speaks the Anthropic API;
+'/v1/chat/completions' is an OpenAI-dialect path. lmrelay
+forwards requests unchanged and does not translate between
+dialects.
 ```
 
 lmrelay가 만들어 내는 모든 오류는 `lmrelay: `로 시작하므로, 제공자가 한 말로 오해할 일이 없습니다.

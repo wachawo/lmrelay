@@ -155,12 +155,12 @@ autostart    systemd: enabled, active
 場合に限る。一致しなければ `default_upstream` がリクエストを処理し、パスには手を触れない。
 
 ```
-POST /api/chat                      -> ollama    , forwards /api/chat
-POST /v1/chat/completions           -> ollama    , forwards /v1/chat/completions
-POST /openai/v1/chat/completions    -> openai    , forwards /v1/chat/completions
-POST /anthropic/v1/messages         -> anthropic , forwards /v1/messages
-POST /deepseek/v1/chat/completions  -> deepseek  , forwards /v1/chat/completions
-POST /grok/v1/chat/completions      -> grok      , forwards /v1/chat/completions
+POST /api/chat                     -> ollama     /api/chat
+POST /v1/chat/completions          -> ollama     /v1/chat/completions
+POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
+POST /anthropic/v1/messages        -> anthropic  /v1/messages
+POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
+POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
 ```
 
 したがってクライアントが覚えるポートは一度きりで、別のプロバイダに向け直すのは 1 行で済む:
@@ -170,7 +170,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
-OpenAI(base_url="http://relay:11435/v1",        api_key=RELAY_TOKEN)   # local Ollama
+OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```
 
@@ -206,8 +206,11 @@ deepseek、grok の**すべて**に届く。
 アップストリームにそのパスが確実に存在しないと lmrelay が判断できる場合、lmrelay は自分でそう言う。
 プロバイダの 404 があなたの間違いのように見えるのを避けるためだ:
 
-```json
-{"error": "lmrelay: upstream 'anthropic' speaks the Anthropic API; '/v1/chat/completions' is an OpenAI-dialect path. lmrelay forwards requests unchanged and does not translate between dialects."}
+```text
+lmrelay: upstream 'anthropic' speaks the Anthropic API;
+'/v1/chat/completions' is an OpenAI-dialect path. lmrelay
+forwards requests unchanged and does not translate between
+dialects.
 ```
 
 lmrelay が生成するエラーはすべて `lmrelay: ` で始まるので、プロバイダが返したものと取り違えられる

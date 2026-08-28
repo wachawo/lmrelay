@@ -159,12 +159,12 @@ chiave in `[upstream]`. Altrimenti la richiesta è gestita da `default_upstream`
 resta intatto.
 
 ```
-POST /api/chat                      -> ollama    , forwards /api/chat
-POST /v1/chat/completions           -> ollama    , forwards /v1/chat/completions
-POST /openai/v1/chat/completions    -> openai    , forwards /v1/chat/completions
-POST /anthropic/v1/messages         -> anthropic , forwards /v1/messages
-POST /deepseek/v1/chat/completions  -> deepseek  , forwards /v1/chat/completions
-POST /grok/v1/chat/completions      -> grok      , forwards /v1/chat/completions
+POST /api/chat                     -> ollama     /api/chat
+POST /v1/chat/completions          -> ollama     /v1/chat/completions
+POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
+POST /anthropic/v1/messages        -> anthropic  /v1/messages
+POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
+POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
 ```
 
 Così un client impara la porta una volta sola, e ridirigerlo verso un provider diverso è
@@ -175,7 +175,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
-OpenAI(base_url="http://relay:11435/v1",        api_key=RELAY_TOKEN)   # local Ollama
+OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```
 
@@ -212,8 +212,11 @@ funzionare, stanno nel documento di configurazione.
 Dove lmrelay può stabilire che un percorso a monte certamente non esiste, lo dichiara da sé
 invece di lasciare che il 404 del provider sembri un errore dell'utente:
 
-```json
-{"error": "lmrelay: upstream 'anthropic' speaks the Anthropic API; '/v1/chat/completions' is an OpenAI-dialect path. lmrelay forwards requests unchanged and does not translate between dialects."}
+```text
+lmrelay: upstream 'anthropic' speaks the Anthropic API;
+'/v1/chat/completions' is an OpenAI-dialect path. lmrelay
+forwards requests unchanged and does not translate between
+dialects.
 ```
 
 Ogni errore generato da lmrelay inizia con `lmrelay: `, così non viene mai scambiato per

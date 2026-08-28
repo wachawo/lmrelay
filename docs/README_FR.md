@@ -159,12 +159,12 @@ Le premier segment du chemin sélectionne l'upstream si et seulement s'il corres
 une clé de `[upstream]`. Sinon, `default_upstream` traite la requête et le chemin reste intact.
 
 ```
-POST /api/chat                      -> ollama    , forwards /api/chat
-POST /v1/chat/completions           -> ollama    , forwards /v1/chat/completions
-POST /openai/v1/chat/completions    -> openai    , forwards /v1/chat/completions
-POST /anthropic/v1/messages         -> anthropic , forwards /v1/messages
-POST /deepseek/v1/chat/completions  -> deepseek  , forwards /v1/chat/completions
-POST /grok/v1/chat/completions      -> grok      , forwards /v1/chat/completions
+POST /api/chat                     -> ollama     /api/chat
+POST /v1/chat/completions          -> ollama     /v1/chat/completions
+POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
+POST /anthropic/v1/messages        -> anthropic  /v1/messages
+POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
+POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
 ```
 
 Un client n'a donc à apprendre le port qu'une seule fois, et le rediriger vers un autre
@@ -175,7 +175,7 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
-OpenAI(base_url="http://relay:11435/v1",        api_key=RELAY_TOKEN)   # local Ollama
+OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```
 
@@ -212,8 +212,11 @@ fonctionnel, figurent dans le document de configuration.
 Lorsque lmrelay peut déterminer qu'un chemin n'existe certainement pas en amont, il le dit
 lui-même plutôt que de laisser le 404 du fournisseur passer pour votre erreur :
 
-```json
-{"error": "lmrelay: upstream 'anthropic' speaks the Anthropic API; '/v1/chat/completions' is an OpenAI-dialect path. lmrelay forwards requests unchanged and does not translate between dialects."}
+```text
+lmrelay: upstream 'anthropic' speaks the Anthropic API;
+'/v1/chat/completions' is an OpenAI-dialect path. lmrelay
+forwards requests unchanged and does not translate between
+dialects.
 ```
 
 Toute erreur produite par lmrelay commence par `lmrelay: `, elle n'est donc jamais confondue avec

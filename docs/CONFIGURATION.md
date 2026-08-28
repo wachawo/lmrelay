@@ -136,8 +136,9 @@ a preset, so `lmrelay provider add openai sk-...` is the whole command. For anyt
 
 ```bash
 lmrelay provider add openai sk-...
-lmrelay provider add local tok --base-url http://10.0.0.5:8000 --dialect openai
-lmrelay provider list              # every upstream, from the file and from state
+lmrelay provider add local tok \
+  --base-url http://10.0.0.5:8000 --dialect openai
+lmrelay provider list          # from the file and from state
 lmrelay provider delete local
 ```
 
@@ -228,8 +229,11 @@ These are JSON bodies of the form `{"error": "..."}` returned to the caller.
 
 One dialect refusal in full, as an OpenAI-shaped client aimed at `anthropic` receives it:
 
-```json
-{"error": "lmrelay: upstream 'anthropic' speaks the Anthropic API; '/v1/chat/completions' is an OpenAI-dialect path. lmrelay forwards requests unchanged and does not translate between dialects."}
+```text
+lmrelay: upstream 'anthropic' speaks the Anthropic API;
+'/v1/chat/completions' is an OpenAI-dialect path. lmrelay
+forwards requests unchanged and does not translate between
+dialects.
 ```
 
 ### Startup and config errors
