@@ -11,12 +11,28 @@ Un piccolo relay HTTP che ascolta sulla 11435 accanto a un [Ollama](https://olla
 
 ```mermaid
 flowchart LR
-    C["clients"] -->|":11435"| R("lmrelay")
-    R -->|"/api/*, /v1/*"| O["Ollama :11434"]
-    R -->|"/openai/v1/*"| P1["OpenAI"]
-    R -->|"/anthropic/v1/*"| P2["Anthropic"]
-    R -->|"/deepseek/v1/*"| P3["DeepSeek"]
-    R -->|"/grok/v1/*"| P4["Grok"]
+    C["clients<br/>curl, OpenAI SDK, Ollama SDK"]
+
+    subgraph local["your machine"]
+        direction TB
+        R["lmrelay<br/>127.0.0.1:11435"]
+        O["Ollama<br/>127.0.0.1:11434"]
+    end
+
+    subgraph hosted["hosted providers, over the internet"]
+        direction TB
+        P1["OpenAI"]
+        P2["Anthropic"]
+        P3["DeepSeek"]
+        P4["Grok"]
+    end
+
+    C -- "caller token" --> R
+    R -- "no prefix" --> O
+    R -- "/openai/" --> P1
+    R -- "/anthropic/" --> P2
+    R -- "/deepseek/" --> P3
+    R -- "/grok/" --> P4
 ```
 
 ### Requisiti
