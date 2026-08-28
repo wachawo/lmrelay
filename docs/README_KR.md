@@ -7,7 +7,7 @@
 
 로컬 [Ollama](https://ollama.com) 옆에서 11435 포트를 수신하는 작은 HTTP 릴레이입니다. 호출자에게 자격 증명을 요구할 수 있고, 경로 앞에 세그먼트 하나를 붙이면 호스팅 제공자로 연결합니다.
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | **한국어**
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | **[한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)**
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,13 @@ flowchart LR
 ### 요구 사항
 
 - Python 3.11 이상, 그리고 세 개의 의존성: FastAPI, uvicorn, httpx.
-- Linux와 macOS는 모든 명령을 실행합니다. `serve`(분리 실행)와 `enable`(systemd `--user` 유닛 또는
-  launchd 에이전트)도 포함합니다.
-- Windows는 `run`만 실행합니다. `serve`와 `enable`은 절반만 시작하는 대신, 이 플랫폼에는 `os.fork`가
-  없다고 알립니다.
+- Linux와 macOS는 모든 명령을 실행합니다. `serve`(분리 실행)와 `enable`도 포함합니다. `enable`은
+  Linux에서는 systemd `--user` 유닛, macOS에서는 launchd 에이전트를 쓰며, 둘 다 설치돼 있지 않은
+  곳에서는 거부합니다.
+- Windows는 `run`만 실행합니다. 절반만 시작하는 대신, `serve`는 이 플랫폼에 `os.fork`가 없다고
+  알리고 `enable`은 systemd도 launchd도 없다고 알립니다.
 - 11434의 로컬 Ollama가 기본 업스트림이지만 필수는 아닙니다. 호스팅 제공자만 설정한 릴레이도
-  유효합니다.
+  `default_upstream`이 그중 하나를 가리키기만 하면 유효합니다.
 
 ### 설치
 
@@ -54,7 +55,7 @@ Ollama는 11434를 그대로 쓰고 설치 상태도 전혀 건드리지 않습�
 클라이언트마다 선택해서 적용합니다.
 
 새 상태에서는 인증이 꺼져 있으므로, 루프백에서 이것은 Ollama 앞에 놓인 투명 프록시입니다. 의도한
-동작입니다. 방금 설치한 릴레이가 토큰을 만들기도 전에 자기 Ollama에서 사용자를 잠가내서는 안 됩니다.
+동작입니다. 방금 설치한 릴레이가 토큰을 만들기도 전에 사용자를 자기 Ollama에서 차단해서는 안 됩니다.
 클라이언트를 11435로 향하게 하면 그대로 동작합니다:
 
 ```bash
@@ -110,7 +111,8 @@ autostart    systemd: enabled, active
 `--dialect`, 그리고 여러 번 쓸 수 있는 `--header K=V`를 받습니다. 이름이 알려진 경우 — `openai`,
 `anthropic`, `deepseek`, `grok`, `ollama` — 기본 URL과 dialect, 헤더 형태를 프리셋에서 가져오므로
 `lmrelay provider add openai sk-...` 한 줄이면 끝입니다. `--config PATH`는 설정이나 상태를 읽는 모든
-명령이 받습니다. 즉 `init`을 뺀 모든 명령이며, `init`은 언제나 `~/.lmrelay/lmrelay.toml`에 씁니다.
+명령이 받습니다. 즉 `init`과 `disable`을 뺀 모든 명령이며, `init`은 언제나
+`~/.lmrelay/lmrelay.toml`에 쓰고 `disable`은 둘 다 읽지 않습니다.
 
 ### 업스트림 선택
 
@@ -183,11 +185,11 @@ pytest
 ```
 
 테스트 대부분은 기록된 업스트림을 상대로 앱을 인프로세스로 구동하므로 네트워크도 Ollama도 필요
-없습니다. [`tests/test_streaming.py`](tests/test_streaming.py)는 예외입니다. 한 번에 한 청크씩
+없습니다. [`tests/test_streaming.py`](../tests/test_streaming.py)는 예외입니다. 한 번에 한 청크씩
 응답하는 업스트림 앞에서 릴레이를 uvicorn으로 실행합니다. 이 테스트가 확인하는 성질 — 업스트림이
 마지막 줄을 쓰기 전에 호출자가 첫 줄을 받는다는 것 — 은 인프로세스 클라이언트로는 볼 수 없기
 때문입니다.
 
 ### 라이선스
 
-MIT License. [LICENSE](LICENSE)를 참고합니다.
+MIT License. [LICENSE](../LICENSE)를 참고합니다.

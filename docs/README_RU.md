@@ -7,7 +7,7 @@
 
 Небольшой HTTP-релей: слушает 11435 рядом с локальной [Ollama](https://ollama.com), умеет требовать учётные данные от обращающихся к нему клиентов и выходит на облачного провайдера через один добавленный в начало пути сегмент.
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | **Русский** | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | **[Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md)** | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,13 @@ flowchart LR
 ### Требования
 
 - Python 3.11 или новее и три зависимости: FastAPI, uvicorn и httpx.
-- Linux и macOS выполняют все команды, включая `serve` (в фоне) и `enable` (юнит systemd
-  `--user` или агент launchd).
-- Windows выполняет только `run`. `serve` и `enable` сообщают, что на этой платформе нет
-  `os.fork`, вместо того чтобы запуститься наполовину.
+- Linux и macOS выполняют все команды, включая `serve` (в фоне) и `enable`: юнит systemd
+  `--user` в Linux, агент launchd в macOS и отказ там, где не установлено ни то ни другое.
+- Windows выполняет только `run`. `serve` сообщает, что на этой платформе нет `os.fork`, а
+  `enable` — что нет ни systemd, ни launchd, вместо того чтобы запуститься наполовину.
 - Локальная Ollama на 11434 — апстрим по умолчанию, но она не обязательна. Релей, где
-  настроены только облачные провайдеры, — допустимая конфигурация.
+  настроены только облачные провайдеры, — допустимая конфигурация, если `default_upstream`
+  называет одного из них.
 
 ### Установка
 
@@ -112,7 +113,8 @@ autostart    systemd: enabled, active
 `anthropic`, `deepseek`, `grok`, `ollama` — базовый URL, диалект и форма заголовка берутся из
 пресета, так что `lmrelay provider add openai sk-...` — это вся команда целиком. `--config PATH`
 принимает каждая команда, которая читает конфиг или состояние, то есть все команды, кроме
-`init`: она всегда пишет `~/.lmrelay/lmrelay.toml`.
+`init`, которая всегда пишет `~/.lmrelay/lmrelay.toml`, и `disable`, которая не читает ни
+того ни другого.
 
 ### Выбор апстрима
 
@@ -187,11 +189,11 @@ pytest
 ```
 
 Большая часть набора гоняет приложение внутри процесса против записывающего апстрима, поэтому
-ей не нужны ни сеть, ни Ollama. Исключение — [`tests/test_streaming.py`](tests/test_streaming.py):
+ей не нужны ни сеть, ни Ollama. Исключение — [`tests/test_streaming.py`](../tests/test_streaming.py):
 он поднимает релей под uvicorn перед апстримом, который отвечает по одному фрагменту за раз,
 потому что проверяемое свойство — что вызывающая сторона получает первую строку раньше, чем
 апстрим дописал последнюю, — через внутрипроцессный клиент не увидеть.
 
 ### Лицензия
 
-Лицензия MIT. См. [LICENSE](LICENSE).
+Лицензия MIT. См. [LICENSE](../LICENSE).

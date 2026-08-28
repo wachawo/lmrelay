@@ -7,7 +7,7 @@
 
 Ein kleines HTTP-Relay, das neben einem lokalen [Ollama](https://ollama.com) auf 11435 lauscht, von seinen Aufrufern Zugangsdaten verlangen kann und gehostete Anbieter über ein vorangestelltes Pfadsegment erreicht.
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | **Deutsch** | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | **[Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md)** | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,14 @@ flowchart LR
 ### Voraussetzungen
 
 - Python 3.11 oder höher und drei Abhängigkeiten: FastAPI, uvicorn und httpx.
-- Linux und macOS führen jeden Befehl aus, auch `serve` (im Hintergrund) und `enable` (eine
-  systemd-`--user`-Unit oder ein launchd-Agent).
-- Windows führt nur `run` aus. `serve` und `enable` melden, dass die Plattform kein `os.fork`
-  hat, statt halb zu starten.
+- Linux und macOS führen jeden Befehl aus, auch `serve` (im Hintergrund) und `enable`: eine
+  systemd-`--user`-Unit unter Linux, ein launchd-Agent unter macOS, und eine Absage dort, wo
+  keiner von beiden installiert ist.
+- Windows führt nur `run` aus. `serve` meldet, dass die Plattform kein `os.fork` hat, und
+  `enable`, dass es weder systemd noch launchd gibt, statt halb zu starten.
 - Ein lokales Ollama auf 11434 ist der Standard-Upstream, aber nicht erforderlich. Ein Relay,
-  das nur gehostete Anbieter konfiguriert hat, ist gültig.
+  das nur gehostete Anbieter konfiguriert hat, ist gültig, solange `default_upstream` einen
+  davon benennt.
 
 ### Installation
 
@@ -113,7 +115,8 @@ können, wem der Prozess gehört. Auf einem POSIX-System ohne beide Manager star
 `anthropic`, `deepseek`, `grok`, `ollama` — stammen Basis-URL, Dialekt und Header-Form aus
 einem Preset, sodass `lmrelay provider add openai sk-...` der ganze Befehl ist.
 `--config PATH` nimmt jeder Befehl an, der die Konfiguration oder den State liest — also
-jeder Befehl außer `init`, das immer `~/.lmrelay/lmrelay.toml` schreibt.
+jeder Befehl außer `init`, das immer `~/.lmrelay/lmrelay.toml` schreibt, und `disable`, das
+weder das eine noch das andere liest.
 
 ### Auswahl des Upstreams
 
@@ -190,11 +193,11 @@ pytest
 
 Der größte Teil der Suite treibt die Anwendung im selben Prozess gegen einen aufzeichnenden
 Upstream und braucht daher weder Netzwerk noch Ollama.
-[`tests/test_streaming.py`](tests/test_streaming.py) ist die Ausnahme: Dort läuft das Relay
+[`tests/test_streaming.py`](../tests/test_streaming.py) ist die Ausnahme: Dort läuft das Relay
 unter uvicorn vor einem Upstream, der Chunk für Chunk antwortet, denn die geprüfte
 Eigenschaft — dass der Aufrufer die erste Zeile hat, bevor der Upstream die letzte
 geschrieben hat — ist durch einen In-Process-Client nicht zu sehen.
 
 ### Lizenz
 
-MIT License. Siehe [LICENSE](LICENSE).
+MIT License. Siehe [LICENSE](../LICENSE).

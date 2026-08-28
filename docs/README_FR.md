@@ -1,4 +1,4 @@
-## lmrelay - un relais authentifié à côté d'un Ollama local
+## lmrelay - un relais à identifiants à côté d'un Ollama local
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
@@ -7,7 +7,7 @@
 
 Un petit relais HTTP qui écoute sur 11435 à côté d'un [Ollama](https://ollama.com) local, peut exiger un identifiant de ses appelants et atteint un fournisseur hébergé en préfixant un segment de chemin.
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | **Français** | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | **[Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md)** | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,14 @@ flowchart LR
 ### Prérequis
 
 - Python 3.11 ou supérieur, et trois dépendances : FastAPI, uvicorn et httpx.
-- Linux et macOS exécutent toutes les commandes, y compris `serve` (détaché) et `enable`
-  (une unité systemd `--user` ou un agent launchd).
-- Windows n'exécute que `run`. `serve` et `enable` signalent que la plateforme n'a pas
-  `os.fork` au lieu de démarrer à moitié.
+- Linux et macOS exécutent toutes les commandes, y compris `serve` (détaché) et `enable` :
+  une unité systemd `--user` sous Linux, un agent launchd sous macOS, et un refus là où aucun
+  des deux n'est installé.
+- Windows n'exécute que `run`. `serve` signale que la plateforme n'a pas `os.fork`, et
+  `enable` qu'il n'y a ni systemd ni launchd, au lieu de démarrer à moitié.
 - Un Ollama local sur 11434 est l'upstream par défaut, mais il n'est pas obligatoire. Un relais
-  configuré avec des fournisseurs hébergés uniquement est valide.
+  configuré avec des fournisseurs hébergés uniquement est valide, à condition que
+  `default_upstream` en nomme un.
 
 ### Installation
 
@@ -113,7 +115,8 @@ relais en mode détaché.
 `deepseek`, `grok`, `ollama` — l'URL de base, le dialecte et la forme des en-têtes viennent d'un
 préréglage, si bien que `lmrelay provider add openai sk-...` est la commande entière.
 `--config PATH` est accepté par toute commande qui lit la configuration ou l'état — c'est-à-dire
-toutes sauf `init`, qui écrit toujours `~/.lmrelay/lmrelay.toml`.
+toutes sauf `init`, qui écrit toujours `~/.lmrelay/lmrelay.toml`, et `disable`, qui ne lit ni
+l'une ni l'autre.
 
 ### Choisir un upstream
 
@@ -189,11 +192,11 @@ pytest
 
 L'essentiel de la suite pilote l'application dans le processus face à un upstream qui enregistre
 les échanges ; elle n'a donc besoin ni du réseau ni d'Ollama.
-[`tests/test_streaming.py`](tests/test_streaming.py) fait exception : il exécute le relais sous
+[`tests/test_streaming.py`](../tests/test_streaming.py) fait exception : il exécute le relais sous
 uvicorn devant un upstream qui répond un fragment à la fois, car la propriété qu'il vérifie — que
 l'appelant a la première ligne avant que l'upstream ait écrit la dernière — est invisible à
 travers un client dans le processus.
 
 ### Licence
 
-Licence MIT. Voir [LICENSE](LICENSE).
+Licence MIT. Voir [LICENSE](../LICENSE).

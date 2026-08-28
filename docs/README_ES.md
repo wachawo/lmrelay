@@ -7,7 +7,7 @@
 
 Un pequeño relay HTTP que escucha en 11435 junto a un [Ollama](https://ollama.com) local, puede exigir una credencial a quien lo llama y llega a un proveedor alojado anteponiendo un segmento de ruta.
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | **Español** | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | **[Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md)** | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,14 @@ flowchart LR
 ### Requisitos
 
 - Python 3.11 o superior, y tres dependencias: FastAPI, uvicorn y httpx.
-- Linux y macOS ejecutan todos los comandos, incluidos `serve` (en segundo plano) y `enable`
-  (una unidad systemd `--user` o un agente launchd).
-- Windows solo ejecuta `run`. `serve` y `enable` informan de que la plataforma no tiene
-  `os.fork` en lugar de arrancar a medias.
+- Linux y macOS ejecutan todos los comandos, incluidos `serve` (en segundo plano) y `enable`:
+  una unidad systemd `--user` en Linux, un agente launchd en macOS, y un rechazo allí donde no
+  hay ninguno de los dos instalado.
+- Windows solo ejecuta `run`. `serve` informa de que la plataforma no tiene `os.fork`, y
+  `enable` de que no hay systemd ni launchd, en lugar de arrancar a medias.
 - Un Ollama local en 11434 es el upstream por defecto, pero no es obligatorio. Un relay
-  configurado solo con proveedores alojados es válido.
+  configurado solo con proveedores alojados es válido, siempre que `default_upstream` nombre
+  uno de ellos.
 
 ### Instalación
 
@@ -113,7 +115,7 @@ segundo plano.
 `deepseek`, `grok`, `ollama`— la URL base, el dialecto y la forma de las cabeceras salen de un
 preajuste, así que `lmrelay provider add openai sk-...` es el comando entero. `--config PATH`
 lo acepta todo comando que lee la configuración o el estado, es decir, todos menos `init`, que
-siempre escribe `~/.lmrelay/lmrelay.toml`.
+siempre escribe `~/.lmrelay/lmrelay.toml`, y `disable`, que no lee ninguno de los dos.
 
 ### Elegir un upstream
 
@@ -190,11 +192,11 @@ pytest
 
 La mayor parte de la suite ejecuta la aplicación en el mismo proceso contra un upstream que
 graba lo que recibe, así que no necesita red ni Ollama.
-[`tests/test_streaming.py`](tests/test_streaming.py) es la excepción: levanta el relay bajo
+[`tests/test_streaming.py`](../tests/test_streaming.py) es la excepción: levanta el relay bajo
 uvicorn delante de un upstream que responde un fragmento cada vez, porque la propiedad que
 comprueba —que quien llama tiene la primera línea antes de que el upstream haya escrito la
 última— no se puede observar a través de un cliente en el mismo proceso.
 
 ### Licencia
 
-Licencia MIT. Véase [LICENSE](LICENSE).
+Licencia MIT. Véase [LICENSE](../LICENSE).

@@ -7,7 +7,7 @@
 
 Un piccolo relay HTTP che ascolta sulla 11435 accanto a un [Ollama](https://ollama.com) locale, può richiedere una credenziale ai propri chiamanti e raggiunge un provider hosted anteponendo un segmento di percorso.
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | **Italiano** | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | **[Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md)** | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,13 @@ flowchart LR
 ### Requisiti
 
 - Python 3.11 o superiore e tre dipendenze: FastAPI, uvicorn e httpx.
-- Linux e macOS eseguono tutti i comandi, compresi `serve` (in background) ed `enable` (una
-  unit systemd `--user` o un agent launchd).
-- Windows esegue solo `run`. `serve` ed `enable` segnalano che la piattaforma non ha
-  `os.fork`, invece di avviarsi a metà.
+- Linux e macOS eseguono tutti i comandi, compresi `serve` (in background) ed `enable`: una
+  unit systemd `--user` su Linux, un agent launchd su macOS, e un rifiuto dove non è
+  installato nessuno dei due.
+- Windows esegue solo `run`. `serve` segnala che la piattaforma non ha `os.fork`, ed `enable`
+  che non c'è né systemd né launchd, invece di avviarsi a metà.
 - Un Ollama locale sulla 11434 è l'upstream predefinito, ma non è obbligatorio. Un relay con
-  configurati solo provider hosted è valido.
+  configurati solo provider hosted è valido, purché `default_upstream` ne nomini uno.
 
 ### Installazione
 
@@ -113,7 +114,8 @@ priva di entrambi i gestori, `lmrelay serve` esegue il relay in background.
 `deepseek`, `grok`, `ollama` — l'URL di base, il dialetto e la forma degli header arrivano da
 un preset, quindi `lmrelay provider add openai sk-...` è l'intero comando. `--config PATH` è
 accettato da ogni comando che legge la configurazione o lo stato, cioè da ogni comando tranne
-`init`, che scrive sempre `~/.lmrelay/lmrelay.toml`.
+`init`, che scrive sempre `~/.lmrelay/lmrelay.toml`, e `disable`, che non legge né l'una né
+l'altro.
 
 ### Scelta dell'upstream
 
@@ -190,11 +192,11 @@ pytest
 
 Gran parte della suite pilota l'applicazione in-process contro un upstream che registra le
 richieste, quindi non serve né rete né Ollama. L'eccezione è
-[`tests/test_streaming.py`](tests/test_streaming.py): esegue il relay sotto uvicorn davanti a
+[`tests/test_streaming.py`](../tests/test_streaming.py): esegue il relay sotto uvicorn davanti a
 un upstream che risponde un chunk alla volta, perché la proprietà che verifica — che il
 chiamante abbia la prima riga prima che l'upstream abbia scritto l'ultima — non è osservabile
 attraverso un client in-process.
 
 ### Licenza
 
-Licenza MIT. Vedi [LICENSE](LICENSE).
+Licenza MIT. Vedi [LICENSE](../LICENSE).

@@ -7,7 +7,7 @@
 
 ローカルの [Ollama](https://ollama.com) の隣で 11435 を待ち受ける小さな HTTP リレー。呼び出し元に資格情報を要求でき、パスの先頭にセグメントを 1 つ付けるだけでホスト型プロバイダに届く。
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | **日本語** | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | **[日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md)** | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,13 @@ flowchart LR
 ### 要件
 
 - Python 3.11 以上と、3 つの依存パッケージ: FastAPI、uvicorn、httpx。
-- Linux と macOS はすべてのコマンドを実行できる。`serve`（デタッチ実行）と `enable`（systemd
-  の `--user` ユニット、または launchd エージェント）も含む。
-- Windows で動くのは `run` だけ。`serve` と `enable` は中途半端に起動せず、このプラットフォーム
-  には `os.fork` がないと報告する。
+- Linux と macOS はすべてのコマンドを実行できる。`serve`（デタッチ実行）と `enable` も含む。
+  `enable` は Linux では systemd の `--user` ユニット、macOS では launchd エージェントで、
+  どちらも入っていない環境では拒否する。
+- Windows で動くのは `run` だけ。中途半端に起動せず、`serve` はこのプラットフォームに
+  `os.fork` がないと報告し、`enable` は systemd も launchd もないと報告する。
 - 11434 のローカル Ollama が既定のアップストリームだが、必須ではない。ホスト型プロバイダだけを
-  設定したリレーも成立する。
+  設定したリレーも、`default_upstream` がそのいずれかを指していれば成立する。
 
 ### インストール
 
@@ -50,7 +51,7 @@ lmrelay run      # foreground, port 11435
 ```
 
 Ollama は 11434 を持ったままで、そのインストール状態にはまったく手を触れない。代わりにクライアント
-の向き先を 11435 に変える。これが取引だ。既存の Ollama について何も変える必要がなく、リレーは
+の向き先を 11435 に変える。これが引き換えだ。既存の Ollama について何も変える必要がなく、リレーは
 クライアントごとに任意で使える。
 
 新しい state では認証はオフなので、ループバック上では Ollama の前に置いた透過プロキシになる。これ
@@ -110,8 +111,8 @@ autostart    systemd: enabled, active
 `--dialect`、および繰り返し指定できる `--header K=V` を取る。名前が既知のもの — `openai`、
 `anthropic`、`deepseek`、`grok`、`ollama` — なら、ベース URL、方言、ヘッダの形はプリセットから
 来るので、`lmrelay provider add openai sk-...` だけでコマンドは終わる。`--config PATH` は設定
-または state を読むすべてのコマンドが受け付ける。つまり `init` 以外のすべてだ。`init` は常に
-`~/.lmrelay/lmrelay.toml` を書く。
+または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。
+`init` は常に `~/.lmrelay/lmrelay.toml` を書き、`disable` はどちらも読まない。
 
 ### アップストリームの選択
 
@@ -184,11 +185,11 @@ pytest
 ```
 
 スイートの大半は、記録用のアップストリームを相手にアプリをインプロセスで動かすので、ネットワークも
-Ollama も要らない。例外は [`tests/test_streaming.py`](tests/test_streaming.py) で、チャンクを
+Ollama も要らない。例外は [`tests/test_streaming.py`](../tests/test_streaming.py) で、チャンクを
 1 つずつ返すアップストリームの前でリレーを uvicorn 上で走らせる。確かめたい性質 — アップストリーム
 が最後の行を書き終える前に、呼び出し元が最初の行を受け取っていること — は、インプロセスの
 クライアント越しには観測できないからだ。
 
 ### ライセンス
 
-MIT License。[LICENSE](LICENSE) を参照。
+MIT License。[LICENSE](../LICENSE) を参照。

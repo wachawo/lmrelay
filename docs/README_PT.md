@@ -7,7 +7,7 @@
 
 Um pequeno relay HTTP que escuta na 11435 ao lado de um [Ollama](https://ollama.com) local, pode exigir uma credencial de quem o chama e alcança um provedor hospedado prefixando um segmento de caminho.
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | **Português** | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | **[Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md)** | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,13 @@ flowchart LR
 ### Requisitos
 
 - Python 3.11 ou superior e três dependências: FastAPI, uvicorn e httpx.
-- Linux e macOS executam todos os comandos, inclusive `serve` (em segundo plano) e `enable`
-  (uma unidade systemd `--user` ou um agente launchd).
-- O Windows executa apenas `run`. `serve` e `enable` informam que a plataforma não tem
-  `os.fork` em vez de iniciar pela metade.
+- Linux e macOS executam todos os comandos, inclusive `serve` (em segundo plano) e `enable`:
+  uma unidade systemd `--user` no Linux, um agente launchd no macOS, e uma recusa onde nenhum
+  dos dois está instalado.
+- O Windows executa apenas `run`. `serve` informa que a plataforma não tem `os.fork`, e
+  `enable` que não há systemd nem launchd, em vez de iniciar pela metade.
 - Um Ollama local na 11434 é o upstream padrão, mas não é obrigatório. Um relay configurado
-  apenas com provedores hospedados é válido.
+  apenas com provedores hospedados é válido, desde que `default_upstream` nomeie um deles.
 
 ### Instalação
 
@@ -113,7 +114,7 @@ plano.
 `deepseek`, `grok`, `ollama` — a URL base, o dialeto e o formato do header vêm de um preset,
 então `lmrelay provider add openai sk-...` é o comando inteiro. `--config PATH` é aceito por
 todo comando que lê a configuração ou o estado — ou seja, todos menos `init`, que sempre
-escreve `~/.lmrelay/lmrelay.toml`.
+escreve `~/.lmrelay/lmrelay.toml`, e `disable`, que não lê nenhum dos dois.
 
 ### Escolhendo um upstream
 
@@ -190,11 +191,11 @@ pytest
 
 A maior parte da suíte roda a aplicação no próprio processo contra um upstream que grava as
 requisições, então ela não precisa de rede nem de Ollama.
-[`tests/test_streaming.py`](tests/test_streaming.py) é a exceção: ele executa o relay sob
+[`tests/test_streaming.py`](../tests/test_streaming.py) é a exceção: ele executa o relay sob
 uvicorn na frente de um upstream que responde um chunk por vez, porque a propriedade que ele
 verifica — que quem chama já tem a primeira linha antes de o upstream ter escrito a última —
 não pode ser observada através de um cliente no mesmo processo.
 
 ### Licença
 
-Licença MIT. Veja [LICENSE](LICENSE).
+Licença MIT. Veja [LICENSE](../LICENSE).

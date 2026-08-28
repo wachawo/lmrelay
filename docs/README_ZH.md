@@ -7,7 +7,7 @@
 
 一个小型 HTTP 中继，在本地 [Ollama](https://ollama.com) 旁监听 11435，可要求调用方出示凭据，并通过在路径前加一个路径段来访问托管服务商。
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | **中文** | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | **[中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md)** | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,11 +22,12 @@ flowchart LR
 ### 环境要求
 
 - Python 3.11 或更高版本，以及三个依赖：FastAPI、uvicorn 和 httpx。
-- Linux 和 macOS 支持全部命令，包括 `serve`（后台运行）和 `enable`（systemd
-  `--user` 单元或 launchd agent）。
-- Windows 只支持 `run`。`serve` 和 `enable` 会直接指出该平台没有 `os.fork`，
-  而不是启动到一半。
-- 11434 上的本地 Ollama 是默认上游，但并非必需。只配置了托管服务商的中继同样可用。
+- Linux 和 macOS 支持全部命令，包括 `serve`（后台运行）和 `enable`：在 Linux 上是 systemd
+  `--user` 单元，在 macOS 上是 launchd agent；两者都没装的地方则直接拒绝。
+- Windows 只支持 `run`。`serve` 会指出该平台没有 `os.fork`，`enable` 会指出既没有 systemd
+  也没有 launchd，而不是启动到一半。
+- 11434 上的本地 Ollama 是默认上游，但并非必需。只配置了托管服务商的中继同样可用，前提是
+  `default_upstream` 指向其中之一。
 
 ### 安装
 
@@ -48,7 +49,7 @@ lmrelay init     # writes ~/.lmrelay/lmrelay.toml
 lmrelay run      # foreground, port 11435
 ```
 
-Ollama 保留 11434，它的安装原封不动。改为把客户端指向 11435。这就是这笔交易：现有的
+Ollama 保留 11434，它的安装原封不动。改为把客户端指向 11435。这就是这里的取舍：现有的
 Ollama 不必做任何改动，中继由各客户端自行决定是否接入。
 
 全新状态下鉴权是关闭的，所以在回环地址上，它就是 Ollama 前面的一个透明代理。这是有意
@@ -108,8 +109,8 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 `--base-url`、`--dialect` 以及可重复的 `--header K=V`；如果名称是已知的那几个——
 `openai`、`anthropic`、`deepseek`、`grok`、`ollama`——base URL、方言和请求头形态都来自
 预设，所以 `lmrelay provider add openai sk-...` 就是完整的命令。凡是读取配置或 state
-的命令都接受 `--config PATH`，也就是除 `init` 以外的全部命令；`init` 始终写入
-`~/.lmrelay/lmrelay.toml`。
+的命令都接受 `--config PATH`，也就是除 `init` 和 `disable` 以外的全部命令；`init` 始终写入
+`~/.lmrelay/lmrelay.toml`，而 `disable` 两者都不读。
 
 ### 选择上游
 

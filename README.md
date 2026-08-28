@@ -7,7 +7,7 @@
 
 A small HTTP relay that listens on 11435 beside a local [Ollama](https://ollama.com), can require a credential from its callers, and reaches a hosted provider by prefixing one path segment.
 
-**English** | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+**[English](https://github.com/wachawo/lmrelay/blob/main/README.md)** | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,12 @@ flowchart LR
 ### Requirements
 
 - Python 3.11 or higher, and three dependencies: FastAPI, uvicorn and httpx.
-- Linux and macOS run every command, including `serve` (detached) and `enable` (a systemd
-  `--user` unit or a launchd agent).
-- Windows runs `run` only. `serve` and `enable` report that the platform has no `os.fork`
-  rather than half-starting.
+- Linux and macOS run every command, including `serve` (detached) and `enable` — a systemd
+  `--user` unit on Linux, a launchd agent on macOS, and a refusal where neither is installed.
+- Windows runs `run` only. `serve` reports that the platform has no `os.fork`, and `enable`
+  that there is no systemd or launchd, rather than half-starting.
 - A local Ollama on 11434 is the default upstream, but it is not required. A relay with only
-  hosted providers configured is valid.
+  hosted providers configured is valid, as long as `default_upstream` names one of them.
 
 ### Installation
 
@@ -111,7 +111,7 @@ manager, `lmrelay serve` runs the relay detached.
 `deepseek`, `grok`, `ollama` — the base URL, dialect and header shape come from a preset,
 so `lmrelay provider add openai sk-...` is the whole command. `--config PATH` is accepted by
 every command that reads the config or the state — that is, every command except `init`,
-which always writes `~/.lmrelay/lmrelay.toml`.
+which always writes `~/.lmrelay/lmrelay.toml`, and `disable`, which reads neither.
 
 ### Choosing an upstream
 

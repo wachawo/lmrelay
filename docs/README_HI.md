@@ -7,7 +7,7 @@
 
 एक छोटा HTTP relay जो लोकल [Ollama](https://ollama.com) के बगल में 11435 पर सुनता है, अपने callers से credential माँग सकता है, और path के आगे एक segment जोड़कर hosted provider तक पहुँचता है।
 
-[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | **हिन्दी** | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
+[English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | **[हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md)** | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
 ```mermaid
 flowchart LR
@@ -22,12 +22,13 @@ flowchart LR
 ### आवश्यकताएँ
 
 - Python 3.11 या उससे ऊपर, और तीन dependencies: FastAPI, uvicorn और httpx।
-- Linux और macOS पर हर command चलती है, `serve` (detached) और `enable` (systemd `--user`
-  unit या launchd agent) समेत।
-- Windows पर सिर्फ़ `run` चलती है। `serve` और `enable` आधा-अधूरा शुरू होने के बजाय बताती हैं कि
-  इस platform पर `os.fork` नहीं है।
+- Linux और macOS पर हर command चलती है, `serve` (detached) और `enable` समेत। `enable` Linux पर
+  systemd `--user` unit और macOS पर launchd agent बनाती है, और जहाँ इनमें से कोई भी इंस्टॉल
+  नहीं है वहाँ मना कर देती है।
+- Windows पर सिर्फ़ `run` चलती है। आधा-अधूरा शुरू होने के बजाय `serve` बताती है कि इस platform पर
+  `os.fork` नहीं है, और `enable` बताती है कि न systemd है न launchd।
 - 11434 पर चलता लोकल Ollama default upstream है, पर ज़रूरी नहीं। सिर्फ़ hosted providers के साथ
-  configure किया गया relay भी वैध है।
+  configure किया गया relay भी वैध है, बशर्ते `default_upstream` उन्हीं में से किसी एक को नाम दे।
 
 ### इंस्टॉलेशन
 
@@ -86,7 +87,7 @@ autostart    systemd: enabled, active
 
 ### उपयोग
 
-| Command | क्या करती है |
+| कमांड | क्या करती है |
 |---|---|
 | `lmrelay init` | `~/.lmrelay/lmrelay.toml` लिखती है |
 | `lmrelay run` | foreground में चलाती है |
@@ -110,8 +111,8 @@ autostart    systemd: enabled, active
 `--dialect` और दोहराया जा सकने वाला `--header K=V` लेती है; जाने-पहचाने नाम के साथ — `openai`,
 `anthropic`, `deepseek`, `grok`, `ollama` — base URL, dialect और header का ढाँचा preset से आता
 है, इसलिए पूरी command बस `lmrelay provider add openai sk-...` है। `--config PATH` उन सभी
-commands में चलता है जो config या state पढ़ती हैं — यानी `init` को छोड़कर हर command में, क्योंकि
-`init` हमेशा `~/.lmrelay/lmrelay.toml` ही लिखती है।
+commands में चलता है जो config या state पढ़ती हैं — यानी `init` और `disable` को छोड़कर हर command
+में। `init` हमेशा `~/.lmrelay/lmrelay.toml` ही लिखती है, और `disable` इनमें से कुछ नहीं पढ़ती।
 
 ### upstream चुनना
 
@@ -176,7 +177,7 @@ deepseek और grok — इन **सब** तक पहुँच जाता �
 lmrelay जो भी error बनाता है वह `lmrelay: ` से शुरू होती है, इसलिए उसे कभी provider की कही बात
 नहीं समझा जाता।
 
-**[कॉन्फ़िगरेशन और errors](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md)** - config file, caller tokens, providers, autostart, streaming व्यवहार, और हर error का मतलब क्या है।
+**[कॉन्फ़िगरेशन और errors](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md)** - कॉन्फ़िग फ़ाइल, caller के tokens, providers, autostart, streaming व्यवहार, और हर error का मतलब क्या है।
 
 ### परीक्षण
 
@@ -186,11 +187,11 @@ pytest
 ```
 
 suite का ज़्यादातर हिस्सा app को उसी process में एक recording upstream के सामने चलाता है, इसलिए
-उसे न network चाहिए न Ollama। [`tests/test_streaming.py`](tests/test_streaming.py) अपवाद है: वह
+उसे न network चाहिए न Ollama। [`tests/test_streaming.py`](../tests/test_streaming.py) अपवाद है: वह
 relay को uvicorn के नीचे ऐसे upstream के आगे चलाता है जो एक बार में एक chunk जवाब देता है, क्योंकि
 जो गुण वह जाँचता है — कि upstream के आख़िरी line लिखने से पहले caller के पास पहली line आ चुकी हो —
 वह in-process client से दिखता ही नहीं।
 
 ### लाइसेंस
 
-MIT License. देखें [LICENSE](LICENSE)।
+MIT License. देखें [LICENSE](../LICENSE)।

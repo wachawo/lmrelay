@@ -19,10 +19,13 @@ The split exists so that the CLI never has to rewrite a file you are editing: yo
 in `lmrelay.toml` survive forever. State is JSON rather than a second TOML file because it
 is machine-owned, and because `tomllib` reads but cannot write.
 
+`lmrelay init` writes `lmrelay.toml` with mode 0600, because the file is meant to hold
+provider keys.
+
 ## Where the config is looked for
 
 The config is looked for in three places, first hit wins, no merging:
-`$LMRELAY_CONFIG` (also what any command's `--config PATH` sets), then `./lmrelay.toml`,
+`$LMRELAY_CONFIG` (also what a command's `--config PATH` sets), then `./lmrelay.toml`,
 then `~/.lmrelay/lmrelay.toml`. If none exists the relay refuses to start rather than
 serving 404s from an empty configuration.
 
@@ -87,7 +90,7 @@ config starts with Ollama alone. Uncomment one once its variable is exported; an
   and simply concatenated, which is what makes an endpoint hosted under a subpath work
   without any code.
 - `dialect` (`ollama`, `openai` or `anthropic`, default `openai`) never changes what is
-  sent. Its only job is the refusal shown above.
+  sent. Its only job is the refusal in the [Errors](#errors) table below.
 - TOML forbids `-` in bare keys, so `"x-api-key"` and `"anthropic-version"` are quoted
   while `Authorization` is not. That is not a typo.
 - An upstream may not be named `api` or `v1`; either would shadow the path root every
@@ -185,6 +188,9 @@ so the two cannot disagree about who owns the process; each command says which p
   usually meaning Ollama itself is not running.
 - **Binding a non-loopback host with auth off logs a warning** rather than refusing, since
   running uncredentialed behind an authenticated nginx is legitimate.
+- **`lmrelay status` exits 0 whether or not the relay is running.** A stopped relay prints
+  the same block with `stopped` on the first line, because "what would it do if I started
+  it" is the question a stopped relay raises. `status` reports, it does not assert.
 
 ## Why a client cannot cross dialects
 
@@ -300,7 +306,7 @@ Logged and then ignored. Nothing is refused and nothing stops.
 |---|---|---|---|
 | `lmrelay: listening on <host> with auth off — every caller that can reach this port can use the configured upstream credentials. Run 'lmrelay auth true'.` | relay startup, `lmrelay run --host` | A non-loopback bind demands no credential. | Run `lmrelay auth true`, unless something in front of the relay already authenticates. |
 | `lmrelay: <N> caller token(s) configured but auth is off; run 'lmrelay auth true' to require them` | any command that loads the config | Tokens exist but nothing checks them. | Run `lmrelay auth true`, or delete the tokens if the relay is meant to stay open. |
-| `lmrelay: provider(s) <names> from state.json shadow the [upstream.*] of the same name in <config>` | relay startup and reload | A CLI-added provider is winning over a hand-written table. | Nothing, if that was the intent. Otherwise `lmrelay provider delete <name>`. |
+| `lmrelay: provider(s) <names> from state.json shadow the [upstream.*] of the same name in <config>` | any command that loads the config | A CLI-added provider is winning over a hand-written table. | Nothing, if that was the intent. Otherwise `lmrelay provider delete <name>`. |
 | `lmrelay: <fields> changed in <config> but a reload cannot apply that — the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout. |
 | `<error message>; keeping the running config` | relay log, on reload | The re-read config or state did not parse. The relay is still serving the one it already had. | Fix what the message names, then `lmrelay reload` again. |
 | `lmrelay: pid <N> ignored SIGTERM for 10s; forcing it with SIGKILL` | `lmrelay stop`, `restart` | The relay did not exit on SIGTERM inside the stop timeout. | Nothing: the stop continues. A relay that needs SIGKILL every time is worth reading the log about. |
