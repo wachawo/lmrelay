@@ -1,8 +1,36 @@
-# lmrelay
+<h1 align="center">lmrelay</h1>
 
-A small HTTP relay that listens on port 11435 beside a local
-[Ollama](https://ollama.com), can require a credential from its callers, and can be pointed at
-a hosted provider — OpenAI, Anthropic, DeepSeek, Grok — by prefixing one path segment.
+<p align="center">
+  A small HTTP relay that listens on <b>11435</b> beside a local
+  <a href="https://ollama.com">Ollama</a>, can require a credential from its callers,<br>
+  and reaches a hosted provider by prefixing one path segment.
+</p>
+
+<p align="center">
+  <a href="https://github.com/wachawo/lmrelay"><img alt="repository" src="https://img.shields.io/badge/github-wachawo%2Flmrelay-181717?logo=github&logoColor=white"></a>
+  <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white">
+  <img alt="dependencies" src="https://img.shields.io/badge/dependencies-3-lightgrey">
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#configure">Configure</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="#choosing-an-upstream">Upstreams</a> ·
+  <a href="#behaviour-worth-knowing">Behaviour</a> ·
+  <a href="#not-in-scope">Not in scope</a>
+</p>
+
+```mermaid
+flowchart LR
+    C["clients"] -->|":11435"| R("lmrelay")
+    R -->|"/api/*, /v1/*"| O["Ollama :11434"]
+    R -->|"/openai/v1/*"| P1["OpenAI"]
+    R -->|"/anthropic/v1/*"| P2["Anthropic"]
+    R -->|"/deepseek/v1/*"| P3["DeepSeek"]
+    R -->|"/grok/v1/*"| P4["Grok"]
+```
 
 Ollama keeps 11434 and its installation is left exactly as it is. Clients are repointed at
 11435 instead. That is the trade: nothing about an existing Ollama has to change, and the
@@ -25,7 +53,8 @@ the table before you install anything.
 is the practically important cell: an OpenAI-shaped client reaches **all** of ollama,
 openai, deepseek and grok by changing only the path prefix.
 
-What does not work, and why:
+<details>
+<summary><b>What does not work, and why</b></summary>
 
 - **An Ollama-API client cannot reach a hosted provider.** None of them serve `/api/chat`,
   and the body schema differs (`options` versus top-level sampling parameters, `format`
@@ -39,6 +68,8 @@ What does not work, and why:
 - **Streaming frames are not converted.** Ollama emits newline-delimited JSON; OpenAI and
   Anthropic emit SSE with different event shapes. Your client gets exactly what the
   upstream produced.
+
+</details>
 
 Where lmrelay can tell that a path certainly does not exist upstream, it says so itself
 rather than letting the provider's 404 look like your mistake:
@@ -57,7 +88,8 @@ pip install git+https://github.com/wachawo/lmrelay.git
 ```
 
 The `git+` prefix is not decoration: pip reads a bare `github.com/...` as a package name and
-fails. Where git is not installed, the source archive works and needs none:
+fails. Where git is not installed, the [source archive](https://github.com/wachawo/lmrelay/archive/refs/heads/main.tar.gz)
+works and needs none:
 
 ```bash
 pip install https://github.com/wachawo/lmrelay/archive/refs/heads/main.tar.gz
@@ -72,19 +104,15 @@ lmrelay init       # writes ~/.lmrelay/lmrelay.toml, mode 0600
 ```
 
 The config is looked for in three places, first hit wins, no merging:
-
-1. `$LMRELAY_CONFIG` (also what any command's `--config PATH` sets)
-2. `./lmrelay.toml`
-3. `~/.lmrelay/lmrelay.toml`
-
-If none exists the relay refuses to start rather than serving 404s from an empty
-configuration.
+`$LMRELAY_CONFIG` (also what any command's `--config PATH` sets), then `./lmrelay.toml`,
+then `~/.lmrelay/lmrelay.toml`. If none exists the relay refuses to start rather than
+serving 404s from an empty configuration.
 
 Four files live in that config's directory:
 
 | File | Written by | Holds |
 |---|---|---|
-| `lmrelay.toml` | you | server settings and hand-written upstreams |
+| [`lmrelay.toml`](lmrelay/lmrelay.toml.example) | you | server settings and hand-written upstreams |
 | `state.json` | the CLI | caller tokens, the auth switch, CLI-added providers |
 | `lmrelay.pid` | the relay | the pid of the running process |
 | `lmrelay.log` | the relay | stdout and stderr of a detached relay |
@@ -92,6 +120,9 @@ Four files live in that config's directory:
 The split exists so that the CLI never has to rewrite a file you are editing: your comments
 in `lmrelay.toml` survive forever. State is JSON rather than a second TOML file because it
 is machine-owned, and because `tomllib` reads but cannot write.
+
+<details>
+<summary><b>The config file</b></summary>
 
 ```toml
 [server]
@@ -132,12 +163,15 @@ dialect  = "openai"
 headers  = { Authorization = "Bearer ${XAI_API_KEY}" }
 ```
 
-The complete commented file ships as `lmrelay/lmrelay.toml.example` and is what
-`lmrelay init` copies. There the hosted blocks are commented out, so a fresh config starts
-with Ollama alone. Uncomment one once its variable is exported; an unset `${VAR}` is a
-startup error.
+The complete commented file ships as
+[`lmrelay/lmrelay.toml.example`](lmrelay/lmrelay.toml.example) and is what `lmrelay init`
+copies. There the hosted blocks are commented out, so a fresh config starts with Ollama
+alone. Uncomment one once its variable is exported; an unset `${VAR}` is a startup error.
 
-Notes on the schema:
+</details>
+
+<details>
+<summary><b>Notes on the schema</b></summary>
 
 - `headers` is an arbitrary string-to-string table, sent onward verbatim. There is no
   `api_key` field and no per-provider code path: OpenAI's bearer, Anthropic's two headers
@@ -163,6 +197,8 @@ Notes on the schema:
 - A provider added with `lmrelay provider add` wins over an `[upstream.<name>]` of the same
   name. The startup log names any upstream that was overridden — this file is hand-written
   and its author deserves to hear that a command shadowed it.
+
+</details>
 
 ## Commands
 
@@ -216,6 +252,16 @@ lmrelay enable
 lmrelay status
 ```
 
+```
+lmrelay      running (pid 40213), healthy
+listening    127.0.0.1:11435
+config       /home/u/.lmrelay/lmrelay.toml
+state        /home/u/.lmrelay/state.json
+upstreams    anthropic, ollama, openai (default: ollama)
+auth         on, 2 tokens
+autostart    systemd: enabled, active
+```
+
 `token gen` prints the token in full once and never again, and it turns auth on when it is
 the first token — an operator who adds a credential and finds the relay still open has been
 surprised for no reason. Afterwards `lmrelay auth false` reopens it and `lmrelay auth true`
@@ -227,16 +273,6 @@ it. From then on `stop`, `restart` and `reload` go through that manager instead 
 pidfile, so the two cannot disagree about who owns the process; each command says which path
 it took. On a POSIX box with neither manager, `lmrelay serve` runs the relay detached. On
 Windows only `lmrelay run` works, and `serve` and `enable` say so rather than half-starting.
-
-```
-lmrelay      running (pid 40213), healthy
-listening    127.0.0.1:11435
-config       /home/u/.lmrelay/lmrelay.toml
-state        /home/u/.lmrelay/state.json
-upstreams    anthropic, ollama, openai (default: ollama)
-auth         on, 2 tokens
-autostart    systemd: enabled, active
-```
 
 A stopped relay prints the same block with `stopped` on the first line, because "what would
 it do if I started it" is the question a stopped relay raises. Either way the exit code is
@@ -289,6 +325,10 @@ credential. Everything else goes through the relay.
 - **The caller's credential never leaves the relay.** `Authorization` and `x-api-key` are
   stripped from every forwarded request before the upstream's own headers are applied, so
   an upstream with no configured headers receives no credential at all.
+
+<details>
+<summary><b>Six more, on reloads, pidfiles and failure</b></summary>
+
 - **The elapsed time in the access log is time to first byte**, not the duration of a
   streamed answer.
 - **A reload applies upstreams, tokens and the auth switch — not `host`, `port` or
@@ -310,6 +350,8 @@ credential. Everything else goes through the relay.
 - **Binding a non-loopback host with auth off logs a warning** rather than refusing, since
   running uncredentialed behind an authenticated nginx is legitimate.
 
+</details>
+
 ## Not in scope
 
 No failover, retry or load balancing. No dialect translation. No model catalogue or
@@ -324,11 +366,18 @@ pytest
 ```
 
 Most of the suite drives the app in process against a recording upstream, so it needs no
-network and no Ollama. `tests/test_streaming.py` is the exception: it runs the relay under
-uvicorn in front of an upstream that answers a chunk at a time, because the property it
-checks — that the caller has the first line before the upstream has written the last —
-cannot be seen through an in-process client.
+network and no Ollama. [`tests/test_streaming.py`](tests/test_streaming.py) is the
+exception: it runs the relay under uvicorn in front of an upstream that answers a chunk at a
+time, because the property it checks — that the caller has the first line before the
+upstream has written the last — cannot be seen through an in-process client.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<p align="center">
+  <sub>
+    <a href="https://github.com/wachawo/lmrelay">Repository</a> ·
+    <a href="https://github.com/wachawo/lmrelay/issues">Issues</a>
+  </sub>
+</p>
