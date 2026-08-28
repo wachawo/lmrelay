@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Where the config is found, and every way it can be refused."""
+"""Where the config is found, what the state adds to it, and every way it can be refused."""
 
 import pytest
 
@@ -14,12 +14,20 @@ from lmrelay.config import (
     find_config_path,
     load_config,
 )
+from tests.conftest import write_state
 
 MINIMAL = """
 [upstream.ollama]
 base_url = "http://127.0.0.1:11434"
 dialect  = "ollama"
 """
+
+OLLAMA_PROVIDER = {"base_url": "http://127.0.0.1:11434", "dialect": "ollama", "headers": {}}
+OPENAI_PROVIDER = {
+    "base_url": "https://from-state.invalid",
+    "dialect": "openai",
+    "headers": {"Authorization": "Bearer sk-from-state"},
+}
 
 
 def write(path, body: str):
@@ -94,7 +102,7 @@ class TestRefusingABrokenConfig:
 
     def test_no_upstreams_at_all(self, tmp_path):
         target = write(tmp_path, '[server]\nhost = "127.0.0.1"\n')
-        with pytest.raises(ConfigError, match=r"no \[upstream"):
+        with pytest.raises(ConfigError, match=r"\[upstream"):
             load_config(target)
 
     def test_a_default_upstream_that_does_not_exist(self, tmp_path):
@@ -133,7 +141,7 @@ class TestRefusingABrokenConfig:
 
 
 class TestKeepingSecretsOutOfTheFile:
-    """${VAR} in a header value, and the token override."""
+    """${VAR} in a header value, and where caller tokens come from."""
 
     def test_a_header_reads_its_value_from_the_environment(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PROVIDER_KEY", "sk-from-env")
@@ -174,32 +182,118 @@ headers  = { Authorization = "Bearer sk-literal" }
         loaded = load_config(target)
         assert loaded.upstreams["openai"].headers["Authorization"] == "Bearer sk-literal"
 
-    def test_the_token_environment_variable_wins_over_the_file(self, tmp_path, monkeypatch):
-        """So the secret need not sit in a file on a shared box."""
+    def test_the_token_environment_variable_joins_the_one_in_the_file(self, tmp_path, monkeypatch):
+        """Additional, not an override: a container can inject a credential
+        without invalidating the one the operator wrote down."""
         monkeypatch.setenv(TOKEN_ENV_VAR, "from-env")
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
-        assert load_config(target).auth_token == "from-env"
+        assert load_config(target).auth_tokens == ("from-file", "from-env")
 
     def test_and_the_file_is_used_when_it_does_not(self, tmp_path, monkeypatch):
         monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
-        assert load_config(target).auth_token == "from-file"
+        assert load_config(target).auth_tokens == ("from-file",)
 
     def test_an_empty_token_is_no_token(self, tmp_path, monkeypatch):
         """Otherwise an empty string would be a credential every caller could
         guess, while the exposure warning stayed silent."""
         monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = ""\n')
-        assert load_config(target).auth_token is None
+        assert load_config(target).auth_tokens == ()
+
+
+class TestWhatTheStateAdds:
+    """state.json is the CLI's half of the same config."""
+
+    def test_a_cli_added_provider_overrides_an_upstream_of_the_same_name(self, tmp_path):
+        """`lmrelay provider add` is the newer statement of intent; losing to a
+        stale hand-written table would make rotating a key silently ineffective."""
+        target = write(tmp_path, MINIMAL + '\n[upstream.openai]\n'
+                                           'base_url = "https://from-file.invalid"\n')
+        write_state(tmp_path, providers={"openai": OPENAI_PROVIDER})
+        openai = load_config(target).upstreams["openai"]
+        assert openai.base_url == "https://from-state.invalid"
+        assert openai.headers["Authorization"] == "Bearer sk-from-state"
+
+    def test_and_an_upstream_it_does_not_name_is_left_alone(self, tmp_path):
+        target = write(tmp_path, MINIMAL + '\n[upstream.openai]\n'
+                                           'base_url = "https://from-file.invalid"\n')
+        write_state(tmp_path, providers={"openai": OPENAI_PROVIDER})
+        assert load_config(target).upstreams["ollama"].base_url == "http://127.0.0.1:11434"
+
+    def test_a_config_with_no_upstream_table_is_legal_once_the_state_has_one(self, tmp_path):
+        """Nothing has to be hand-written any more: `provider add` on its own is
+        a working relay, and refusing here would make the CLI half a config."""
+        target = write(tmp_path, '[server]\nhost = "127.0.0.1"\n')
+        write_state(tmp_path, providers={"ollama": OLLAMA_PROVIDER})
+        assert load_config(target).upstreams["ollama"].dialect == "ollama"
+
+    def test_a_dollar_in_a_stored_key_is_not_expanded_again(self, tmp_path, monkeypatch):
+        """${VAR} is a feature of the hand-written file. `provider add`
+        substitutes {token} literally and writes the finished value down, so
+        running it back through Template would rewrite an API key containing a
+        $ with an environment variable's value — and send that value to the
+        provider in a header."""
+        monkeypatch.setenv("HOME", "/home/somebody")
+        write_state(tmp_path, providers={"openai": {
+            "base_url": "https://api.openai.com",
+            "dialect": "openai",
+            "headers": {"Authorization": "Bearer sk-live-ab$HOME-cd"},
+        }})
+        loaded = load_config(write(tmp_path, MINIMAL))
+        assert loaded.upstreams["openai"].headers["Authorization"] == "Bearer sk-live-ab$HOME-cd"
+
+    def test_and_a_stored_key_that_looks_like_a_bad_reference_still_loads(self, tmp_path):
+        """Otherwise `provider add` saves cleanly and every command afterwards
+        fails, blaming a ${...} reference the operator never wrote."""
+        write_state(tmp_path, providers={"openai": {
+            "base_url": "https://api.openai.com",
+            "dialect": "openai",
+            "headers": {"Authorization": "Bearer sk-live-9f$1abc"},
+        }})
+        loaded = load_config(write(tmp_path, MINIMAL))
+        assert loaded.upstreams["openai"].headers["Authorization"] == "Bearer sk-live-9f$1abc"
+
+    def test_a_state_token_leads_and_the_other_two_join_it(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(TOKEN_ENV_VAR, "from-env")
+        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
+        write_state(tmp_path, auth_enabled=True, tokens=("from-state",))
+        loaded = load_config(target)
+        assert loaded.auth_tokens == ("from-state", "from-file", "from-env")
+        assert loaded.auth_enabled is True
+
+    def test_the_same_token_from_two_places_is_one_token(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(TOKEN_ENV_VAR, "shared")
+        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "shared"\n')
+        write_state(tmp_path, tokens=("shared",))
+        assert load_config(target).auth_tokens == ("shared",)
+
+    def test_a_token_in_the_file_does_not_turn_checking_on(self, tmp_path, monkeypatch):
+        """The switch is one thing in one place. A token is a credential, not a
+        decision to start refusing everyone who has not got it."""
+        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
+        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
+        loaded = load_config(target)
+        assert loaded.auth_enabled is False
+        assert loaded.auth_tokens == ("from-file",)
+
+    def test_a_fresh_install_has_auth_off(self, tmp_path, monkeypatch):
+        """No state file at all: a relay on loopback in front of the operator's
+        own Ollama must not lock them out before they have a token."""
+        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
+        loaded = load_config(write(tmp_path, MINIMAL))
+        assert loaded.auth_enabled is False
+        assert loaded.auth_tokens == ()
 
 
 class TestDefaults:
     """What a config that says nothing gets."""
 
-    def test_it_binds_loopback_on_the_port_ollama_clients_expect(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
+    def test_it_binds_loopback_beside_ollama_rather_than_on_top_of_it(self, tmp_path):
+        """11434 stays Ollama's, so an existing install needs no change at all;
+        the clients are what move."""
         loaded = load_config(write(tmp_path, MINIMAL))
-        assert (loaded.host, loaded.port) == ("127.0.0.1", 11434)
+        assert (loaded.host, loaded.port) == ("127.0.0.1", 11435)
         assert loaded.default_upstream == "ollama"
 
     def test_an_upstream_that_does_not_say_gets_the_openai_dialect(self, tmp_path):
@@ -220,35 +314,33 @@ class TestSayingWhenThePortIsOpen:
     """A warning, not a refusal: uncredentialed behind an authenticated nginx
     is a legitimate deployment, and refusing would break it."""
 
-    def make(self, tmp_path, host: str, token: str | None):
-        body = MINIMAL + f'\n[server]\nhost = "{host}"\n'
-        if token:
-            body += f'\n[auth]\ntoken = "{token}"\n'
-        return load_config(write(tmp_path, body))
+    def make(self, tmp_path, host: str, auth_enabled: bool = False):
+        write_state(
+            tmp_path,
+            auth_enabled=auth_enabled,
+            tokens=("a-token",) if auth_enabled else (),
+        )
+        return load_config(write(tmp_path, MINIMAL + f'\n[server]\nhost = "{host}"\n'))
 
-    def test_loopback_without_a_token_is_not_warned_about(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
-        assert check_exposure(self.make(tmp_path, "127.0.0.1", None)) is None
+    def test_loopback_with_auth_off_is_not_warned_about(self, tmp_path):
+        assert check_exposure(self.make(tmp_path, "127.0.0.1")) is None
 
-    def test_a_wildcard_bind_without_a_token_is(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
-        warning = check_exposure(self.make(tmp_path, "0.0.0.0", None))
+    def test_a_wildcard_bind_with_auth_off_is(self, tmp_path):
+        warning = check_exposure(self.make(tmp_path, "0.0.0.0"))
         assert warning is not None and "0.0.0.0" in warning
 
-    def test_a_routable_address_without_a_token_is(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
-        assert check_exposure(self.make(tmp_path, "10.4.100.247", None)) is not None
+    def test_a_routable_address_with_auth_off_is(self, tmp_path):
+        assert check_exposure(self.make(tmp_path, "10.4.100.247")) is not None
 
-    def test_a_hostname_that_is_not_localhost_is_treated_as_exposed(self, tmp_path, monkeypatch):
+    def test_a_hostname_that_is_not_localhost_is_treated_as_exposed(self, tmp_path):
         """It cannot be resolved here, and the safe reading of an unknown bind
         is the one that warns."""
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
-        assert check_exposure(self.make(tmp_path, "gpu2.internal", None)) is not None
+        assert check_exposure(self.make(tmp_path, "gpu2.internal")) is not None
 
-    def test_localhost_by_name_is_not(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
-        assert check_exposure(self.make(tmp_path, "localhost", None)) is None
+    def test_localhost_by_name_is_not(self, tmp_path):
+        assert check_exposure(self.make(tmp_path, "localhost")) is None
 
-    def test_a_token_settles_it_wherever_it_binds(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
-        assert check_exposure(self.make(tmp_path, "0.0.0.0", "a-token")) is None
+    def test_auth_being_on_settles_it_wherever_it_binds(self, tmp_path):
+        """The switch, not the presence of a token: tokens that nothing checks
+        leave the port as open as none at all."""
+        assert check_exposure(self.make(tmp_path, "0.0.0.0", auth_enabled=True)) is None

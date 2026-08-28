@@ -23,13 +23,17 @@ CLAUDE = Upstream(
 )
 GPT = Upstream(name="openai", base_url="https://api.openai.com", dialect="openai", headers={})
 
+# The configured set, as load_config hands it over: one entry is still a list.
+TOKENS = ("secret",)
+
 
 def make_config(**overrides) -> RelayConfig:
     settings = {
-        "host": "127.0.0.1", "port": 11434, "default_upstream": "ollama",
-        "connect_timeout": 10, "log_level": "INFO", "auth_token": "t",
+        "host": "127.0.0.1", "port": 11435, "default_upstream": "ollama",
+        "connect_timeout": 10, "log_level": "INFO",
+        "auth_enabled": True, "auth_tokens": TOKENS,
         "upstreams": {"ollama": OLLAMA, "anthropic": CLAUDE, "openai": GPT},
-        "config_path": None,
+        "config_path": None, "state_path": None,
     }
     settings.update(overrides)
     return RelayConfig(**settings)
@@ -39,43 +43,70 @@ class TestTheCallerCredential:
     """Who is allowed to use the relay at all."""
 
     def test_a_bearer_token_is_accepted(self):
-        assert check_caller_token({"authorization": "Bearer secret"}, "secret")
+        assert check_caller_token({"authorization": "Bearer secret"}, TOKENS)
 
     def test_and_so_is_x_api_key(self):
         """An Anthropic SDK pointed here sends x-api-key and cannot easily be
         made to send a bearer. Accepting only one carrier would leave half the
         callers unable to authenticate at all."""
-        assert check_caller_token({"x-api-key": "secret"}, "secret")
+        assert check_caller_token({"x-api-key": "secret"}, TOKENS)
 
     def test_the_scheme_word_is_not_case_sensitive(self):
-        assert check_caller_token({"authorization": "bearer secret"}, "secret")
+        assert check_caller_token({"authorization": "bearer secret"}, TOKENS)
 
     def test_but_the_token_itself_is(self):
-        assert not check_caller_token({"authorization": "Bearer SECRET"}, "secret")
+        assert not check_caller_token({"authorization": "Bearer SECRET"}, TOKENS)
 
     def test_a_wrong_token_is_refused(self):
-        assert not check_caller_token({"authorization": "Bearer wrong"}, "secret")
+        assert not check_caller_token({"authorization": "Bearer wrong"}, TOKENS)
 
     def test_a_token_that_merely_starts_right_is_refused(self):
         """A prefix must not pass: the comparison is over the whole value."""
-        assert not check_caller_token({"authorization": "Bearer sec"}, "secret")
+        assert not check_caller_token({"authorization": "Bearer sec"}, TOKENS)
 
     def test_a_longer_token_carrying_the_right_one_is_refused(self):
-        assert not check_caller_token({"authorization": "Bearer secretmore"}, "secret")
+        assert not check_caller_token({"authorization": "Bearer secretmore"}, TOKENS)
 
     def test_no_credential_at_all_is_refused(self):
-        assert not check_caller_token({}, "secret")
+        assert not check_caller_token({}, TOKENS)
 
     def test_another_scheme_is_not_read_as_a_bearer(self):
         """Basic auth carrying the token as its blob must not be accepted — and
         an Authorization header that is present but unusable must not fall
         through to the x-api-key branch either."""
         assert not check_caller_token(
-            {"authorization": "Basic secret", "x-api-key": "secret"}, "secret"
+            {"authorization": "Basic secret", "x-api-key": "secret"}, TOKENS
         )
 
     def test_surrounding_space_is_ignored(self):
-        assert check_caller_token({"authorization": "Bearer  secret "}, "secret")
+        assert check_caller_token({"authorization": "Bearer  secret "}, TOKENS)
+
+    def test_an_empty_token_list_refuses_everyone(self):
+        """Auth switched on with nothing to match means closed, not open. The
+        open case is the switch being off, and it is decided before this."""
+        assert not check_caller_token({"authorization": "Bearer secret"}, ())
+
+    def test_any_token_in_the_list_is_accepted(self):
+        """Several callers hold several tokens, and deleting one of them must
+        not turn the rest away."""
+        assert check_caller_token({"authorization": "Bearer second"}, ("first", "second"))
+        assert check_caller_token({"x-api-key": "third"}, ("first", "second", "third"))
+
+    def test_and_one_that_is_in_none_of_them_is_not(self):
+        assert not check_caller_token({"authorization": "Bearer fourth"}, ("first", "second"))
+
+    def test_a_credential_with_a_non_ascii_character_is_refused_not_a_crash(self):
+        """hmac.compare_digest raises on a non-ASCII str, and Starlette decodes
+        headers as latin-1, so one raw byte from an anonymous caller would turn
+        every refusal into a 500 with a traceback in the log."""
+        assert not check_caller_token({"authorization": "Bearer caf\xe9"}, TOKENS)
+        assert not check_caller_token({"x-api-key": "caf\xe9"}, TOKENS)
+
+    def test_a_stored_token_with_a_non_ascii_character_does_not_break_the_others(self):
+        """Nothing validates what `token add` is given, and every token is
+        compared before any result is read — so one such entry would refuse
+        every other caller in the set rather than only itself."""
+        assert check_caller_token({"authorization": "Bearer first"}, ("first", "cl\xe9-andre"))
 
 
 class TestChoosingAnUpstream:

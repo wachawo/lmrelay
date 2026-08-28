@@ -23,6 +23,11 @@ from starlette.applications import Starlette
 from starlette.responses import StreamingResponse
 from starlette.routing import Route
 
+# Set and restored together. LMRELAY_STATE and LMRELAY_TOKEN are cleared beside
+# the config because a state file or token in the developer's environment would
+# switch auth on for a relay this module reaches with no credential.
+RELAY_ENV = ("LMRELAY_CONFIG", "LMRELAY_STATE", "LMRELAY_TOKEN")
+
 CHUNKS = [b"first\n", b"second\n", b"third\n"]
 # Long enough that "the whole answer was written before anything was sent" and
 # "the first chunk was forwarded as it arrived" cannot be confused for one
@@ -84,9 +89,12 @@ def relay_url(tmp_path_factory):
         encoding="utf-8",
     )
 
-    # The app reads the config at startup, from the environment.
-    previous = os.environ.get("LMRELAY_CONFIG")
+    # The app reads the config at startup, from the environment. Set here rather
+    # than through monkeypatch: this fixture outlives a single test.
+    previous = {name: os.environ.get(name) for name in RELAY_ENV}
     os.environ["LMRELAY_CONFIG"] = str(config)
+    os.environ.pop("LMRELAY_STATE", None)
+    os.environ.pop("LMRELAY_TOKEN", None)
     try:
         from lmrelay.app import app
 
@@ -97,10 +105,11 @@ def relay_url(tmp_path_factory):
         upstream.should_exit = True
         relay_thread.join(timeout=10)
         upstream_thread.join(timeout=10)
-        if previous is None:
-            os.environ.pop("LMRELAY_CONFIG", None)
-        else:
-            os.environ["LMRELAY_CONFIG"] = previous
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def test_the_first_chunk_arrives_before_the_upstream_has_written_the_last(relay_url):

@@ -7,13 +7,17 @@ import logging
 LOG_FORMAT  = "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s) %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
+# Command output that is data — a status block, a token table — is a table only
+# without a timestamp and a logger name in front of every row.
+PLAIN_FORMAT = "%(message)s"
 
-def setup_logging(level: str = "INFO") -> None:
+
+def setup_logging(level: str = "INFO", plain: bool = False) -> None:
     """Initialize logging once. Safe to call multiple times (uses force=True)."""
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
         handlers=[logging.StreamHandler()],
-        format=LOG_FORMAT,
+        format=PLAIN_FORMAT if plain else LOG_FORMAT,
         datefmt=LOG_DATEFMT,
         level=numeric_level,
         force=True,

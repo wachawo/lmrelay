@@ -2,12 +2,23 @@
 # -*- coding: utf-8 -*-
 """The relay end to end: what a caller gets, and what the upstream is sent."""
 
+import logging
+import os
+
 import httpx
 import pytest
 from starlette.testclient import TestClient
 
 # Local imports
+from lmrelay.daemon import PID_NAME, read_pid, write_pid
+from lmrelay.state import STATE_NAME
 from tests.conftest import CONFIG_TEMPLATE, TOKEN, build_relay, write_config
+
+EXTRA_UPSTREAM = """
+[upstream.second]
+base_url = "http://second.invalid:11434"
+dialect  = "ollama"
+"""
 
 
 class TestTheDoor:
@@ -49,9 +60,21 @@ class TestTheDoor:
         relay.get("/healthz")
         assert recorder.requests == []
 
+    @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
+    def test_health_is_exempt_by_method_as_well_as_by_path(self, relay, recorder, method):
+        """The health route answers GET only — FastAPI does not add HEAD — so
+        every other method on /healthz falls through to the catch-all relay.
+        Exempting the path alone would let an anonymous caller reach the default
+        upstream with the operator's provider credential attached, choosing the
+        body, the query and the headers; only the path is pinned."""
+        response = relay.request(method, "/healthz", content=b'{"anonymous": true}')
+        assert response.status_code == 401
+        assert recorder.requests == []
+
 
 class TestAnOpenRelay:
-    """A config with no token: every caller is let through, deliberately."""
+    """No state file, so the auth switch is off: every caller is let through,
+    deliberately. It is what a fresh install in front of a local Ollama is."""
 
     @pytest.fixture
     def open_relay(self, tmp_path, monkeypatch, recorder):
@@ -60,7 +83,7 @@ class TestAnOpenRelay:
         monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, body))
         yield from build_relay(recorder)
 
-    def test_no_configured_token_means_no_check(self, open_relay):
+    def test_the_switch_being_off_means_no_check(self, open_relay):
         assert open_relay.post("/api/chat", json={}).status_code == 200
 
     def test_and_a_caller_credential_is_still_not_forwarded(self, open_relay, recorder):
@@ -253,3 +276,96 @@ class TestStartup:
 
         with pytest.raises(Exception, match=r"\[upstream"), TestClient(app):
             pass
+
+    def test_it_records_its_pid_and_clears_it_again(self, tmp_path, monkeypatch):
+        from lmrelay.app import app
+
+        monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, CONFIG_TEMPLATE.format(
+            token=TOKEN
+        )))
+        pidfile = tmp_path / PID_NAME
+        with TestClient(app):
+            assert read_pid(pidfile) == os.getpid()
+        assert read_pid(pidfile) is None
+
+    def test_but_it_does_not_clear_one_another_relay_has_claimed(self, tmp_path, monkeypatch):
+        """uvicorn runs the shutdown half of the lifespan when the bind fails
+        too, so a relay that never served would otherwise delete the pidfile of
+        the live relay that beat it to the port — leaving a running relay that
+        `status` calls stopped and `stop` cannot find."""
+        from lmrelay.app import app
+
+        monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, CONFIG_TEMPLATE.format(
+            token=TOKEN
+        )))
+        pidfile = tmp_path / PID_NAME
+        with TestClient(app):
+            # Alive, and not this process: exactly what a relay that lost the
+            # race to the port finds in the file it is about to unlink.
+            write_pid(pidfile, os.getppid())
+        assert read_pid(pidfile) == os.getppid()
+
+
+class TestReloadingInPlace:
+    """What SIGHUP does, called directly: the config changes under a live relay."""
+
+    def test_an_upstream_added_to_the_file_is_in_effect_without_a_restart(
+        self, authed, recorder, tmp_path
+    ):
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN) + EXTRA_UPSTREAM)
+        reload_config(app)
+        assert authed.post("/second/api/chat", json={}).status_code == 200
+        assert str(recorder.last.url) == "http://second.invalid:11434/api/chat"
+
+    def test_the_client_is_kept_so_answers_in_flight_survive(self, authed, tmp_path):
+        """Closing it would abort every stream being relayed, and nothing a
+        reload can change is baked into it: URLs and headers are read per
+        request from the config that just moved."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.http
+        write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN) + EXTRA_UPSTREAM)
+        reload_config(app)
+        assert app.state.http is before
+
+    def test_a_broken_file_leaves_the_running_config_in_place(self, authed, tmp_path):
+        """A half-saved edit must not take the relay down: the operator is at a
+        text editor, not at the terminal watching for a crash."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.config
+        write_config(tmp_path, "this is not = = toml")
+        reload_config(app)
+        assert app.state.config is before
+        assert authed.post("/api/chat", json={}).status_code == 200
+
+    def test_a_broken_state_file_is_reported_the_same_way_and_not_raised(
+        self, authed, tmp_path, caplog
+    ):
+        """load_config reads state.json too, and its StateError is a sibling of
+        ConfigError rather than a subclass. Catching only ConfigError would let
+        it escape the asyncio signal callback as a traceback while `token gen`
+        had already told the operator the change had been picked up."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.config
+        (tmp_path / STATE_NAME).write_text('{"version": 1, "auth_enabled": tru', encoding="utf-8")
+        with caplog.at_level(logging.ERROR):
+            reload_config(app)
+        assert app.state.config is before
+        assert "keeping the running config" in caplog.text
+
+    def test_the_warning_names_only_the_bind_setting_that_changed(self, authed, tmp_path, caplog):
+        """An operator who moved the port has to be able to tell that
+        connect_timeout did not also drift, so one fixed sentence naming all
+        three answers a question nobody asked."""
+        from lmrelay.app import app, reload_config
+
+        moved = CONFIG_TEMPLATE.format(token=TOKEN).replace("port             = 11435", "port = 11439")
+        write_config(tmp_path, moved)
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "port changed" in caplog.text
+        assert "connect_timeout" not in caplog.text

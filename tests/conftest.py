@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Shared fixtures: a config on disk, and the app wired to a recording upstream."""
+"""Shared fixtures: a config and its state on disk, and the app wired to a recording upstream."""
 
 import threading
+from pathlib import Path
 
 import anyio
 import httpx
@@ -10,9 +11,11 @@ import pytest
 from starlette.testclient import TestClient
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR
+from lmrelay.config import CONFIG_ENV_VAR, TOKEN_ENV_VAR
+from lmrelay.state import STATE_ENV_VAR, STATE_NAME, CallerToken, RelayState, save_state
 
 TOKEN = "caller-token-value"
+CREATED_AT = "2026-01-01T00:00:00Z"
 
 # Two upstreams pointed at hosts nothing resolves: every request in these tests
 # is answered by the recording transport below, so a test that accidentally
@@ -20,7 +23,7 @@ TOKEN = "caller-token-value"
 CONFIG_TEMPLATE = """
 [server]
 host             = "127.0.0.1"
-port             = 11434
+port             = 11435
 default_upstream = "ollama"
 
 [auth]
@@ -42,11 +45,43 @@ headers  = {{ "Authorization" = "Bearer provider-bearer" }}
 """
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    """Keep the suite inside tmp_path: no test may reach the real ~/.lmrelay.
+
+    A machine that has ever run `lmrelay token gen` would otherwise hand a test
+    real tokens and a real auth switch through $LMRELAY_STATE, and anything that
+    resolves `~` at call time — `lmrelay init` above all — would write there.
+    """
+    monkeypatch.delenv(STATE_ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
 def write_config(path, body: str) -> str:
     """Write a config file and return its path as a string."""
     target = path / "lmrelay.toml"
     target.write_text(body, encoding="utf-8")
     return str(target)
+
+
+def write_state(path, auth_enabled: bool = False, tokens=(), providers=None) -> Path:
+    """Write state.json beside the config and return its path.
+
+    Built through save_state rather than by hand: the file is the CLI's, and a
+    test that wrote its own JSON would stop testing the format the CLI produces.
+    """
+    state = RelayState(
+        auth_enabled=auth_enabled,
+        tokens=tuple(
+            CallerToken(id=index, token=value, label="", created_at=CREATED_AT)
+            for index, value in enumerate(tokens, start=1)
+        ),
+        providers=dict(providers or {}),
+        next_token_id=len(tokens) + 1,
+        state_path=Path(path) / STATE_NAME,
+    )
+    save_state(state)
+    return state.state_path
 
 
 class Recorder:
@@ -109,7 +144,10 @@ def recorder() -> Recorder:
 def relay(tmp_path, monkeypatch, recorder):
     """A running relay whose upstream is the recorder, with the standard config."""
     monkeypatch.setenv(CONFIG_ENV_VAR, write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN)))
-    monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+    monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
+    # The switch lives in the state, so the [auth] token above is only a
+    # credential that gets checked once something turns checking on.
+    write_state(tmp_path, auth_enabled=True)
     yield from build_relay(recorder)
 
 

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "lmrelay"
 dynamic = ["version"]
-description = "Credentialed passthrough in front of a local Ollama, retargetable at a hosted provider."
+description = "Credentialed relay beside a local Ollama, retargetable at a hosted provider."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -17,6 +17,8 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
+  # Windows stays on the list: `lmrelay run` works there. Only the detached
+  # and autostart commands are POSIX-only, and they say so and exit.
   "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",

@@ -3,54 +3,75 @@
 # Looked for, first hit wins:
 #   $LMRELAY_CONFIG  ->  ./lmrelay.toml  ->  ~/.lmrelay/lmrelay.toml
 #
+# This file belongs to you. The CLI never rewrites it, so the comments below
+# survive every command. Caller tokens and CLI-added providers go to
+# state.json beside it, which is machine-owned.
+#
 # ${VAR} in any header value is read from the process environment, so API
 # keys can stay out of this file.
 
 [server]
-host             = "127.0.0.1"   # 0.0.0.0 only with a token set below
-port             = 11434         # the port Ollama clients already expect
+host             = "127.0.0.1"   # 0.0.0.0 only with auth on
+port             = 11435         # beside Ollama, which keeps 11434; point
+                                 # clients at 11435 instead
 default_upstream = "ollama"      # used when the path has no upstream prefix
 connect_timeout  = 10            # seconds to reach the upstream; there is
                                  # deliberately no read timeout (see README)
 log_level        = "INFO"
 
-# The credential a CALLER must present to lmrelay. Sent as either
-#   Authorization: Bearer <token>       (OpenAI SDKs, curl, Ollama clients)
-#   x-api-key: <token>                  (Anthropic SDKs)
-# It is stripped from the request and never forwarded upstream.
-# LMRELAY_TOKEN overrides this. Leave unset to disable caller auth.
-[auth]
-token = "CHANGE-ME"
+# Caller credentials are not configured here. They live in state.json and are
+# managed by the CLI:
+#
+#   lmrelay token gen           mint one and print it once
+#   lmrelay token list          show what exists, masked
+#   lmrelay auth true | false   the switch; with auth off lmrelay is a plain
+#                               transparent proxy in front of Ollama
+#
+# A token written below is still accepted as one extra valid credential, which
+# is how a non-interactive install injects one without running the CLI.
+# $LMRELAY_TOKEN does the same. Neither turns checking on; only
+# 'lmrelay auth true' does.
+#
+# [auth]
+# token = "CHANGE-ME"
 
 
-# Local Ollama. Needs no credential, so it has no headers at all.
-# lmrelay listens on 11434, so move Ollama itself off that port:
-#   OLLAMA_HOST=127.0.0.1:11435 ollama serve
+# Local Ollama, exactly where it already listens. Needs no credential, so it
+# has no headers at all.
 [upstream.ollama]
-base_url = "http://127.0.0.1:11435"
+base_url = "http://127.0.0.1:11434"
 dialect  = "ollama"
 
+# The hosted providers below are the long form. 'lmrelay provider add openai
+# sk-...' writes the same three fields into state.json in four words. Keep an
+# upstream here when you want its key read from the environment at startup.
+#
+# They ship commented out so that a freshly written config starts: an unset
+# ${VAR} is a startup error, and every one of them would be unset on a machine
+# that has just run 'lmrelay init'. Uncomment a block once its variable is
+# exported.
+
 # OpenAI. Wants a bearer token.
-[upstream.openai]
-base_url = "https://api.openai.com"
-dialect  = "openai"
-headers  = { Authorization = "Bearer ${OPENAI_API_KEY}" }
+# [upstream.openai]
+# base_url = "https://api.openai.com"
+# dialect  = "openai"
+# headers  = { Authorization = "Bearer ${OPENAI_API_KEY}" }
 
 # Anthropic. Wants x-api-key plus a dated version header, and speaks its
 # own dialect on /v1/messages — not /v1/chat/completions.
-[upstream.anthropic]
-base_url = "https://api.anthropic.com"
-dialect  = "anthropic"
-headers  = { "x-api-key" = "${ANTHROPIC_API_KEY}", "anthropic-version" = "2023-06-01" }
+# [upstream.anthropic]
+# base_url = "https://api.anthropic.com"
+# dialect  = "anthropic"
+# headers  = { "x-api-key" = "${ANTHROPIC_API_KEY}", "anthropic-version" = "2023-06-01" }
 
 # DeepSeek. OpenAI-compatible wire format, bearer token.
-[upstream.deepseek]
-base_url = "https://api.deepseek.com"
-dialect  = "openai"
-headers  = { Authorization = "Bearer ${DEEPSEEK_API_KEY}" }
+# [upstream.deepseek]
+# base_url = "https://api.deepseek.com"
+# dialect  = "openai"
+# headers  = { Authorization = "Bearer ${DEEPSEEK_API_KEY}" }
 
 # Grok (xAI). OpenAI-compatible wire format, bearer token.
-[upstream.grok]
-base_url = "https://api.x.ai"
-dialect  = "openai"
-headers  = { Authorization = "Bearer ${XAI_API_KEY}" }
+# [upstream.grok]
+# base_url = "https://api.x.ai"
+# dialect  = "openai"
+# headers  = { Authorization = "Bearer ${XAI_API_KEY}" }

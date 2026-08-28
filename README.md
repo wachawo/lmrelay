@@ -1,9 +1,13 @@
 # lmrelay
 
-A small HTTP relay that sits in front of a local [Ollama](https://ollama.com), requires a
-credential from its callers, and can be pointed at a hosted provider — OpenAI, Anthropic,
-DeepSeek, Grok — by prefixing one path segment. It has one config file, no database, and no
-state.
+A small HTTP relay that listens on port 11435 beside a local
+[Ollama](https://ollama.com), can require a credential from its callers, and can be pointed at
+a hosted provider — OpenAI, Anthropic, DeepSeek, Grok — by prefixing one path segment.
+
+Ollama keeps 11434 and its installation is left exactly as it is. Clients are repointed at
+11435 instead. That is the trade: nothing about an existing Ollama has to change, and the
+relay is opt-in per client. There is one hand-written config file, one machine-written
+state file, and no database.
 
 ## lmrelay is a credentialed passthrough, not a translator
 
@@ -52,6 +56,13 @@ the provider said.
 pip install git+https://github.com/wachawo/lmrelay.git
 ```
 
+The `git+` prefix is not decoration: pip reads a bare `github.com/...` as a package name and
+fails. Where git is not installed, the source archive works and needs none:
+
+```bash
+pip install https://github.com/wachawo/lmrelay/archive/refs/heads/main.tar.gz
+```
+
 Python 3.11 or newer. Three dependencies: FastAPI, uvicorn and httpx.
 
 ## Configure
@@ -62,32 +73,38 @@ lmrelay init       # writes ~/.lmrelay/lmrelay.toml, mode 0600
 
 The config is looked for in three places, first hit wins, no merging:
 
-1. `$LMRELAY_CONFIG` (also what `lmrelay serve --config PATH` sets)
+1. `$LMRELAY_CONFIG` (also what any command's `--config PATH` sets)
 2. `./lmrelay.toml`
 3. `~/.lmrelay/lmrelay.toml`
 
 If none exists the relay refuses to start rather than serving 404s from an empty
 configuration.
 
+Four files live in that config's directory:
+
+| File | Written by | Holds |
+|---|---|---|
+| `lmrelay.toml` | you | server settings and hand-written upstreams |
+| `state.json` | the CLI | caller tokens, the auth switch, CLI-added providers |
+| `lmrelay.pid` | the relay | the pid of the running process |
+| `lmrelay.log` | the relay | stdout and stderr of a detached relay |
+
+The split exists so that the CLI never has to rewrite a file you are editing: your comments
+in `lmrelay.toml` survive forever. State is JSON rather than a second TOML file because it
+is machine-owned, and because `tomllib` reads but cannot write.
+
 ```toml
 [server]
-host             = "127.0.0.1"   # 0.0.0.0 only with a token set below
-port             = 11434         # the port Ollama clients already expect
+host             = "127.0.0.1"   # 0.0.0.0 only with auth on
+port             = 11435         # beside Ollama, which keeps 11434
 default_upstream = "ollama"      # used when the path has no upstream prefix
 connect_timeout  = 10            # seconds to reach the upstream
 log_level        = "INFO"
 
-# The credential a CALLER must present to lmrelay. Sent as either
-#   Authorization: Bearer <token>       (OpenAI SDKs, curl, Ollama clients)
-#   x-api-key: <token>                  (Anthropic SDKs)
-# It is stripped from the request and never forwarded upstream.
-# LMRELAY_TOKEN overrides it. Leave unset to disable caller auth.
-[auth]
-token = "CHANGE-ME"
-
-# Local Ollama. Needs no credential, so it has no headers at all.
+# Local Ollama, exactly where it already listens. Needs no credential, so it
+# has no headers at all.
 [upstream.ollama]
-base_url = "http://127.0.0.1:11435"
+base_url = "http://127.0.0.1:11434"
 dialect  = "ollama"
 
 # OpenAI. Wants a bearer token.
@@ -116,7 +133,9 @@ headers  = { Authorization = "Bearer ${XAI_API_KEY}" }
 ```
 
 The complete commented file ships as `lmrelay/lmrelay.toml.example` and is what
-`lmrelay init` copies.
+`lmrelay init` copies. There the hosted blocks are commented out, so a fresh config starts
+with Ollama alone. Uncomment one once its variable is exported; an unset `${VAR}` is a
+startup error.
 
 Notes on the schema:
 
@@ -137,25 +156,91 @@ Notes on the schema:
   while `Authorization` is not. That is not a typo.
 - An upstream may not be named `api` or `v1`; either would shadow the path root every
   Ollama and OpenAI client already sends to, and the breakage would be hard to diagnose.
+- There is no auth switch in this file. A `[auth] token`, and `$LMRELAY_TOKEN`, are each
+  accepted as one *additional* valid caller credential, so a container can inject one
+  without invalidating yours; neither turns checking on. Caller tokens are otherwise
+  `lmrelay token …` and the switch is `lmrelay auth true|false`.
+- A provider added with `lmrelay provider add` wins over an `[upstream.<name>]` of the same
+  name. The startup log names any upstream that was overridden — this file is hand-written
+  and its author deserves to hear that a command shadowed it.
 
-## Run
+## Commands
+
+| Command | Does |
+|---|---|
+| `lmrelay init` | write `~/.lmrelay/lmrelay.toml` |
+| `lmrelay run` | run in the foreground |
+| `lmrelay serve` | run detached, appending to `lmrelay.log` |
+| `lmrelay stop` | stop the running relay |
+| `lmrelay restart` | stop it, then start it detached again |
+| `lmrelay reload` | re-read the config without dropping a connection |
+| `lmrelay status` | what is running, where, with which upstreams |
+| `lmrelay enable` | start at login, and start now |
+| `lmrelay disable` | undo `enable` |
+| `lmrelay auth true\|false` | require a caller credential, or do not |
+| `lmrelay token gen [--label L]` | mint a token and print it once |
+| `lmrelay token add TOKEN [--label L]` | register a token you chose yourself |
+| `lmrelay token list [--show]` | list tokens, masked unless `--show` |
+| `lmrelay token delete ID` | remove one by the id `token list` prints |
+| `lmrelay provider add NAME TOKEN` | add or rotate an upstream |
+| `lmrelay provider list [--show]` | every upstream, from the file and from state |
+| `lmrelay provider delete NAME` | remove a provider that state owns |
+
+`run`, `serve` and `restart` take `--host` and `--port`. `provider add` takes `--base-url`,
+`--dialect` and a repeatable `--header K=V`; with a known name — `openai`, `anthropic`,
+`deepseek`, `grok`, `ollama` — the base URL, dialect and header shape come from a preset,
+so `lmrelay provider add openai sk-...` is the whole command. `--config PATH` is accepted by
+every command that reads the config or the state — that is, every command except `init`,
+which always writes `~/.lmrelay/lmrelay.toml`.
+
+### First run
 
 ```bash
-lmrelay serve                       # honours [server].host and [server].port
-lmrelay serve --port 8080 --config ./lmrelay.toml
-python -m lmrelay serve             # same thing
-uvicorn lmrelay.app:app --port 11434
+lmrelay init
+lmrelay run
 ```
 
-lmrelay defaults to port 11434 so that existing Ollama clients need no change, which means
-the real Ollama has to move:
+Auth is off in a fresh state, so on loopback this is a transparent proxy in front of Ollama.
+That is deliberate: a relay you have just installed should not lock you out of your own
+Ollama before you have a token. Point a client at 11435 and it works:
 
 ```bash
-OLLAMA_HOST=127.0.0.1:11435 ollama serve
+OLLAMA_HOST=127.0.0.1:11435 ollama list
 ```
 
-The inverse — relay on 11435, Ollama left on 11434 — is less invasive but leaves an
-uncredentialed Ollama listening, which defeats the point.
+### Going persistent
+
+```bash
+lmrelay token gen --label laptop
+lmrelay enable
+lmrelay status
+```
+
+`token gen` prints the token in full once and never again, and it turns auth on when it is
+the first token — an operator who adds a credential and finds the relay still open has been
+surprised for no reason. Afterwards `lmrelay auth false` reopens it and `lmrelay auth true`
+closes it again; `auth true` with no tokens is refused, because it would 401 every request
+including yours.
+
+`enable` registers a systemd `--user` unit on Linux or a launchd agent on macOS, then starts
+it. From then on `stop`, `restart` and `reload` go through that manager instead of the
+pidfile, so the two cannot disagree about who owns the process; each command says which path
+it took. On a POSIX box with neither manager, `lmrelay serve` runs the relay detached. On
+Windows only `lmrelay run` works, and `serve` and `enable` say so rather than half-starting.
+
+```
+lmrelay      running (pid 40213), healthy
+listening    127.0.0.1:11435
+config       /home/u/.lmrelay/lmrelay.toml
+state        /home/u/.lmrelay/state.json
+upstreams    anthropic, ollama, openai (default: ollama)
+auth         on, 2 tokens
+autostart    systemd: enabled, active
+```
+
+A stopped relay prints the same block with `stopped` on the first line, because "what would
+it do if I started it" is the question a stopped relay raises. Either way the exit code is
+0: `status` reports, it does not assert.
 
 ## Choosing an upstream
 
@@ -171,20 +256,20 @@ POST /deepseek/v1/chat/completions  -> deepseek  , forwards /v1/chat/completions
 POST /grok/v1/chat/completions      -> grok      , forwards /v1/chat/completions
 ```
 
-So a client that has never heard of lmrelay keeps working unchanged, and retargeting one is
+So a client only has to learn the port once, and retargeting one at a different provider is
 a single line:
 
 ```python
 from openai import OpenAI
 from anthropic import Anthropic
 
-OpenAI(base_url="http://relay:11434/openai/v1", api_key=RELAY_TOKEN)
-OpenAI(base_url="http://relay:11434/v1",        api_key=RELAY_TOKEN)   # local Ollama
-Anthropic(base_url="http://relay:11434/anthropic", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/v1",        api_key=RELAY_TOKEN)   # local Ollama
+Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 ```
 
 ```bash
-curl http://127.0.0.1:11434/api/chat \
+curl http://127.0.0.1:11435/api/chat \
   -H "Authorization: Bearer $LMRELAY_TOKEN" \
   -d '{"model": "llama3", "messages": [{"role": "user", "content": "hi"}]}'
 ```
@@ -206,18 +291,30 @@ credential. Everything else goes through the relay.
   an upstream with no configured headers receives no credential at all.
 - **The elapsed time in the access log is time to first byte**, not the duration of a
   streamed answer.
+- **A reload applies upstreams, tokens and the auth switch — not `host`, `port` or
+  `connect_timeout`.** A running server cannot rebind its socket or re-time a client that is
+  already open. The reload log names the ones that changed and says a restart applies them.
+- **A config that fails to parse on reload is logged and discarded**, and the relay keeps
+  serving the one it already had. A typo must not take the relay down. That covers
+  `state.json` as well as `lmrelay.toml`, and it is why `token gen`, `auth true` and the rest
+  say they signalled the relay rather than that the change is live: the reload is delivered,
+  not acknowledged, and its outcome is in the relay's log.
+- **The pidfile is written by the relay itself**, whether it was started by `run`, by
+  `serve` or by a service manager, so `status`, `stop` and `reload` have one place to look
+  regardless. A pidfile naming a dead process is overwritten silently; one naming a live
+  process makes a second start refuse, rather than letting it fail later on the bind with a
+  less useful message.
 - **An unreachable upstream is a 502 that names it**, e.g.
-  `lmrelay: upstream 'ollama' at http://127.0.0.1:11435 is unreachable: ConnectError` —
-  usually meaning Ollama was never moved off 11434.
-- **Binding a non-loopback host with no token logs a warning** rather than refusing, since
+  `lmrelay: upstream 'ollama' at http://127.0.0.1:11434 is unreachable: ConnectError` —
+  usually meaning Ollama itself is not running.
+- **Binding a non-loopback host with auth off logs a warning** rather than refusing, since
   running uncredentialed behind an authenticated nginx is legitimate.
 
 ## Not in scope
 
 No failover, retry or load balancing. No dialect translation. No model catalogue or
 aliasing. No token accounting, usage database or budgets. No admin API, dashboard or
-metrics. No caching or rate limiting. One caller token, not a key ring. No TLS — put nginx
-in front. No config hot reload; restart the process.
+metrics. No caching or rate limiting. No TLS — put nginx in front.
 
 ## Tests
 

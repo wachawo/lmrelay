@@ -1,37 +1,51 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Discovery, parsing and validation of lmrelay.toml."""
+"""Discovery, parsing and validation of lmrelay.toml, merged with the CLI-owned state."""
 
 import ipaddress
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
+# Local imports
+from lmrelay.errors import ConfigError
+from lmrelay.state import DIALECTS, RESERVED_UPSTREAM_NAMES, RelayState, load_state, state_path_for
+
+logger = logging.getLogger(__name__)
+
 # Config
 CONFIG_NAME       = "lmrelay.toml"
 CONFIG_ENV_VAR    = "LMRELAY_CONFIG"
 TOKEN_ENV_VAR     = "LMRELAY_TOKEN"
 HOME_CONFIG_PATH  = Path.home() / ".lmrelay" / CONFIG_NAME
-DIALECTS          = ("ollama", "openai", "anthropic")
 
-# An upstream under either name would swallow the path root that every Ollama
-# (/api/...) and OpenAI (/v1/...) client already sends to, and the breakage
-# would surface as an unexplained 404 far from its cause.
-RESERVED_UPSTREAM_NAMES = ("api", "v1")
+# Re-exported from the modules that own them so `from lmrelay.config import ...`
+# keeps working: state.py cannot import config.py without a cycle, so the
+# definitions live there and are surfaced here.
+__all__ = [
+    "DIALECTS",
+    "RESERVED_UPSTREAM_NAMES",
+    "ConfigError",
+    "RelayConfig",
+    "Upstream",
+    "check_exposure",
+    "describe_upstreams",
+    "find_config_path",
+    "load_config",
+    "parse_upstream",
+    "parse_upstreams",
+]
 
-# Defaults for [server]; port 11434 is the one Ollama clients already expect.
+# Defaults for [server]; port 11435 leaves 11434 to the Ollama already installed.
 DEFAULT_HOST            = "127.0.0.1"
-DEFAULT_PORT            = 11434
+DEFAULT_PORT            = 11435
 DEFAULT_UPSTREAM        = "ollama"
 DEFAULT_DIALECT         = "openai"
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_LOG_LEVEL       = "INFO"
-
-
-class ConfigError(ValueError):
-    """An unusable configuration. The message is shown to the operator verbatim."""
 
 
 @dataclass(frozen=True)
@@ -46,16 +60,18 @@ class Upstream:
 
 @dataclass(frozen=True)
 class RelayConfig:
-    """The whole of lmrelay.toml, validated."""
+    """The whole of lmrelay.toml and state.json, validated and merged."""
 
     host: str
     port: int
     default_upstream: str
     connect_timeout: int
     log_level: str
-    auth_token: str | None
+    auth_enabled: bool
+    auth_tokens: tuple[str, ...]
     upstreams: dict[str, Upstream]
     config_path: Path
+    state_path: Path
 
 
 def find_config_path() -> Path | None:
@@ -90,8 +106,15 @@ def expand_env_value(value: str, upstream_name: str, header_name: str) -> str:
         )
 
 
-def parse_upstream(name: str, table: dict) -> Upstream:
-    """Validate one [upstream.<name>] table and freeze it."""
+def parse_upstream(name: str, table: dict, expand_env: bool = True) -> Upstream:
+    """Validate one [upstream.<name>] table and freeze it.
+
+    `expand_env` is the one thing a hand-written table and a CLI-added provider
+    do not share: `${VAR}` in the file is a documented way to keep a key out of
+    it, while a key the CLI stored was already substituted literally, and
+    expanding it again would rewrite an API key containing a $ with the value of
+    an environment variable — and send that value to the provider.
+    """
     if name in RESERVED_UPSTREAM_NAMES:
         raise ConfigError(
             f"lmrelay: upstream name '{name}' is reserved — it would shadow the "
@@ -117,7 +140,7 @@ def parse_upstream(name: str, table: dict) -> Upstream:
     if not isinstance(raw_headers, dict):
         raise ConfigError(f"lmrelay: upstream '{name}' headers must be a table of strings")
     headers = {
-        key: expand_env_value(str(value), name, key)
+        key: expand_env_value(str(value), name, key) if expand_env else str(value)
         for key, value in raw_headers.items()
     }
 
@@ -127,11 +150,62 @@ def parse_upstream(name: str, table: dict) -> Upstream:
 
 
 def parse_upstreams(data: dict) -> dict[str, Upstream]:
-    """Validate every [upstream.*] table. At least one is required."""
+    """Validate every [upstream.*] table. None at all is legal — state may supply them."""
     section = data.get("upstream") or {}
-    if not isinstance(section, dict) or not section:
-        raise ConfigError("lmrelay: config has no [upstream.*] sections")
+    if not isinstance(section, dict):
+        raise ConfigError("lmrelay: [upstream] must be a table of upstream tables")
     return {name: parse_upstream(name, table) for name, table in section.items()}
+
+
+def state_upstreams(providers: dict[str, dict]) -> dict[str, Upstream]:
+    """Validate CLI-added providers through the parser hand-written tables go through.
+
+    A provider added by one word of CLI and one written out by hand must be able
+    to fail in exactly the same ways, so the state record is shaped into a table
+    and handed to parse_upstream rather than checked by a second validator. Env
+    expansion is the exception: see parse_upstream.
+    """
+    return {
+        name: parse_upstream(
+            name,
+            {
+                "base_url": provider.get("base_url"),
+                "dialect": provider.get("dialect", DEFAULT_DIALECT),
+                "headers": provider.get("headers") or {},
+            },
+            expand_env=False,
+        )
+        for name, provider in providers.items()
+    }
+
+
+def merge_upstreams(
+    from_file: dict[str, Upstream],
+    from_state: dict[str, Upstream],
+    config_path: Path,
+) -> dict[str, Upstream]:
+    """Merge both sources with state winning, and say so when it shadows the file."""
+    shadowed = sorted(set(from_file) & set(from_state))
+    if shadowed:
+        logger.warning(
+            f"lmrelay: provider(s) {', '.join(shadowed)} from state.json shadow the "
+            f"[upstream.*] of the same name in {config_path}"
+        )
+    return from_file | from_state
+
+
+def collect_auth_tokens(state: RelayState, data: dict) -> tuple[str, ...]:
+    """Every credential a caller may present, in the order they were configured.
+
+    The TOML token and $LMRELAY_TOKEN are additional valid tokens rather than
+    overrides: a container can inject one without invalidating the tokens the
+    operator generated.
+    """
+    auth = data.get("auth") or {}
+    candidates = [record.token for record in state.tokens]
+    candidates.append(str(auth.get("token") or ""))
+    candidates.append(os.getenv(TOKEN_ENV_VAR) or "")
+    return tuple(dict.fromkeys(token for token in candidates if token))
 
 
 def load_config(path: Path | None = None) -> RelayConfig:
@@ -148,7 +222,17 @@ def load_config(path: Path | None = None) -> RelayConfig:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"lmrelay: cannot read {target}: {type(exc).__name__}: {exc}")
 
-    upstreams = parse_upstreams(data)
+    state_file = state_path_for(target)
+    state = load_state(state_file)
+    upstreams = merge_upstreams(
+        parse_upstreams(data), state_upstreams(state.providers), target
+    )
+    if not upstreams:
+        raise ConfigError(
+            f"lmrelay: config has no [upstream.*] sections in {target} and no providers in "
+            f"{state_file}. Run 'lmrelay provider add' or add an [upstream.*] table."
+        )
+
     server = data.get("server") or {}
     default_upstream = server.get("default_upstream", DEFAULT_UPSTREAM)
     if default_upstream not in upstreams:
@@ -157,9 +241,12 @@ def load_config(path: Path | None = None) -> RelayConfig:
             f"known upstreams: {', '.join(sorted(upstreams))}"
         )
 
-    auth = data.get("auth") or {}
-    # The env var wins so the secret need not sit in a file on a shared box.
-    auth_token = os.getenv(TOKEN_ENV_VAR) or auth.get("token") or None
+    auth_tokens = collect_auth_tokens(state, data)
+    if auth_tokens and not state.auth_enabled:
+        logger.warning(
+            f"lmrelay: {len(auth_tokens)} caller token(s) configured but auth is off; "
+            f"run 'lmrelay auth true' to require them"
+        )
 
     return RelayConfig(
         host=server.get("host", DEFAULT_HOST),
@@ -167,19 +254,26 @@ def load_config(path: Path | None = None) -> RelayConfig:
         default_upstream=default_upstream,
         connect_timeout=int(server.get("connect_timeout", DEFAULT_CONNECT_TIMEOUT)),
         log_level=str(server.get("log_level", DEFAULT_LOG_LEVEL)),
-        auth_token=auth_token,
+        auth_enabled=state.auth_enabled,
+        auth_tokens=auth_tokens,
         upstreams=upstreams,
         config_path=target,
+        state_path=state_file,
     )
 
 
+def describe_upstreams(config: RelayConfig) -> str:
+    """The upstream list as the startup log, `status` and the reload log all print it."""
+    return ", ".join(sorted(config.upstreams))
+
+
 def check_exposure(config: RelayConfig) -> str | None:
-    """Return a warning if a non-loopback bind has no caller credential.
+    """Return a warning if a non-loopback bind demands no credential.
 
     Not a refusal: running uncredentialed behind an authenticated nginx is
     legitimate, and refusing would break that deployment.
     """
-    if config.auth_token:
+    if config.auth_enabled:
         return None
     try:
         is_loopback = ipaddress.ip_address(config.host).is_loopback
@@ -188,8 +282,8 @@ def check_exposure(config: RelayConfig) -> str | None:
     if is_loopback:
         return None
     return (
-        f"lmrelay: listening on {config.host} with no [auth].token — every caller that can "
-        f"reach this port can use the configured upstream credentials"
+        f"lmrelay: listening on {config.host} with auth off — every caller that can reach "
+        f"this port can use the configured upstream credentials. Run 'lmrelay auth true'."
     )
 
 

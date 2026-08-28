@@ -3,7 +3,7 @@
 """Upstream selection, dialect checks and request construction."""
 
 import hmac
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import httpx
 from starlette.requests import Request
@@ -36,8 +36,8 @@ ANTHROPIC_PATHS = {"/v1/messages", "/v1/complete"}
 DIALECT_LABELS = {"ollama": "Ollama", "openai": "OpenAI", "anthropic": "Anthropic"}
 
 
-def check_caller_token(headers: Mapping[str, str], expected_token: str) -> bool:
-    """Constant-time check of the caller's credential against the configured token.
+def extract_caller_token(headers: Mapping[str, str]) -> str | None:
+    """Return the credential the caller presented, by either carrier.
 
     Both carriers are accepted because an Anthropic SDK pointed at the relay
     sends `x-api-key` and cannot easily be made to send a bearer; accepting only
@@ -47,12 +47,35 @@ def check_caller_token(headers: Mapping[str, str], expected_token: str) -> bool:
     if authorization:
         parts = authorization.split(None, 1)
         if len(parts) == 2 and parts[0].lower() == "bearer":
-            return hmac.compare_digest(parts[1].strip(), expected_token)
-        return False
+            return parts[1].strip()
+        # An Authorization the relay cannot read is not a reason to fall back to
+        # x-api-key: the caller has already said which credential it is using.
+        return None
     api_key = headers.get("x-api-key", "")
     if api_key:
-        return hmac.compare_digest(api_key.strip(), expected_token)
-    return False
+        return api_key.strip()
+    return None
+
+
+def check_caller_token(headers: Mapping[str, str], tokens: Sequence[str]) -> bool:
+    """Constant-time check of the caller's credential against every configured token.
+
+    An empty token set refuses: auth turned on with nothing to match against is
+    closed, not open.
+    """
+    presented = extract_caller_token(headers)
+    if presented is None or not tokens:
+        return False
+    # Compared as bytes: compare_digest raises TypeError on a str holding any
+    # non-ASCII character, and both sides can hold one — the credential arrives
+    # from a header Starlette decodes as latin-1, and a stored token is whatever
+    # the operator pasted. A 500 on an unauthenticated request is not a refusal.
+    candidate = presented.encode("utf-8")
+    # Every token is compared before any of the results is read. Stopping at the
+    # first match would make the elapsed time reveal which position matched, and
+    # with it the size of the token set a caller's credential sits in.
+    matches = [hmac.compare_digest(candidate, token.encode("utf-8")) for token in tokens]
+    return any(matches)
 
 
 def select_upstream(path: str, config: RelayConfig) -> tuple[Upstream, str]:
