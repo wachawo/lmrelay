@@ -235,6 +235,39 @@ relay को uvicorn के नीचे ऐसे upstream के आगे च
 जो गुण वह जाँचता है — कि upstream के आख़िरी line लिखने से पहले caller के पास पहली line आ चुकी हो —
 वह in-process client से दिखता ही नहीं।
 
+### nginx क्यों नहीं?
+
+nginx पहले से ही reverse proxy का काम करता है, इसलिए किसी daemon को अपनी जगह कमानी पड़ती है।
+संक्षेप में, बिंदुवार:
+
+- **Authorization header पहले से ही किसी और के पास है, और फ़ैसला यही करता है।** हर client
+  `Authorization: Bearer <key>` भेजता है (OpenAI SDK, ऊपर वाले curl उदाहरण) या `x-api-key`
+  (Anthropic SDK); nginx के `auth_basic` को उसी header में `Basic <base64>` चाहिए, और बाक़ी सब
+  वह ठुकरा देता है। एक header, दो दावेदार। URL में रखे credential निकल तो जाते हैं, पर httpx उन्हें
+  उसी header में लिख देता है: तब OpenAI SDK वाला caller `Basic` बनकर पहुँचता है, और जो bearer वह
+  भेजना चाहता था, उसकी जगह ले ली जाती है।
+- **nginx में token जाँचने का मतलब है token को `nginx.conf` में रखना।** एक `map` और एक
+  `internal` location यह बिना किसी backend के कर देते हैं, पर तब हर token root के मालिकाने वाली
+  `0644` फ़ाइल में एक सादा-पाठ पंक्ति होता है, और एक token जोड़ने या रद्द करने में एक बदलाव और एक
+  reload लगता है।
+- **provider की keys `nginx.conf` के भीतर आ बैठती हैं।** हर एक के लिए एक `location` और एक
+  `proxy_set_header Authorization "Bearer sk-..."`, और upstream TLS बोलता हो तो साथ में
+  `proxy_ssl_server_name on`। यहाँ यह एक command है, और key `0600` फ़ाइल में रहती है।
+- **`htpasswd` में न ids हैं, न rotation।** `lmrelay token gen --label laptop`,
+  `token list` और `token delete 1` में हैं।
+- **nginx के defaults streaming तोड़ देते हैं।** `proxy_buffering` चालू है और
+  `proxy_read_timeout` 60s, जबकि बड़ा लोकल model अपना पहला token देने से पहले एक मिनट से ज़्यादा
+  सोच सकता है। दोनों को ढूँढकर बंद करना पड़ता है, और आमतौर पर तब, जब कोई जवाब बीच से कट चुका
+  होता है।
+- **ग़लत dialect वाले path पर nginx से होकर provider का अपना 404 आता है।** जिन रूपों को relay
+  पहचानता है — जैसे OpenAI upstream को भेजा गया Anthropic path — उनके लिए वह अपने शब्दों में 400
+  लौटाता है, ताकि वह ग़लती provider की कही बात न समझी जाए।
+- **nginx न macOS के साथ आता है, न Windows के साथ।** `pip install` दोनों पर एक जैसा चलता है।
+
+nginx जहाँ जीतता है: TLS, असली rate limiting, और पहले से इंस्टॉल होना। lmrelay के पास इन तीनों
+में से एक भी नहीं है, और होगा भी नहीं। ये दोनों मुक़ाबला नहीं करते, साथ बैठते हैं — TLS के लिए
+आगे nginx, tokens और providers यहाँ।
+
 ### लाइसेंस
 
 MIT License. देखें [LICENSE](../LICENSE)।

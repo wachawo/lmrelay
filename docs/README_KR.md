@@ -228,6 +228,37 @@ pytest
 마지막 줄을 쓰기 전에 호출자가 첫 줄을 받는다는 것 — 은 인프로세스 클라이언트로는 볼 수 없기
 때문입니다.
 
+### 왜 nginx가 아닌가?
+
+nginx는 이미 리버스 프록시를 합니다. 그러니 데몬은 자기 자리를 따로 증명해야 합니다. 항목별로 짧게:
+
+- **Authorization 헤더는 이미 주인이 있고, 결론은 그 한 가지로 납니다.** 클라이언트는 모두
+  `Authorization: Bearer <key>`(OpenAI SDK, 위의 curl 예시)나 `x-api-key`(Anthropic SDK)를 보냅니다.
+  그런데 nginx의 `auth_basic`은 바로 그 헤더가 `Basic <base64>`를 실어 나르기를 요구하고, 나머지는
+  모두 거절합니다. 헤더는 하나인데 주인은 둘입니다. URL에 넣은 자격 증명은 실제로 통과하지만,
+  httpx가 그것을 같은 헤더에 써 넣습니다. 그래서 OpenAI SDK 호출자는 `Basic`으로 도착하고,
+  보내려던 bearer는 대체되어 사라집니다.
+- **nginx에서 토큰을 검사하면 토큰이 `nginx.conf`에 들어갑니다.** `map`과 `internal` location이면
+  백엔드 없이도 판단할 수 있지만, 그러면 토큰 하나하나가 root 소유 `0644` 파일의 평문 한 줄이 되고,
+  하나를 추가하거나 폐기하려면 편집과 reload가 필요합니다.
+- **제공자 키가 `nginx.conf` 안에 들어앉습니다.** 제공자마다 `location` 하나와
+  `proxy_set_header Authorization "Bearer sk-..."` 한 줄, 업스트림이 TLS를 쓰면
+  `proxy_ssl_server_name on`까지 필요합니다. 여기서는 명령 한 줄이면 되고, 키는 `0600`
+  파일에 있습니다.
+- **`htpasswd`에는 id도, 교체 수단도 없습니다.** `lmrelay token gen --label laptop`,
+  `token list`, `token delete 1`에는 있습니다.
+- **nginx의 기본값은 스트리밍을 깨뜨립니다.** `proxy_buffering`은 켜져 있고 `proxy_read_timeout`은
+  60초인데, 큰 로컬 모델은 첫 토큰을 내기까지 1분 넘게 생각할 수 있습니다. 둘 다 찾아서 꺼야 하고,
+  대개는 답이 반으로 잘린 뒤에야 그렇게 합니다.
+- **방언이 맞지 않는 경로는 nginx를 거치면 제공자의 404를 그대로 받습니다.** 릴레이가 알아보는
+  형태 — 이를테면 OpenAI 업스트림으로 보낸 Anthropic 경로 — 에 대해서는 릴레이가 자기 말로
+  400을 응답하므로, 그 실수가 제공자의 것으로 오해되지 않습니다.
+- **nginx는 macOS에도 Windows에도 딸려 오지 않습니다.** `pip install`은 둘 다에서 똑같이 됩니다.
+
+nginx가 이기는 곳은 TLS, 제대로 된 속도 제한, 그리고 이미 설치돼 있다는 점입니다. lmrelay에는 셋 다
+없고, 앞으로도 없을 것입니다. 둘은 경쟁하는 관계가 아니라 겹쳐 쓰는 관계입니다. TLS는 앞단의
+nginx가 맡고, 토큰과 제공자는 여기서 맡습니다.
+
 ### 라이선스
 
 MIT License. [LICENSE](../LICENSE)를 참고합니다.

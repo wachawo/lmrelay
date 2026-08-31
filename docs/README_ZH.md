@@ -223,6 +223,35 @@ pytest
 下，前面接一个每次只答一块的上游，因为它要验证的性质——调用方在上游写出最后一行之前
 就已拿到第一行——透过进程内客户端是看不见的。
 
+### 为什么不用 nginx？
+
+nginx 本来就会做反向代理，所以一个守护进程得先证明自己值得存在。简短地逐条说：
+
+- **Authorization 请求头已经有主了，决定性的正是这一点。** 每个客户端要么发
+  `Authorization: Bearer <key>`（OpenAI SDK，以及上面那些 curl 例子），要么发
+  `x-api-key`（Anthropic SDK）；而 nginx 的 `auth_basic` 要用同一个请求头去携带
+  `Basic <base64>`，其余一律拒绝。一个请求头，两个主人。把凭据放进 URL 确实能过去，但
+  httpx 会把它写进同一个请求头：用 OpenAI SDK 的调用方于是以 `Basic` 抵达，本来要发的
+  bearer 已经被顶掉了。
+- **在 nginx 里校验令牌，就等于把令牌放进 `nginx.conf`。** 一个 `map` 加一个 `internal`
+  location 不需要后端就能判断，但这样每个令牌都是 root 所有的 `0644` 文件里的一行明文，
+  增加或吊销一个都要改配置再 reload。
+- **服务商的密钥会落进 `nginx.conf` 里。** 每个服务商一个 `location`，加一条
+  `proxy_set_header Authorization "Bearer sk-..."`，上游走 TLS 时还得再加
+  `proxy_ssl_server_name on`。在这里则是一条命令，密钥待在一个 `0600` 的文件里。
+- **`htpasswd` 没有 id，也没有轮换。** `lmrelay token gen --label laptop`、
+  `token list` 和 `token delete 1` 都有。
+- **nginx 的默认值会弄坏流式输出。** `proxy_buffering` 是开着的，`proxy_read_timeout`
+  是 60 秒，而一个大的本地模型在吐出第一个 token 之前，可能要想上不止一分钟。这两项都得
+  先找出来再关掉，而通常是在一段回答已经被拦腰截断之后才想起来。
+- **方言不对的路径，经由 nginx 拿到的是服务商自己的 404。** 对于中继认得出的那些形态——
+  比如把 Anthropic 的路径发给 OpenAI 上游——它会用自己的话回 400，这样这个错就不会被
+  误读成服务商说的。
+- **nginx 既不随 macOS 附带，也不随 Windows 附带。** `pip install` 在两边都一样能用。
+
+nginx 胜出的地方：TLS、真正的限流，以及本来就已经装好了。这三样 lmrelay 一样都没有，
+也不打算有。两者是搭配而不是竞争——nginx 在前面负责 TLS，令牌和服务商在这里。
+
 ### 许可证
 
 MIT License。见 [LICENSE](../LICENSE)。

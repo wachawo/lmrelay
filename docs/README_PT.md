@@ -238,6 +238,41 @@ uvicorn na frente de um upstream que responde um chunk por vez, porque a proprie
 verifica — que quem chama já tem a primeira linha antes de o upstream ter escrito a última —
 não pode ser observada através de um cliente no mesmo processo.
 
+### Por que não nginx?
+
+O nginx já faz reverse proxy, então um daemon precisa merecer o seu lugar. Em resumo, ponto a
+ponto:
+
+- **O header Authorization já está ocupado, e é isso que decide a questão.** Todo cliente
+  envia `Authorization: Bearer <key>` (o SDK da OpenAI, os exemplos de curl acima) ou
+  `x-api-key` (o SDK da Anthropic); o `auth_basic` do nginx precisa desse mesmo header para
+  carregar `Basic <base64>`, e recusa todo o resto. Um header, dois donos. Credenciais na URL
+  até passam, mas o httpx as escreve nesse mesmo header: um chamador com o SDK da OpenAI
+  chega então como `Basic`, tendo substituído o bearer que pretendia enviar.
+- **Checar um token no nginx coloca os tokens dentro do `nginx.conf`.** Um `map` e um
+  location `internal` dão conta disso sem backend, mas cada token vira uma linha em texto
+  puro em um arquivo `0644` pertencente ao root, e adicionar ou revogar um custa uma edição e
+  um reload.
+- **As chaves dos provedores acabam dentro do `nginx.conf`.** Um `location` e um
+  `proxy_set_header Authorization "Bearer sk-..."` para cada uma, mais
+  `proxy_ssl_server_name on` quando o upstream fala TLS. Aqui é um comando só, e a chave fica
+  em um arquivo `0600`.
+- **`htpasswd` não tem ids nem rotação.** `lmrelay token gen --label laptop`,
+  `token list` e `token delete 1` têm.
+- **Os padrões do nginx quebram o streaming.** `proxy_buffering` vem ligado e
+  `proxy_read_timeout` é 60s, e um modelo local grande pode pensar por mais de um minuto
+  antes do primeiro token. Os dois precisam ser encontrados e desligados, normalmente depois
+  que uma resposta já foi cortada ao meio.
+- **Um caminho no dialeto errado recebe, através do nginx, o próprio 404 do provedor.** O
+  Para as formas que ele reconhece — um caminho da Anthropic enviado a um upstream da OpenAI,
+  digamos —, o relay responde 400 com as suas próprias palavras, então o engano não é lido
+  como sendo do provedor.
+- **O nginx não vem nem com o macOS nem com o Windows.** `pip install` funciona igual nos dois.
+
+Onde o nginx ganha: TLS, rate limiting de verdade, e já estar instalado. O lmrelay não tem
+nenhuma das três coisas, e não vai ter. Os dois se compõem em vez de competir — nginx na
+frente para o TLS, tokens e provedores aqui.
+
 ### Licença
 
 Licença MIT. Veja [LICENSE](../LICENSE).

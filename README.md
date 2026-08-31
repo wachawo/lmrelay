@@ -233,6 +233,37 @@ exception: it runs the relay under uvicorn in front of an upstream that answers 
 time, because the property it checks — that the caller has the first line before the
 upstream has written the last — cannot be seen through an in-process client.
 
+### Why not nginx?
+
+nginx already reverse-proxies, so a daemon has to earn its place. Briefly, point by point:
+
+- **The Authorization header is already taken, and that is what decides it.** Every client
+  sends `Authorization: Bearer <key>` (the OpenAI SDK, the curl examples above) or
+  `x-api-key` (the Anthropic SDK); nginx's `auth_basic` needs that same header to carry
+  `Basic <base64>`, and refuses everything else. One header, two owners. Credentials in the
+  URL do get past it, but httpx writes them into that same header: an OpenAI-SDK caller then
+  arrives as `Basic`, having replaced the bearer it meant to send.
+- **Checking a token in nginx puts the tokens in `nginx.conf`.** A `map` and an `internal`
+  location do it without a backend, but each token is then a plaintext line in a root-owned
+  `0644` file, and adding or revoking one takes an edit and a reload.
+- **Provider keys end up inside `nginx.conf`.** A `location` and a
+  `proxy_set_header Authorization "Bearer sk-..."` for each one, plus
+  `proxy_ssl_server_name on` when the upstream speaks TLS. Here it is one command, and the
+  key lives in a `0600` file.
+- **`htpasswd` has no ids or rotation.** `lmrelay token gen --label laptop`, `token list`
+  and `token delete 1` do.
+- **nginx's defaults break streaming.** `proxy_buffering` is on and `proxy_read_timeout` is
+  60s, and a large local model can think for longer than a minute before its first token.
+  Both have to be found and turned off, usually after an answer has been cut in half.
+- **A wrong-dialect path gets the provider's own 404 through nginx.** For the shapes it
+  recognises — an Anthropic path sent to an OpenAI upstream, say — the relay answers 400 in
+  its own words, so the mistake is not misread as the provider's.
+- **nginx ships with neither macOS nor Windows.** `pip install` works the same on both.
+
+Where nginx wins: TLS, real rate limiting, and already being installed. lmrelay has none of
+the three, and is not going to. The two compose rather than compete — nginx in front for
+TLS, tokens and providers here.
+
 ### License
 
 MIT License. See [LICENSE](LICENSE).
