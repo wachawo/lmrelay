@@ -45,6 +45,6 @@ logs/
 !CONTRIBUTING.md
 !docs/**/*.md
 
-# Local config — holds the caller token and provider API keys.
+# Local config: holds the caller token and provider API keys.
 # The shipped example lives inside the package and is not matched by this.
 lmrelay.toml

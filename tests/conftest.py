@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Shared fixtures: a config and its state on disk, and the app wired to a recording upstream."""
 
+import os
 import threading
 from pathlib import Path
 
@@ -11,8 +12,8 @@ import pytest
 from starlette.testclient import TestClient
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR, TOKEN_ENV_VAR
-from lmrelay.state import STATE_ENV_VAR, STATE_NAME, CallerToken, RelayState, save_state
+from lmrelay.config import CONFIG_ENV_VAR, ENV_PREFIX, TOKEN_ENV_VAR
+from lmrelay.state import STATE_NAME, CallerToken, RelayState, save_state
 
 TOKEN = "caller-token-value"
 CREATED_AT = "2026-01-01T00:00:00Z"
@@ -52,8 +53,15 @@ def isolated_home(tmp_path, monkeypatch):
     A machine that has ever run `lmrelay token gen` would otherwise hand a test
     real tokens and a real auth switch through $LMRELAY_STATE, and anything that
     resolves `~` at call time, `lmrelay init` above all, would write there.
+
+    Every LMRELAY_ name goes, not just that one: the environment is now a
+    config source of its own, so a developer who exports LMRELAY_LIMITS_TOTAL_RATE
+    or LMRELAY_AUTH_ENABLED in their own shell would otherwise be running a
+    different suite from CI, and the difference would show up as a limit test
+    failing for a reason nothing in the file explains.
     """
-    monkeypatch.delenv(STATE_ENV_VAR, raising=False)
+    for name in [name for name in os.environ if name.startswith(ENV_PREFIX)]:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
 
 

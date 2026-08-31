@@ -25,11 +25,15 @@ from lmrelay.daemon import pid_file, read_pid, recorded_bind, remove_pid, write_
 from lmrelay.errors import LmrelayError
 from lmrelay.logging_setup import setup_logging
 from lmrelay.ratelimit import (
+    SCOPES,
     InflightCounter,
+    Refusal,
+    ScopeLimits,
+    admit,
     build_limiter,
-    effective_burst,
-    limiter_key,
-    release_once,
+    build_limiters,
+    describe_rate,
+    scope_keys,
 )
 from lmrelay.upstream import (
     build_upstream_request,
@@ -51,37 +55,52 @@ HEALTH_METHODS = frozenset({"GET"})
 RELAY_METHODS  = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
-def describe_rate(config) -> str:
-    """The limit as the limiter will enforce it, for a log line or a refusal.
+# What a caller is told, per scope and per measure. "429" on its own leaves an
+# operator guessing which of six numbers to raise, so each one names the scope
+# and quotes the limit as the relay is enforcing it rather than as the file
+# spells it.
+RATE_REFUSALS = {
+    "per_token":   "lmrelay: rate limit exceeded for your token: {limit} ([limits.per_token])",
+    "per_address": "lmrelay: rate limit exceeded for your address: {limit} ([limits.per_address])",
+    "total":       "lmrelay: the relay's rate limit is exceeded: {limit} ([limits.total])",
+}
 
-    The burst is the effective one, not the configured one. They differ at the
-    default: `rate_burst = 0` is read as 1, and quoting the configured number
-    told a caller "burst 0" while the limiter was allowing one request through,
-    which reads as a relay that refuses everything.
-    """
-    if config.rate_limit <= 0:
-        return "off"
-    return f"{config.rate_limit:g}/s burst {effective_burst(config.rate_burst):g}"
+# The last one says "one of them", not "one of yours": at the total scope the
+# request that has to end may be anybody's, and telling a caller to wait for
+# something of their own that does not exist is a refusal they cannot act on.
+SLOT_REFUSALS = {
+    "per_token":   "lmrelay: your token already has {count} requests in flight "
+                   "([limits.per_token]); one of yours must finish first",
+    "per_address": "lmrelay: your address already has {count} requests in flight "
+                   "([limits.per_address]); one of yours must finish first",
+    "total":       "lmrelay: the relay is already carrying {count} requests "
+                   "([limits.total]); one of them must finish first",
+}
 
 
-def describe_concurrency(config) -> str:
-    """The cap as an operator wrote it, for a log line."""
-    if config.max_concurrent <= 0:
-        return "off"
-    return f"{config.max_concurrent} in flight"
+def refusal_message(refusal: Refusal, limits: ScopeLimits) -> str:
+    """What the caller is told: which scope refused, and the number it enforced."""
+    if refusal.kind == "rate":
+        return RATE_REFUSALS[refusal.scope].format(limit=describe_rate(limits))
+    return SLOT_REFUSALS[refusal.scope].format(count=limits.concurrent)
 
 
-def caller_key(request: Request, config) -> str:
-    """Who this request counts against, for the rate limit and the cap alike.
+def describe_slots(limits: ScopeLimits) -> str:
+    """One scope's cap as a log line names it."""
+    return f"{limits.concurrent} at once" if limits.concurrent > 0 else "off"
 
-    Both read it through the same function so that the two keys cannot drift
-    apart: an operator who has learnt what `rate_limit` counts has learnt what
-    `max_concurrent` counts. Read after authentication in both places, so a
-    guessed credential is never the key.
+
+def caller_scopes(request: Request, config) -> dict[str, str | None]:
+    """What each scope counts this request against.
+
+    Read after authentication, so a guessed credential is never the key: a
+    forged token must not spend the allowance of the caller being guessed at.
+    With auth off nothing is keyed by a token, and the address scope is doing
+    the whole job.
     """
     client = request.client.host if request.client else "-"
     presented = extract_caller_token(request.headers) if config.auth_enabled else None
-    return limiter_key(presented, client)
+    return scope_keys(presented, client)
 
 
 def reload_config(app: FastAPI) -> None:
@@ -141,26 +160,31 @@ def reload_config(app: FastAPI) -> None:
     # The httpx client is deliberately left alone: closing it would abort every
     # stream currently being relayed, and nothing a reload changes lives in it:
     # upstream URLs and headers are read from the config on every request.
-    if (config.rate_limit, config.rate_burst) != (current.rate_limit, current.rate_burst):
-        # Rebuilt only when the numbers move: a new limiter starts every caller
-        # full, so doing this on an unrelated reload would clear the allowance
-        # of whoever was being limited at that moment.
-        app.state.limiter = build_limiter(config.rate_limit, config.rate_burst)
-        logger.info(
-            f"lmrelay: rate limit {describe_rate(current)} -> {describe_rate(config)}"
-        )
-
-    if config.max_concurrent != current.max_concurrent:
-        # Nothing is rebuilt here, unlike the limiter above: the counter is
-        # asked for the limit at every acquire, so replacing app.state.config
-        # below is the whole of applying it. A fresh counter would forget the
-        # slots held by every answer still streaming, and each of them would
-        # release one that had never been taken.
-        logger.info(
-            f"lmrelay: concurrency {describe_concurrency(current)} -> "
-            f"{describe_concurrency(config)} (from the next request; answers in flight "
-            f"keep the slot they hold)"
-        )
+    # Scope by scope, so that changing one leaves the other two untouched: they
+    # hold separate tables and a caller being limited by one of them has no
+    # business getting its allowance back because a different number moved.
+    for scope in SCOPES:
+        before, after = current.limits[scope], config.limits[scope]
+        if (before.rate, before.burst) != (after.rate, after.burst):
+            # Rebuilt only when the numbers move: a new limiter starts every
+            # caller full, so doing this on an unrelated reload would clear the
+            # allowance of whoever was being limited at that moment.
+            app.state.limiters[scope] = build_limiter(after.rate, after.burst)
+            logger.info(
+                f"lmrelay: [limits.{scope}] rate {describe_rate(before)} -> "
+                f"{describe_rate(after)}"
+            )
+        if before.concurrent != after.concurrent:
+            # Nothing is rebuilt here, unlike the limiter above: the counter is
+            # asked for the limit at every acquire, so replacing app.state.config
+            # below is the whole of applying it. A fresh counter would forget the
+            # slots held by every answer still streaming, and each of them would
+            # release one that had never been taken.
+            logger.info(
+                f"lmrelay: [limits.{scope}] concurrent {describe_slots(before)} -> "
+                f"{describe_slots(after)} (from the next request; answers in flight "
+                f"keep the slot they hold)"
+            )
 
     app.state.config = config
     logger.info(
@@ -203,11 +227,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # before its first token, and a read timeout would kill it in a way that
     # looks like a model fault. Failing fast on an unreachable host is the
     # useful half, so the connect timeout stays short.
-    app.state.limiter = build_limiter(config.rate_limit, config.rate_burst)
-    # Always built, even with the cap off, so that no reload has to replace it
-    # and no request has to ask whether it exists. An empty table costs nothing:
-    # with max_concurrent = 0 every acquire is allowed, and the release at the
-    # end of each answer takes the entry out again.
+    # One limiter per scope, None where that scope's rate is off, so a reload
+    # can rebuild one without touching the other two.
+    app.state.limiters = build_limiters(config.limits)
+    # One counter for all three scopes, whose keys are prefixed apart. Always
+    # built, even with every cap off, so that no reload has to replace it and no
+    # request has to ask whether it exists. An empty table costs nothing: with
+    # `concurrent = 0` no slot is taken at all.
     app.state.inflight = InflightCounter({})
     app.state.http = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=config.connect_timeout, read=None, write=None, pool=None),
@@ -251,37 +277,25 @@ async def log_and_authenticate(request: Request, call_next):
         logger.warning(f"{client} {request.method} {request.url.path} -> -: 401 (auth)")
         return JSONResponse({"error": "lmrelay: missing or invalid credential"}, status_code=401)
 
-    limiter = request.app.state.limiter
-    if limiter is not None:
-        # After auth on purpose: a guessed credential must not spend the
-        # allowance of the caller whose token was being guessed at. Keyed on
-        # the token only when auth is on, since otherwise it proves nothing.
-        now = time.monotonic()
-        wait = limiter.take(caller_key(request, config), now)
-        limiter.sweep(now)
-        if wait > 0:
-            logger.warning(
-                f"{client} {request.method} {request.url.path} -> -: 429 (rate limit)"
-            )
-            return JSONResponse(
-                {"error": f"lmrelay: rate limit of {describe_rate(config)} exceeded"},
-                status_code=429,
-                # Whole seconds, rounded up: the header takes no fractions, and
-                # rounding down would invite a retry that is refused again.
-                headers={"Retry-After": str(max(1, ceil(wait)))},
-            )
-
+    # The limits are not charged here. They are one decision made once, in the
+    # relay route, so that a request refused by one scope has not been charged
+    # to another on its way past. Three things follow, all improvements: every
+    # refusal names its upstream, nothing that was not forwarded is charged at
+    # all, and /healthz is exempt by being a different route rather than by a
+    # path check. The cost, stated so it is a choice: a client looping against a
+    # wrong-dialect path is no longer rate limited. It costs microseconds per
+    # 400 and cannot touch a model, and fail2ban is the answer if it matters.
     start_time = time.monotonic()
     response: Response = await call_next(request)
     # For a streamed response the handler returns once the upstream headers
     # arrive, so this is time to first byte, not the duration of the answer.
     ttfb = time.monotonic() - start_time
     upstream_name = getattr(request.state, "upstream", "-")
-    # A route that refused leaves the name of the limit it refused on: two of
-    # them answer 429 and only one carries a Retry-After, so the line has to say
-    # which. It stands in place of the elapsed time, which for a request that
-    # was never forwarded would only be the cost of refusing it, and it keeps
-    # the refusal to one line, at the level the other refusals are logged at.
+    # A route that refused leaves the measure and the scope it refused on: six
+    # limits answer 429 and only three of them carry a Retry-After, so the line
+    # has to say which. It stands in place of the elapsed time, which for a
+    # request that was never forwarded would only be the cost of refusing it,
+    # and it keeps the refusal to one line, at the level the others use.
     refused = getattr(request.state, "refused", "")
     line = (
         f"{client} {request.method} {request.url.path} -> {upstream_name}: "
@@ -338,45 +352,57 @@ async def relay_request(request: Request) -> Response:
     upstream, forward_path = select_upstream(request.url.path, config)
     request.state.upstream = upstream.name
 
-    refusal = check_dialect(upstream, forward_path)
-    if refusal:
+    wrong_dialect = check_dialect(upstream, forward_path)
+    if wrong_dialect:
         # 400 rather than 404: a 404 would be indistinguishable from the
         # upstream's own, which is exactly the confusion being prevented.
-        return JSONResponse({"error": refusal}, status_code=400)
+        # Refused before admission, so it is charged to nothing at all.
+        return JSONResponse({"error": wrong_dialect}, status_code=400)
 
     http = request.app.state.http
     upstream_request = build_upstream_request(http, request, upstream, forward_path)
 
-    # Taken here, with nothing between it and the send below that can raise:
+    # Decided here, with nothing between it and the send below that can raise:
     # after the refusals that cost no upstream call, and after the request has
-    # been built, so that the slot is held for exactly as long as the relay is
+    # been built, so that a slot is held for exactly as long as the relay is
     # occupying the upstream with it.
-    inflight = request.app.state.inflight
-    key = caller_key(request, config)
-    if not inflight.acquire(key, config.max_concurrent):
-        # 429 rather than 503: nothing is wrong with the relay or with the
-        # upstream, and this same request from another caller would be served.
-        # A 503 would say the service is unavailable, which is both untrue and
-        # the status many clients retry hardest against.
+    #
+    # `release` covers every slot this admission took, in every scope, and is
+    # idempotent because the ways out below are meant not to overlap and a
+    # leaked slot is unrecoverable: it would lock that scope out for the life of
+    # the process. A refusal returns a release that does nothing, so no path has
+    # to ask whether it holds anything.
+    refusal, release = admit(
+        request.app.state.limiters,
+        config.limits,
+        request.app.state.inflight,
+        caller_scopes(request, config),
+        time.monotonic(),
+    )
+    if refusal is not None:
+        # 429 for all six, rather than 503: nothing is wrong with the relay or
+        # with the upstream, and this same request from another caller would be
+        # served at that instant. A 503 would say the service is unavailable,
+        # which is both untrue and the status many clients retry hardest
+        # against.
         #
-        # And no Retry-After, unlike the rate limiter's 429, which computes an
-        # honest one: a slot here frees when a model finishes answering someone
-        # else, and with no read timeout that can be minutes away. The relay
-        # does not know the number, so it does not name one.
-        message = (
-            f"lmrelay: too many simultaneous requests "
-            f"(limit {config.max_concurrent}); one of yours must finish first"
-        )
         # Named rather than logged here: the middleware writes one access line
         # per request, and a second line from this route would say the same
-        # thing again. It logs this one as a refusal, and names the limit.
-        request.state.refused = "concurrency"
-        return JSONResponse({"error": message}, status_code=429)
-
-    # Held from here until the answer ends. Idempotent because the ways out
-    # below are meant not to overlap and a leaked slot is unrecoverable: it
-    # would lock that caller out for the life of the process.
-    release = release_once(inflight, key)
+        # thing again. It logs this one as a refusal, and names the scope.
+        request.state.refused = f"{refusal.kind}, {refusal.scope}"
+        headers = None
+        if refusal.kind == "rate":
+            # Whole seconds, rounded up: the header takes no fractions, and
+            # rounding down would invite a retry that is refused again. A slot
+            # refusal carries none: a slot frees when a model finishes answering
+            # somebody else, and with no read timeout the relay cannot know when
+            # that is, so a guessed number would be a lie.
+            headers = {"Retry-After": str(max(1, ceil(refusal.wait)))}
+        return JSONResponse(
+            {"error": refusal_message(refusal, config.limits[refusal.scope])},
+            status_code=429,
+            headers=headers,
+        )
 
     try:
         # stream=True returns as soon as the headers arrive and leaves the body

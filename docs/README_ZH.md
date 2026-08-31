@@ -107,6 +107,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
+limits       total 6 at once
 autostart    systemd: enabled, active
 ```
 
@@ -136,13 +137,22 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 | `lmrelay provider add NAME TOKEN` | 添加或轮换一个上游 |
 | `lmrelay provider list [--show]` | 全部上游，来自配置文件和 state |
 | `lmrelay provider delete NAME` | 删除由 state 拥有的服务商 |
+| `lmrelay config export PATH` | 写出在别处重建这个中继所需的一切 |
+| `lmrelay config import PATH` | 用一个打包文件替换配置和 state |
 
 `run`、`serve` 和 `restart` 接受 `--host` 和 `--port`。`provider add` 接受
 `--base-url`、`--dialect` 以及可重复的 `--header K=V`；如果名称是已知的那几个（
 `openai`、`anthropic`、`deepseek`、`grok`、`ollama`），base URL、方言和请求头形态都来自
-预设，所以 `lmrelay provider add openai sk-...` 就是完整的命令。凡是读取配置或 state
+预设，所以 `lmrelay provider add openai sk-...` 就是完整的命令。`config export` 接受
+`--no-secrets`，两个 `config` 子命令都接受 `--force` 以覆盖已经存在的文件；两者都接受用 `-`
+代替路径，以便走终端。
+凡是读取配置或 state
 的命令都接受 `--config PATH`，也就是除 `init` 和 `disable` 以外的全部命令；`init` 始终写入
 `~/.lmrelay/lmrelay.toml`，而 `disable` 两者都不读。
+
+配置文件里的每个键还有一种环境变量写法：`LMRELAY_` 加上到该键的路径，也就是
+`[limits.total] concurrent` 写作 `LMRELAY_LIMITS_TOTAL_CONCURRENT`。环境变量优先于文件，
+而这样设置上游的容器根本不需要配置文件。
 
 ### 选择上游
 
@@ -249,10 +259,10 @@ nginx 本来就能做反向代理，所以一个守护进程得证明自己值�
   服务商文档里的每个示例都得重写。
 
 nginx 胜出的地方：TLS、它已经装好了，以及在单个进程之外仍然成立的限流。前两样
-lmrelay 将来也不会有。但它确有[按调用方的限制](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits)，以调用方的 token 为键，
-而 nginx 不自己保管 token 就做不到这一点；只是这些计数只存在于这一个进程里，
-关掉鉴权后又退回到地址。两者是搭配关系，而不是竞争关系。把 nginx 放在前面做 TLS，
-token 和服务商留在这里。
+lmrelay 将来也不会有。但它确有[限制](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#limits)，分三个范围：按凭据、
+按地址，以及整个中继；第一种以调用方的 token 为键，而 nginx 不自己保管 token 就做不到
+这一点。这些计数只存在于这一个进程里。两者是搭配关系，而不是竞争关系。把 nginx 放在
+前面做 TLS，token、服务商和限制留在这里。
 ### 许可证
 
 MIT License。见 [LICENSE](../LICENSE)。

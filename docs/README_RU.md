@@ -114,6 +114,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
+limits       total 6 at once
 autostart    systemd: enabled, active
 ```
 
@@ -143,14 +144,23 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | добавить апстрим или сменить его токен |
 | `lmrelay provider list [--show]` | все апстримы, из файла и из состояния |
 | `lmrelay provider delete NAME` | удалить провайдера, которым владеет состояние |
+| `lmrelay config export PATH` | записать всё, что нужно, чтобы воспроизвести этот релей |
+| `lmrelay config import PATH` | заменить конфиг и состояние пакетом |
 
 `run`, `serve` и `restart` принимают `--host` и `--port`. `provider add` принимает
 `--base-url`, `--dialect` и повторяемый `--header K=V`; для известного имени (`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) базовый URL, диалект и форма заголовка берутся из
-пресета, так что `lmrelay provider add openai sk-...` это вся команда целиком. `--config PATH`
+пресета, так что `lmrelay provider add openai sk-...` это вся команда целиком. `config export`
+принимает `--no-secrets`, обе команды `config` принимают `--force`, чтобы записать поверх
+того, что уже есть; обе принимают `-` вместо пути, чтобы работать через терминал. `--config PATH`
 принимает каждая команда, которая читает конфиг или состояние, то есть все команды, кроме
 `init`, которая всегда пишет `~/.lmrelay/lmrelay.toml`, и `disable`, которая не читает ни
 того ни другого.
+
+У каждого ключа в конфиге есть ещё написание в виде переменной окружения: `LMRELAY_` плюс
+путь до ключа, то есть `[limits.total] concurrent` это `LMRELAY_LIMITS_TOTAL_CONCURRENT`.
+Окружение выигрывает у файла, а контейнеру, который задаёт так свои апстримы, файл конфига
+вообще не нужен.
 
 ### Выбор апстрима
 
@@ -267,10 +277,10 @@ nginx и так умеет reverse proxy, поэтому демон обязан
 
 В чём выигрывает nginx: TLS, то, что он уже установлен, и ограничение частоты, которое
 держится за пределами одного процесса. Первых двух у lmrelay не будет. А вот
-[ограничения на вызывающего](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits) у него есть, и они привязаны к токену вызывающего -
-этого nginx не умеет, не храня токены сам; но считаются они в одном этом процессе, а с
-выключенной авторизацией опираются на адрес. Они дополняют друг друга, а не соперничают.
-Поставьте nginx впереди ради TLS, а токены и провайдеров оставьте здесь.
+[ограничения](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#limits) у него есть, в трёх областях: на учётные данные, на адрес
+и на весь релей целиком; первая привязана к токену вызывающего, чего nginx не умеет, не храня
+токены сам. Считаются они в одном этом процессе. Они дополняют друг друга, а не соперничают.
+Поставьте nginx впереди ради TLS, а токены, провайдеров и ограничения оставьте здесь.
 ### Лицензия
 
 Лицензия MIT. См. [LICENSE](../LICENSE).

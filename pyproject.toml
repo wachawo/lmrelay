@@ -69,7 +69,7 @@ packages = ["lmrelay"]
 testpaths = ["tests"]
 # Import mode and rootdir together let the suite import `tests.conftest` for the
 # shared fixtures while `lmrelay` resolves to the source tree, not an installed
-# copy — so a test run cannot pass against a build made before the edit.
+# copy, so a test run cannot pass against a build made before the edit.
 addopts = "-q"
 
 [tool.ruff]
@@ -82,10 +82,10 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # discarded slots are named `unused...` instead of `_`.
 dummy-variable-rgx = "^(_[a-zA-Z0-9_]*|unused[a-zA-Z0-9_]*)$"
 ignore = [
-  "E501",   # line too long — the wide constant blocks read better aligned
-  "UP009",  # UTF-8 coding declaration — required by project style guide
-  "B904",   # raise from inside except — config errors deliberately hide the cause
-  "RUF010", # str(exc) over {exc!s} — the project's error-logging form is literal
+  "E501",   # line too long: the wide constant blocks read better aligned
+  "UP009",  # UTF-8 coding declaration: required by project style guide
+  "B904",   # raise from inside except: config errors deliberately hide the cause
+  "RUF010", # str(exc) over {exc!s}: the project's error-logging form is literal
 ]
 
 [tool.mypy]

@@ -15,6 +15,10 @@ class StateError(LmrelayError):
     """An unusable or conflicting state.json edit."""
 
 
+class BundleError(LmrelayError):
+    """A bundle that cannot be read, or a transfer that would overwrite something."""
+
+
 def main():
     pass
 

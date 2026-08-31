@@ -235,6 +235,28 @@ class TestProvidersAddedByName:
         state = add_provider(state, "openai", "sk-new")
         assert state.providers["openai"]["headers"]["Authorization"] == "Bearer sk-new"
 
+    def test_and_rotating_one_no_preset_knows_needs_no_second_base_url(self, tmp_path):
+        """An upstream the relay already carries is its own preset. Without
+        this, the operator could not act on the line `config import` prints
+        after a --no-secrets bundle: the bundle carried the custom endpoint, the
+        import wrote it into the state, and `provider add` still asked for a
+        --base-url that was already on disk. A custom endpoint is exactly the
+        upstream such a bundle is most likely to carry."""
+        state = add_provider(
+            fresh(tmp_path), "myllm", "tok",
+            base_url="https://llm.example.test", dialect="anthropic",
+        )
+        state = add_provider(state, "myllm", "sk-restored")
+        provider = state.providers["myllm"]
+        assert provider["base_url"] == "https://llm.example.test"
+        assert provider["dialect"] == "anthropic"
+
+    def test_while_a_name_nothing_has_ever_heard_of_is_still_refused(self, tmp_path):
+        """The fallback is the state's own record, not a way past the check."""
+        state = add_provider(fresh(tmp_path), "myllm", "tok", base_url="https://llm.example.test")
+        with pytest.raises(StateError, match="--base-url"):
+            add_provider(state, "nowhere", "tok")
+
 
 class TestProvidersSpelledOut:
     """The explicit form, validated by the same rules as the TOML."""

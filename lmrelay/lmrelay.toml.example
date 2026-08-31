@@ -5,7 +5,17 @@
 #
 # This file belongs to you. The CLI never rewrites it, so the comments below
 # survive every command. Caller tokens and CLI-added providers go to
-# state.json beside it, which is machine-owned.
+# state.json beside it, which is machine-owned. 'lmrelay config import'
+# is the one exception, and it backs this file up before replacing it.
+#
+# Every key here also has an environment spelling: LMRELAY_ plus the path to
+# the key, uppercased, joined by underscores. [server] port is
+# LMRELAY_SERVER_PORT; [limits.total] concurrent is
+# LMRELAY_LIMITS_TOTAL_CONCURRENT. No abbreviations and no table to look it up
+# in. The environment wins over this file, because the file is the shared
+# checked-in thing and the environment is the deployment. Every key it shadows
+# is named at startup and on every reload, so an edit here that changed nothing
+# says why in the log.
 #
 # ${VAR} in any header value is read from the process environment, so API
 # keys can stay out of this file.
@@ -21,25 +31,62 @@ connect_timeout  = 10            # seconds to reach the upstream; there is
                                  # deliberately no read timeout (see README)
 log_level        = "INFO"
 
-# Per-caller limits, all three off by default: a relay in front of one
-# operator's own Ollama has nobody to limit, and a limit nobody chose is a
-# refusal nobody expects. A caller is its token when auth is on and its address
-# otherwise, so two machines sharing a token share one allowance while an
-# address behind NAT is many callers wearing one number. The counts live in
-# memory in this one process, so a second relay beside this one counts its own
-# callers and a client reaching both has both allowances.
-rate_limit       = 0             # requests per second per caller, 0 off. A
-                                 # fraction is allowed, so 0.5 is one request
-                                 # every two seconds rather than a limit a
-                                 # whole number would have rounded to off
-rate_burst       = 0             # how many may arrive at once before the rate
-                                 # bites. Anything under 1 is read as 1, and
-                                 # the key does nothing while rate_limit is 0
-max_concurrent   = 0             # most simultaneous relayed requests one
-                                 # caller may hold, 0 off. A streamed answer
-                                 # holds its slot until its last byte, and
-                                 # there is no read timeout, so one slow
-                                 # generation can hold one for minutes
+# Limits. Three scopes, the same three keys in each, every one 0 (off) by
+# default: a relay in front of one operator's own Ollama has nobody to limit,
+# and a limit nobody chose is a refusal nobody expects.
+#
+# A request must pass every scope you set, and is charged to all of them or to
+# none of them, so a refusal costs nothing anywhere: being turned away by one
+# scope does not also drain the allowance of the others. They are not
+# alternatives; leave the ones you do not want at 0.
+#
+# If you set exactly one number, set [limits.total] concurrent. That is the one
+# that protects the machine; the other two apportion what it admits.
+#
+#   rate        requests per second, 0 off. A fraction is allowed, so 0.5 is
+#               one request every two seconds rather than a limit a whole
+#               number would have rounded to off
+#   burst       how many may arrive at once before the rate bites. Unset is one
+#               second's worth of rate, floored at 1, so `rate = 20` alone
+#               means twenty a second of which twenty may arrive together,
+#               which is what it reads as. Does nothing while rate is 0
+#   concurrent  how many requests may be in flight at once, 0 off. A streamed
+#               answer holds its slot until its last byte, and there is no read
+#               timeout, so one slow generation can hold one for minutes
+#
+# The counts live in memory in this one process, so a second relay beside this
+# one counts its own callers, and a client reaching both has both allowances.
+# That now includes [limits.total], which is worse, because total is the scope
+# protecting the upstream.
+
+# Per credential. Skipped entirely with auth off, since there is then no
+# credential to key on, and two machines sharing a token are one caller sharing
+# one allowance. Set this beside total for fairness: total on its own is first
+# come first served, and one client with fifty threads owns all of it.
+[limits.per_token]
+rate       = 0
+burst      = 0
+concurrent = 0
+
+# Per client address. The only scope that identifies anyone with auth off, and
+# only as trustworthy as whatever sets X-Forwarded-For in front of the relay.
+# An address behind NAT is many callers wearing one number, so this limits the
+# office rather than the offender.
+[limits.per_address]
+rate       = 0
+burst      = 0
+concurrent = 0
+
+# The relay as a whole, whoever is asking. This is the one that protects the
+# upstream: ten callers each inside their own limit still arrive together, and
+# a per-caller cap cannot see that. Sizing it above
+# OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS buys nothing, because past
+# that point Ollama queues internally and the queued request holds its relay
+# slot the whole time it is receiving nothing.
+[limits.total]
+rate       = 0
+burst      = 0
+concurrent = 0
 
 # Caller credentials are not configured here. They live in state.json and are
 # managed by the CLI:
@@ -49,10 +96,16 @@ max_concurrent   = 0             # most simultaneous relayed requests one
 #   lmrelay auth true | false   the switch; with auth off lmrelay is a plain
 #                               transparent proxy in front of Ollama
 #
+# The switch lives in state.json rather than here, and $LMRELAY_AUTH_ENABLED
+# overrides it, so a container can require a credential without running the
+# CLI. It takes true/false/1/0/yes/no/on/off and refuses anything else by
+# name, because a typo read as false is authentication turned off.
+#
 # A token written below is still accepted as one extra valid credential, which
 # is how a non-interactive install injects one without running the CLI.
-# $LMRELAY_TOKEN does the same. Neither turns checking on; only
-# 'lmrelay auth true' does.
+# $LMRELAY_AUTH_TOKEN is its environment spelling and $LMRELAY_TOKEN is the
+# older name for the same thing; both are accepted, and setting both just
+# makes both valid. None of them turns checking on.
 #
 # [auth]
 # token = "CHANGE-ME"
@@ -72,6 +125,15 @@ dialect  = "ollama"
 # ${VAR} is a startup error, and every one of them would be unset on a machine
 # that has just run 'lmrelay init'. Uncomment a block once its variable is
 # exported.
+#
+# From the environment an upstream is LMRELAY_UPSTREAM_<NAME>_BASE_URL and
+# _DIALECT, plus LMRELAY_UPSTREAM_<NAME>_KEY, which means exactly what
+# 'lmrelay provider add NAME KEY' means: the preset base URL, dialect and
+# header shape with the key substituted. Headers themselves have no
+# environment spelling, because a header name may contain a hyphen and an
+# environment variable name may not, and mapping - to _ would not survive the
+# trip back. A relay with no config file at all is legal once the environment
+# defines at least one upstream.
 
 # OpenAI. Wants a bearer token.
 # [upstream.openai]

@@ -14,11 +14,24 @@ import uvicorn
 
 # Local imports
 from lmrelay import __version__
+from lmrelay.bundle import (
+    STDIO_PATH,
+    build_bundle,
+    bundle_state,
+    count_secrets,
+    describe_source,
+    parse_bundle,
+    read_bundle,
+    render_config,
+    write_bundle,
+)
 from lmrelay.config import (
     CONFIG_ENV_VAR,
     DEFAULT_LOG_LEVEL,
     HOME_CONFIG_PATH,
+    TOKEN_ENV_VAR,
     ConfigError,
+    RelayConfig,
     check_exposure,
     find_config_path,
     load_config,
@@ -31,8 +44,9 @@ from lmrelay.daemon import (
     start_detached,
     stop_daemon,
 )
-from lmrelay.errors import LmrelayError
+from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.logging_setup import setup_logging
+from lmrelay.ratelimit import describe_limits
 from lmrelay.service import (
     LAUNCHD_PLIST_PATH,
     SYSTEMD_UNIT_NAME,
@@ -56,12 +70,14 @@ from lmrelay.state import (
     save_state,
     set_auth_enabled,
     state_path_for,
+    write_private,
 )
 
 logger = logging.getLogger(__name__)
 
 EXAMPLE_CONFIG_NAME = "lmrelay.toml.example"
 STATUS_LABEL_WIDTH  = 12
+BACKUP_SUFFIX       = ".bak"
 
 
 def apply_config_env(args: argparse.Namespace) -> None:
@@ -291,6 +307,9 @@ def show_status(args: argparse.Namespace) -> None:
         ("state", str(info["state_path"])),
         ("upstreams", f"{info['upstreams']} (default: {info['default_upstream']})"),
         ("auth", f"{'on' if info['auth_enabled'] else 'off'}, {tokens}"),
+        # What is actually enforced, which was otherwise visible only by
+        # exporting the whole configuration and reading the bundle.
+        ("limits", describe_limits(config.limits)),
         ("autostart", describe_autostart(autostart_status())),
     ]
     for label, value in rows:
@@ -453,6 +472,166 @@ def provider_delete(args: argparse.Namespace) -> None:
     reload_running_relay(config_path)
 
 
+def plural(count: int, noun: str) -> str:
+    """N nouns, with the s only when there is not exactly one of them."""
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def check_export_destination(destination: str, config: RelayConfig, force: bool) -> None:
+    """Refuse a destination an export would quietly ruin.
+
+    Two refusals rather than one, because the two ways to lose something here
+    are not the same size. The relay's own two files are refused outright: a
+    bundle written over state.json is still readable to load_state, which finds
+    no tokens and no providers in it and turns auth off without a word, and the
+    only copy of the credentials is then in a file the next `token gen`
+    overwrites. No flag makes that the thing anybody meant.
+
+    Anything else that exists is refused until it is asked for twice, which is
+    what `init` and `config import` already do with the files they write. Export
+    used to be the one verb in the set that overwrote in silence.
+    """
+    if destination == STDIO_PATH:
+        return
+    target = Path(destination).expanduser()
+    for path, what in ((config.config_path, "config"), (config.state_path, "state")):
+        if target.resolve() == path.resolve():
+            raise BundleError(
+                f"lmrelay: {target} is this relay's own {what} file, and a bundle is not "
+                f"one. Export to another path; nothing has been written."
+            )
+    if target.exists() and not force:
+        raise BundleError(
+            f"lmrelay: {target} is already there, and an export would overwrite it. "
+            f"Pass --force to replace it, or choose another path."
+        )
+
+
+def config_export(args: argparse.Namespace) -> None:
+    """Write everything needed to reproduce this relay somewhere else."""
+    apply_config_env(args)
+    config = load_config()
+    state = load_state(config.state_path)
+    check_export_destination(args.path, config, args.force)
+    keep_secrets = not args.no_secrets
+    # The effective configuration, not the two files: a bundle that reproduced
+    # the relay only on a machine with the same environment would fail at
+    # exactly the thing that is guaranteed to differ.
+    bundle = build_bundle(
+        config, state, keep_secrets=keep_secrets, environment_token=os.getenv(TOKEN_ENV_VAR)
+    )
+    write_bundle(bundle, args.path)
+
+    tokens, keyed = count_secrets(bundle)
+    where = "standard output" if args.path == STDIO_PATH else f"{args.path} (0600)"
+    logger.info(f"Wrote {where}.")
+    if keep_secrets:
+        # Said out loud because this is a file people attach to an issue.
+        logger.info(
+            f"It contains {plural(tokens, 'caller token')} and "
+            f"{plural(keyed, 'provider key')} in clear."
+        )
+    else:
+        logger.info(
+            "Token values and header values are masked, so it carries no secrets and the "
+            "relay it imports will need 'lmrelay token gen' and 'lmrelay provider add'."
+        )
+    logger.info("It carries settings, not comments: the notes in your lmrelay.toml stay here.")
+
+
+def backup_path(path: Path) -> Path:
+    """Where an import moves a file it is about to replace."""
+    return path.with_name(path.name + BACKUP_SUFFIX)
+
+
+def plan_replacement(paths: tuple[Path, ...], force: bool) -> list[tuple[Path, Path]]:
+    """Refuse to overwrite anything, or say where the existing files are going.
+
+    Symmetric with `lmrelay init`, which refuses to overwrite a config too. The
+    .bak check is what stops this losing anything: a backup silently replaced by
+    a second import is exactly the file the operator would reach for, and
+    accumulating timestamped copies instead would leave secrets lying around.
+    """
+    existing = [path for path in paths if path.exists()]
+    if not existing:
+        return []
+    names = " and ".join(str(path) for path in existing)
+    if not force:
+        verb = "are" if len(existing) > 1 else "is"
+        raise BundleError(
+            f"lmrelay: {names} {verb} already there, and an import replaces the whole "
+            f"configuration rather than merging into it. Pass --force to move it aside first."
+        )
+    moves = []
+    for path in existing:
+        target = backup_path(path)
+        if target.exists():
+            raise BundleError(
+                f"lmrelay: {target} is already there, and this import would overwrite it. "
+                f"Move or delete it first; nothing has been changed."
+            )
+        moves.append((path, target))
+    return moves
+
+
+def report_missing_secrets(missing: tuple[str, ...]) -> None:
+    """Say what a masked bundle did not carry, rather than importing a mask.
+
+    A masked value restored as a header is sent to the provider and refused,
+    and reads as a wrong key rather than as a bundle exported without one.
+    """
+    if not missing:
+        return
+    logger.warning(f"Secrets were masked in it, so nothing was restored for: {', '.join(missing)}.")
+    logger.warning("Run 'lmrelay token gen' and 'lmrelay provider add <name> <key>' to replace them.")
+
+
+def config_import(args: argparse.Namespace) -> None:
+    """Replace the config and the state with a bundle, backing up what was there."""
+    config_path = config_path_from(args)
+    state_path = state_path_for(config_path)
+    source = describe_source(args.path)
+
+    # Both halves are validated, and the backups are planned, before anything is
+    # touched, so a bundle this relay will not accept leaves the existing pair
+    # exactly as it was rather than configured by neither it nor the bundle.
+    # That covers everything this command decides. It does not cover the four
+    # filesystem operations below, which cannot be made one: if the disk fails
+    # between them, what the operator has is what the .bak names say they have,
+    # which is why the moves are announced one at a time as they happen.
+    bundle = parse_bundle(read_bundle(args.path), source)
+    moves = plan_replacement((config_path, state_path), args.force)
+
+    for existing, target in moves:
+        existing.rename(target)
+        logger.info(f"Moved {existing} to {target}.")
+
+    state = bundle_state(bundle, state_path)
+    write_private(config_path, render_config(bundle, source, state_path))
+    save_state(state)
+
+    logger.info(f"Imported {source}, written by {bundle.written_by} at {bundle.exported_at}.")
+    logger.info(
+        f"Wrote {config_path} and {state_path} (0600): "
+        f"{plural(len(state.providers), 'upstream')}, "
+        f"{plural(len(state.tokens), 'caller token')}, "
+        f"auth {'on' if state.auth_enabled else 'off'}."
+    )
+    report_missing_secrets(bundle.missing)
+    if state.auth_enabled and not state.tokens:
+        logger.warning(
+            "Auth is on and the bundle carried no usable token, so every request will now be "
+            "refused. Run 'lmrelay token gen', or 'lmrelay auth false'."
+        )
+    reload_running_relay(config_path)
+    # Said whether or not one is running, because the operator who imports on a
+    # stopped relay is the one who will start it next.
+    logger.info(
+        "host, port and connect_timeout are read at startup only; run 'lmrelay restart' if "
+        "the bundle moved any of them."
+    )
+
+
 def add_config_option(parser: argparse.ArgumentParser) -> None:
     """Attach --config, which every command that reads config or state accepts."""
     parser.add_argument("--config", default=None, help="path to lmrelay.toml")
@@ -520,6 +699,37 @@ def add_provider_commands(subparsers: argparse._SubParsersAction) -> None:
     delete_parser.set_defaults(handler=provider_delete)
 
 
+def add_config_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Attach `lmrelay config <verb>`."""
+    config_parser = subparsers.add_parser("config", help="move a whole configuration about")
+    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+
+    export_parser = config_subparsers.add_parser(
+        "export", help="write everything needed to reproduce this relay"
+    )
+    # An explicit '-' rather than a default, so a bundle full of keys never
+    # reaches a terminal because a path was left off.
+    export_parser.add_argument("path", help=f"file to write, or '{STDIO_PATH}' for stdout")
+    export_parser.add_argument(
+        "--no-secrets", action="store_true", help="mask token and header values"
+    )
+    export_parser.add_argument(
+        "--force", action="store_true", help="overwrite an existing file at that path"
+    )
+    add_config_option(export_parser)
+    export_parser.set_defaults(handler=config_export)
+
+    import_parser = config_subparsers.add_parser(
+        "import", help="replace the config and the state with a bundle"
+    )
+    import_parser.add_argument("path", help=f"bundle to read, or '{STDIO_PATH}' for stdin")
+    import_parser.add_argument(
+        "--force", action="store_true", help="replace an existing config, backing it up first"
+    )
+    add_config_option(import_parser)
+    import_parser.set_defaults(handler=config_import)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Assemble the whole command surface."""
     parser = argparse.ArgumentParser(
@@ -573,6 +783,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_token_commands(subparsers)
     add_provider_commands(subparsers)
+    add_config_commands(subparsers)
     return parser
 
 

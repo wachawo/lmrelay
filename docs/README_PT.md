@@ -114,6 +114,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
+limits       total 6 at once
 autostart    systemd: enabled, active
 ```
 
@@ -144,13 +145,22 @@ plano.
 | `lmrelay provider add NAME TOKEN` | adiciona ou rotaciona um upstream |
 | `lmrelay provider list [--show]` | todos os upstreams, do arquivo e do estado |
 | `lmrelay provider delete NAME` | remove um provedor que pertence ao estado |
+| `lmrelay config export PATH` | escreve tudo o que é preciso para reproduzir este relay |
+| `lmrelay config import PATH` | substitui a configuração e o estado por um pacote |
 
 `run`, `serve` e `restart` aceitam `--host` e `--port`. `provider add` aceita `--base-url`,
 `--dialect` e um `--header K=V` repetível; com um nome conhecido (`openai`, `anthropic`,
 `deepseek`, `grok`, `ollama`) a URL base, o dialeto e o formato do header vêm de um preset,
-então `lmrelay provider add openai sk-...` é o comando inteiro. `--config PATH` é aceito por
+então `lmrelay provider add openai sk-...` é o comando inteiro. `config export` aceita
+`--no-secrets`, ambos os verbos `config` aceitam `--force` para escrever sobre o que já está
+lá, e ambos aceitam `-` no lugar de um caminho para usar o terminal. `--config PATH` é aceito por
 todo comando que lê a configuração ou o estado, ou seja, todos menos `init`, que sempre
 escreve `~/.lmrelay/lmrelay.toml`, e `disable`, que não lê nenhum dos dois.
+
+Cada chave do arquivo de configuração tem também uma forma de variável de ambiente,
+`LMRELAY_` mais o caminho até a chave: `[limits.total] concurrent` é
+`LMRELAY_LIMITS_TOTAL_CONCURRENT`. O ambiente ganha do arquivo, e um contêiner que define
+assim os seus upstreams não precisa de arquivo de configuração nenhum.
 
 ### Escolhendo um upstream
 
@@ -268,10 +278,10 @@ ponto:
 
 Onde o nginx ganha: TLS, já estar instalado, e um limite de taxa que se sustenta fora de um
 único processo. Os dois primeiros não vêm. O lmrelay tem, sim,
-[limites por chamador](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits), presos ao token de quem chama, o que o nginx não consegue
-fazer sem guardar os tokens ele mesmo; mas são contados neste único processo e, com a
-autenticação desligada, recaem sobre o endereço. Os dois se compõem em vez de competir. Ponha
-o nginx na frente para TLS, e deixe os tokens e os provedores aqui.
+[limites](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#limits) em três escopos: por credencial, por endereço e para o relay
+inteiro; o primeiro fica preso ao token de quem chama, o que o nginx não consegue fazer sem
+guardar os tokens ele mesmo. São contados neste único processo. Os dois se compõem em vez de
+competir. Ponha o nginx na frente para TLS, e deixe aqui os tokens, os provedores e os limites.
 ### Licença
 
 Licença MIT. Veja [LICENSE](../LICENSE).

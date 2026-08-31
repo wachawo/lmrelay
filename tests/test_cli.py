@@ -53,6 +53,13 @@ DOCUMENTED = [
     ["provider", "list"],
     ["provider", "list", "--show"],
     ["provider", "delete", "openai"],
+    ["config", "export", "relay.json"],
+    ["config", "export", "relay.json", "--no-secrets"],
+    ["config", "export", "relay.json", "--force"],
+    ["config", "export", "-"],
+    ["config", "import", "relay.json"],
+    ["config", "import", "relay.json", "--force"],
+    ["config", "import", "-"],
 ]
 
 # The ones that touch the config or the state, and so have to accept --config.
@@ -61,6 +68,7 @@ CONFIGURABLE = [
     ["auth", "true"], ["token", "gen"], ["token", "add", "lmr_pasted"], ["token", "list"],
     ["token", "delete", "3"], ["provider", "add", "openai", "sk-test"], ["provider", "list"],
     ["provider", "delete", "openai"],
+    ["config", "export", "relay.json"], ["config", "import", "relay.json"],
 ]
 
 
@@ -310,6 +318,25 @@ class TestReporting:
     def test_the_status_of_a_stopped_relay_is_not_a_failure(self, config_path):
         """Exit code 0 either way: `status` reports, it does not assert."""
         run_command(["status", "--config", str(config_path)])
+
+    def test_it_says_which_limits_are_in_force(self, config_path, capsys):
+        """Nothing showed an operator the limits at all: not `status`, not the
+        startup log. The only way to read the numbers in effect was to export
+        the whole configuration and read the bundle."""
+        config_path.write_text(
+            CONFIG_BODY + "\n[limits.per_address]\nrate = 2\nconcurrent = 4\n"
+            "\n[limits.total]\nconcurrent = 6\n",
+            encoding="utf-8",
+        )
+        run_command(["status", "--config", str(config_path)])
+        printed = capsys.readouterr()
+        assert "per_address 2/s burst 2, 4 at once; total 6 at once" in printed.err
+
+    def test_and_says_off_once_when_none_is(self, config_path, capsys):
+        """One line answering the question that was asked, rather than three
+        saying off about scopes nobody set."""
+        run_command(["status", "--config", str(config_path)])
+        assert "limits       off" in capsys.readouterr().err
 
     def test_listing_an_empty_token_set_is_not_a_failure(self, config_path):
         run_command(["token", "list", "--config", str(config_path)])

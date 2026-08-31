@@ -114,6 +114,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
+limits       total 6 at once
 autostart    systemd: enabled, active
 ```
 
@@ -143,13 +144,21 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | upstream जोड़ती है या rotate करती है |
 | `lmrelay provider list [--show]` | हर upstream, file से और state से |
 | `lmrelay provider delete NAME` | state के अधिकार वाला provider हटाती है |
+| `lmrelay config export PATH` | इस relay को कहीं और दोबारा खड़ा करने भर सब कुछ लिखती है |
+| `lmrelay config import PATH` | config और state को एक bundle से बदल देती है |
 
 `run`, `serve` और `restart` `--host` और `--port` लेती हैं। `provider add` `--base-url`,
 `--dialect` और दोहराया जा सकने वाला `--header K=V` लेती है; जाने-पहचाने नाम के साथ (`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) base URL, dialect और header का ढाँचा preset से आता
-है, इसलिए पूरी command बस `lmrelay provider add openai sk-...` है। `--config PATH` उन सभी
+है, इसलिए पूरी command बस `lmrelay provider add openai sk-...` है। `config export`
+`--no-secrets` लेती है, और `config` की दोनों commands पहले से मौजूद फ़ाइल पर लिखने के लिए
+`--force` लेती हैं; दोनों में path की जगह `-` देने पर terminal इस्तेमाल होता है। `--config PATH` उन सभी
 commands में चलता है जो config या state पढ़ती हैं, यानी `init` और `disable` को छोड़कर हर command
 में। `init` हमेशा `~/.lmrelay/lmrelay.toml` ही लिखती है, और `disable` इनमें से कुछ नहीं पढ़ती।
+
+config फ़ाइल की हर key का एक environment वाला रूप भी है: `LMRELAY_` के बाद उस key तक का रास्ता,
+यानी `[limits.total] concurrent` का मतलब `LMRELAY_LIMITS_TOTAL_CONCURRENT`। environment फ़ाइल पर
+भारी पड़ता है, और जो container अपने upstreams ऐसे तय करता है उसे config फ़ाइल चाहिए ही नहीं।
 
 ### upstream चुनना
 
@@ -264,10 +273,10 @@ nginx पहले से ही reverse proxy करता है, इसलि
 
 जहाँ nginx जीतता है: TLS, पहले से इंस्टॉल होना, और ऐसा rate limiting जो एक प्रोसेस के बाहर भी
 टिकता है। पहले दो lmrelay के पास कभी नहीं होंगे। लेकिन
-[प्रति-कॉलर सीमाएँ](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits) इसके पास हैं, जो कॉलर के token पर टिकी हैं - यह nginx खुद tokens
-रखे बिना नहीं कर सकता; फिर भी ये इसी एक प्रोसेस में गिनी जाती हैं, और auth बंद होने पर पते पर
-लौट आती हैं। दोनों प्रतिस्पर्धा नहीं, मेल करते हैं। TLS के लिए nginx आगे रखिए, और tokens तथा
-providers यहाँ रहने दीजिए।
+[सीमाएँ](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#limits) इसके पास हैं, तीन दायरों में: प्रति credential, प्रति पता, और
+पूरे relay के लिए; पहली कॉलर के token पर टिकी है - यह nginx खुद tokens रखे बिना नहीं कर सकता।
+ये इसी एक प्रोसेस में गिनी जाती हैं। दोनों प्रतिस्पर्धा नहीं, मेल करते हैं। TLS के लिए nginx आगे
+रखिए, और tokens, providers तथा सीमाएँ यहाँ रहने दीजिए।
 ### लाइसेंस
 
 MIT License. देखें [LICENSE](../LICENSE)।

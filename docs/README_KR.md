@@ -109,6 +109,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
+limits       total 6 at once
 autostart    systemd: enabled, active
 ```
 
@@ -138,13 +139,22 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | 업스트림을 추가하거나 교체합니다 |
 | `lmrelay provider list [--show]` | 파일과 상태에 있는 모든 업스트림 |
 | `lmrelay provider delete NAME` | 상태가 소유한 제공자를 제거합니다 |
+| `lmrelay config export PATH` | 이 릴레이를 그대로 재현하는 데 필요한 것을 모두 씁니다 |
+| `lmrelay config import PATH` | 설정과 상태를 번들로 교체합니다 |
 
 `run`, `serve`, `restart`는 `--host`와 `--port`를 받습니다. `provider add`는 `--base-url`,
 `--dialect`, 그리고 여러 번 쓸 수 있는 `--header K=V`를 받습니다. 이름이 알려진 경우(`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) 기본 URL과 dialect, 헤더 형태를 프리셋에서 가져오므로
-`lmrelay provider add openai sk-...` 한 줄이면 끝입니다. `--config PATH`는 설정이나 상태를 읽는 모든
+`lmrelay provider add openai sk-...` 한 줄이면 끝입니다. `config export`는 `--no-secrets`를 받고,
+`config`의 두 하위 명령 모두 이미 있는 파일 위에 쓰려면 `--force`를 받습니다. 둘 다 경로 대신
+`-`를 주면 터미널을 씁니다.
+`--config PATH`는 설정이나 상태를 읽는 모든
 명령이 받습니다. 즉 `init`과 `disable`을 뺀 모든 명령이며, `init`은 언제나
 `~/.lmrelay/lmrelay.toml`에 쓰고 `disable`은 둘 다 읽지 않습니다.
+
+설정 파일의 모든 키에는 환경 변수 표기도 있습니다. `LMRELAY_` 뒤에 그 키까지의 경로를 붙인
+것이라, `[limits.total] concurrent`는 `LMRELAY_LIMITS_TOTAL_CONCURRENT`입니다. 환경 변수가
+파일보다 우선하고, 업스트림을 그렇게 지정하는 컨테이너에는 설정 파일이 아예 필요 없습니다.
 
 ### 업스트림 선택
 
@@ -258,10 +268,10 @@ nginx는 이미 리버스 프록시를 합니다. 그러니 데몬은 자기 자
 
 nginx가 이기는 곳: TLS, 이미 설치되어 있다는 점, 그리고 프로세스 하나 밖에서도 버티는
 레이트 리미팅. 앞의 두 가지는 앞으로도 없습니다. 다만
-[호출자별 제한](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits)은 있습니다. 호출자의 토큰을 키로 삼는 방식이라 nginx가 토큰을
-직접 들고 있지 않고서는 할 수 없는 일이지만, 세는 곳은 이 프로세스 하나뿐이고 인증을
-끄면 주소로 돌아갑니다. 둘은 경쟁이 아니라 조합입니다. TLS를 위해 nginx를 앞에 두고,
-토큰과 제공자는 여기에 두십시오.
+[제한](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#limits)은 있습니다. 자격 증명별, 주소별, 릴레이 전체라는 세 가지
+범위가 있고, 첫 번째는 호출자의 토큰을 키로 삼는 방식이라 nginx가 토큰을 직접 들고 있지
+않고서는 할 수 없는 일입니다. 세는 곳은 이 프로세스 하나뿐입니다. 둘은 경쟁이 아니라
+조합입니다. TLS를 위해 nginx를 앞에 두고, 토큰과 제공자와 제한은 여기에 두십시오.
 ### 라이선스
 
 MIT License. [LICENSE](../LICENSE)를 참고합니다.

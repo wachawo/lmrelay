@@ -158,9 +158,37 @@ def load_state(path: Path) -> RelayState:
     )
 
 
+def write_private(path: Path, text: str) -> None:
+    """Write a file only its owner can read, atomically.
+
+    mkstemp rather than write_text plus chmod, for two reasons. It creates the
+    file at 0600, so what is in it is never on disk world-readable: a chmod
+    after the write leaves it so for as long as the two calls are apart, and
+    forever if the process dies in between. And it names the file uniquely, so
+    two concurrent writers cannot write into one another's temp file and rename
+    a payload neither of them reported.
+
+    Shared by state.json, the export bundle and the config an import writes,
+    because all three hold caller tokens or provider keys and a second copy of
+    this would be the one that forgot.
+    """
+    temp_path = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+        temp_path = Path(name)
+        with os.fdopen(handle, "w", encoding="utf-8") as target:
+            target.write(text)
+        # os.replace carries the 0600 over.
+        os.replace(temp_path, path)
+    except OSError as exc:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise StateError(f"lmrelay: cannot write {path}: {type(exc).__name__}: {exc}")
+
+
 def save_state(state: RelayState) -> None:
     """Write state.json atomically, so a crash cannot leave a truncated token list."""
-    path = state.state_path
     payload = {
         "version": STATE_VERSION,
         "auth_enabled": state.auth_enabled,
@@ -168,25 +196,7 @@ def save_state(state: RelayState) -> None:
         "tokens": [asdict(token) for token in state.tokens],
         "providers": state.providers,
     }
-    temp_path = None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # mkstemp rather than write_text plus chmod, for two reasons. It creates
-        # the file at 0600, so the tokens are never on disk world-readable. A
-        # chmod after the write leaves them so for as long as the two calls are
-        # apart, and forever if the process dies in between. And it names the
-        # file uniquely, so two concurrent saves cannot write into one another's
-        # temp file and rename a payload neither of them reported.
-        handle, name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
-        temp_path = Path(name)
-        with os.fdopen(handle, "w", encoding="utf-8") as target:
-            target.write(json.dumps(payload, indent=2) + "\n")
-        # os.replace carries the 0600 over.
-        os.replace(temp_path, path)
-    except OSError as exc:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
-        raise StateError(f"lmrelay: cannot write {path}: {type(exc).__name__}: {exc}")
+    write_private(state.state_path, json.dumps(payload, indent=2) + "\n")
 
 
 def generate_token() -> str:
@@ -279,18 +289,30 @@ def add_provider(
             f"Ollama/OpenAI path root"
         )
     preset = PROVIDER_PRESETS.get(name, {})
-    if base_url is None and not preset:
+    # An upstream this relay already carries is its own preset. Without this, a
+    # relay imported from a --no-secrets bundle could not act on the line that
+    # import prints: the bundle carried the custom endpoint, the import wrote it
+    # into the state, and `provider add myllm <key>` still answered that myllm
+    # is not a known provider and asked for a --base-url that was already on
+    # disk. A custom endpoint is exactly the upstream such a bundle carries.
+    # Consulted only where no preset applies, so rotating a key on a listed
+    # provider keeps landing on the preset it always did.
+    stored = {} if preset else (state.providers.get(name) or {})
+    fallback_url = stored.get("base_url") or preset.get("base_url")
+    if base_url is None and not fallback_url:
         raise StateError(
             f"lmrelay: '{name}' is not a known provider; pass --base-url to add it. "
             f"Known providers: {', '.join(sorted(PROVIDER_PRESETS))}"
         )
 
-    resolved_url = base_url if base_url is not None else str(preset["base_url"])
+    resolved_url = base_url if base_url is not None else str(fallback_url)
     if not resolved_url.startswith(("http://", "https://")):
         raise StateError(
             f"lmrelay: provider '{name}' needs a base_url starting with http:// or https://"
         )
-    resolved_dialect = dialect or preset.get("dialect", DEFAULT_PROVIDER_DIALECT)
+    resolved_dialect = (
+        dialect or stored.get("dialect") or preset.get("dialect", DEFAULT_PROVIDER_DIALECT)
+    )
     if resolved_dialect not in DIALECTS:
         raise StateError(
             f"lmrelay: provider '{name}' has dialect '{resolved_dialect}'; "

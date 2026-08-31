@@ -109,6 +109,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
+limits       total 6 at once
 autostart    systemd: enabled, active
 ```
 
@@ -138,13 +139,22 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | アップストリームを追加、またはローテーションする |
 | `lmrelay provider list [--show]` | ファイルと state の両方から、すべてのアップストリーム |
 | `lmrelay provider delete NAME` | state が所有するプロバイダを削除する |
+| `lmrelay config export PATH` | このリレーを再現するのに要るものを全部書き出す |
+| `lmrelay config import PATH` | 設定と state をバンドルで置き換える |
 
 `run`、`serve`、`restart` は `--host` と `--port` を取る。`provider add` は `--base-url`、
 `--dialect`、および繰り返し指定できる `--header K=V` を取る。名前が既知のもの（`openai`、
 `anthropic`、`deepseek`、`grok`、`ollama`）なら、ベース URL、方言、ヘッダの形はプリセットから
-来るので、`lmrelay provider add openai sk-...` だけでコマンドは終わる。`--config PATH` は設定
+来るので、`lmrelay provider add openai sk-...` だけでコマンドは終わる。`config export` は
+`--no-secrets` を取り、`config` の二つの動詞はどちらも、すでにあるものへ書くための `--force`
+を取る。どちらもパスの代わりに `-` を渡せば端末を使う。`--config PATH` は設定
 または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。
 `init` は常に `~/.lmrelay/lmrelay.toml` を書き、`disable` はどちらも読まない。
+
+設定ファイルのどのキーにも環境変数としての綴りがある。`LMRELAY_` にそのキーまでのパスを
+足したもので、`[limits.total] concurrent` は `LMRELAY_LIMITS_TOTAL_CONCURRENT` になる。
+環境変数はファイルより優先され、アップストリームをそう指定するコンテナには設定ファイル
+そのものが要らない。
 
 ### アップストリームの選択
 
@@ -257,10 +267,11 @@ nginx はもともとリバースプロキシができる。だからデーモ�
 
 nginx が勝つところ: TLS、すでに入っていること、そして単一プロセスの外でも成り立つ
 レート制限。前の二つは今後も持たない。ただし
-[呼び出し元ごとの制限](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits) はある。呼び出し元のトークンを鍵にするもので、nginx が
-トークン自体を抱え込まずに行うことはできない。とはいえ数えているのはこの一つの
-プロセスの中だけであり、認証を切ればアドレスに戻る。両者は競合ではなく組み合わせる
-ものである。TLS のために nginx を前に置き、トークンとプロバイダはこちらに残す。
+[制限](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#limits) はある。資格情報ごと、アドレスごと、リレー全体という三つの
+範囲があり、最初のものは呼び出し元のトークンを鍵にする。nginx がトークン自体を抱え込まずに
+行うことはできない。数えているのはこの一つのプロセスの中だけである。両者は競合ではなく
+組み合わせるものである。TLS のために nginx を前に置き、トークンとプロバイダと制限は
+こちらに残す。
 ### ライセンス
 
 MIT License。[LICENSE](../LICENSE) を参照。
