@@ -1,0 +1,57 @@
+name: Publish
+
+# Publishing is driven by a GitHub release rather than by a tag push: a tag can
+# be moved, a release is a deliberate act, and PyPI will not accept a version
+# twice however the mistake was made.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Build
+        run: |
+          pip install 'build~=1.2' 'twine~=7.0'
+          python -m build
+
+      # Catches a description PyPI would reject and a wheel missing the files
+      # the package needs — lmrelay.toml.example among them, which `lmrelay
+      # init` reads out of the installed package.
+      - name: Check the artefacts
+        run: |
+          twine check dist/*
+          python -m zipfile -l dist/*.whl | grep lmrelay.toml.example
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Trusted Publishing. The job mints a short-lived OIDC token that PyPI
+      # verifies against the publisher configured for this repository, so no
+      # API token is stored in this repository at all.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
