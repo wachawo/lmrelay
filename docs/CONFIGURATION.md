@@ -120,9 +120,10 @@ lmrelay token delete 1             # by the id token list prints
 `token gen` prints the token in full once and never again. It does not turn auth on: minting
 a credential and requiring one are two decisions, and a relay already serving other callers
 should not start refusing them because a token was created. It does say that auth is still
-off, so nobody is left believing the relay closed itself — an operator who has been
-surprised for no reason. `auth true` with no tokens is refused, because it would 401 every
-request including yours.
+off and names the command that changes it, so nobody is left believing the relay closed
+itself. The config loader repeats that warning on every start for as long as tokens exist
+and none of them is required. `auth true` with no tokens is refused the other way round,
+because it would 401 every request including yours.
 
 `[auth] token` and `$LMRELAY_TOKEN` are each accepted as one *additional* valid caller
 credential, so a container can inject one without invalidating yours; neither turns checking
