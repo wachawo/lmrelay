@@ -161,7 +161,7 @@ def save_new_token(state: RelayState, record: CallerToken) -> None:
     Minting a credential and requiring one are two decisions, and this command
     only makes the first: an operator who adds a token to a relay that is still
     serving other traffic has not asked for that traffic to start failing. The
-    reminder is here because the alternative — saying nothing — leaves them
+    reminder is here because the alternative, saying nothing, leaves them
     believing the relay is closed when it is not.
     """
     save_state(state)

@@ -34,7 +34,7 @@ from lmrelay.upstream import (
 logger = logging.getLogger(__name__)
 
 HEALTH_PATH    = "/healthz"
-# What the health route below actually answers: GET only — FastAPI, unlike bare
+# What the health route below actually answers: GET only. FastAPI, unlike bare
 # Starlette, does not add HEAD. Every other method on /healthz matches the
 # catch-all instead and is relayed, so an exemption by path alone would hand an
 # anonymous caller the default upstream with its credentials attached.
@@ -69,7 +69,7 @@ def reload_config(app: FastAPI) -> None:
     if unapplied:
         logger.warning(
             f"lmrelay: {', '.join(unapplied)} changed in {config.config_path} but a reload "
-            f"cannot apply that — the socket is already bound and the client already open; "
+            f"cannot apply that: the socket is already bound and the client already open; "
             f"restart to apply"
         )
 
@@ -97,7 +97,7 @@ def reload_config(app: FastAPI) -> None:
             logger.info(message)
 
     # The httpx client is deliberately left alone: closing it would abort every
-    # stream currently being relayed, and nothing a reload changes lives in it —
+    # stream currently being relayed, and nothing a reload changes lives in it:
     # upstream URLs and headers are read from the config on every request.
     app.state.config = config
     logger.info(
@@ -146,10 +146,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # POSIX only; Windows has no SIGHUP. uvicorn claims SIGINT and SIGTERM and
     # leaves SIGHUP alone, so this handler is not fighting it. Only the main
     # thread of the main interpreter may install one, and an app hosted in a
-    # worker thread has to start anyway — it just cannot be reloaded by signal.
+    # worker thread has to start anyway; it just cannot be reloaded by signal.
     if hasattr(signal, "SIGHUP") and threading.current_thread() is threading.main_thread():
         asyncio.get_running_loop().add_signal_handler(signal.SIGHUP, lambda: reload_config(app))
-    # No host:port here — the CLI may have overridden both, and uvicorn logs the
+    # No host:port here: the CLI may have overridden both, and uvicorn logs the
     # address it actually bound anyway.
     logger.info(
         f"lmrelay <- {config.config_path} (upstreams: {describe_upstreams(config)}; "
@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.http.aclose()
     # Only when it still names this process. uvicorn runs the shutdown half of
     # the lifespan when the bind fails too, and by then another relay may own
-    # the file — deleting it would leave a live relay with no pidfile at all.
+    # the file, and deleting it would leave a live relay with no pidfile at all.
     # A pidfile that cannot be unlinked must not turn a clean shutdown into a
     # traceback; the next start treats a stale file as no file anyway.
     with suppress(OSError):

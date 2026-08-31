@@ -20,8 +20,8 @@ LAUNCHD_LABEL      = "com.lmrelay.relay"
 LAUNCHD_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
 
 # Set by the unit and the agent we install, and by nothing else. Both managers
-# report the service as active from the moment they exec it, so the ExecStart —
-# which is `lmrelay run` — would otherwise see its own unit running and refuse
+# report the service as active from the moment they exec it, so the ExecStart,
+# which is `lmrelay run`, would otherwise see its own unit running and refuse
 # to start, leaving autostart permanently in a restart loop.
 SERVICE_ENV_VAR = "LMRELAY_SERVICE"
 
@@ -95,7 +95,7 @@ def relay_executable() -> str:
     """Return the command that starts the relay, always absolute.
 
     A unit that names a bare 'lmrelay' resolves it against the service manager's
-    PATH at boot, not the operator's shell PATH — the classic reason autostart
+    PATH at boot, not the operator's shell PATH. That is the classic reason autostart
     works when it is tested and not after a reboot.
     """
     installed = shutil.which("lmrelay")
@@ -232,7 +232,7 @@ def service_is_active() -> bool:
 
     False inside the managed process itself: both managers report the service
     active from the instant they exec it, so its own ExecStart asking this
-    question would always be told the port is taken — by itself.
+    question would always be told the port is taken, by itself.
     """
     if started_by_service_manager():
         return False

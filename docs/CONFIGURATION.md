@@ -53,7 +53,7 @@ dialect  = "openai"
 headers  = { Authorization = "Bearer ${OPENAI_API_KEY}" }
 
 # Anthropic. Wants x-api-key plus a dated version header, and speaks its own
-# dialect on /v1/messages — not /v1/chat/completions.
+# dialect on /v1/messages, not /v1/chat/completions.
 [upstream.anthropic]
 base_url = "https://api.anthropic.com"
 dialect  = "anthropic"
@@ -87,7 +87,7 @@ config starts with Ollama alone. Uncomment one once its variable is exported; an
   stay out of the file under Docker or systemd. An unset variable is a startup error that
   names the variable.
 - `base_url` is prepended verbatim to the forwarded path, so it is normally a host root and
-  never ends in `/v1` — the caller's path already carries that. A path prefix is allowed
+  never ends in `/v1`, because the caller's path already carries that. A path prefix is allowed
   and simply concatenated, which is what makes an endpoint hosted under a subpath work
   without any code.
 - `dialect` (`ollama`, `openai` or `anthropic`, default `openai`) never changes what is
@@ -101,7 +101,7 @@ config starts with Ollama alone. Uncomment one once its variable is exported; an
   without invalidating yours; neither turns checking on. Caller tokens are otherwise
   `lmrelay token …` and the switch is `lmrelay auth true|false`.
 - A provider added with `lmrelay provider add` wins over an `[upstream.<name>]` of the same
-  name. The startup log names any upstream that was overridden — this file is hand-written
+  name. The startup log names any upstream that was overridden, since this file is hand-written
   and its author deserves to hear that a command shadowed it.
 
 ## Caller tokens and the auth switch
@@ -134,8 +134,8 @@ meaning the same token after an unrelated delete.
 
 ## Providers
 
-`lmrelay provider add NAME TOKEN` adds or rotates an upstream. With a known name — `openai`,
-`anthropic`, `deepseek`, `grok`, `ollama` — the base URL, dialect and header shape come from
+`lmrelay provider add NAME TOKEN` adds or rotates an upstream. With a known name (`openai`,
+`anthropic`, `deepseek`, `grok`, `ollama`) the base URL, dialect and header shape come from
 a preset, so `lmrelay provider add openai sk-...` is the whole command. For anything else,
 `--base-url` is required and `--dialect` and a repeatable `--header K=V` shape the request.
 
@@ -166,8 +166,8 @@ so the two cannot disagree about who owns the process; each command says which p
 
 `lmrelay reload` sends the running relay a SIGHUP, and it re-reads `lmrelay.toml` and
 `state.json` in place. Nothing in flight is disturbed: connections stay open and a stream
-already being relayed runs to its end. Every command that writes a change — `token gen`,
-`auth true`, `provider add` and the rest — signals the relay for you, so an explicit reload
+already being relayed runs to its end. Every command that writes a change, whether `token gen`,
+`auth true`, `provider add` or the rest, signals the relay for you, so an explicit reload
 is what you run after editing `lmrelay.toml` by hand.
 
 | Key | Applied by | Why |
@@ -185,7 +185,7 @@ a changed port does not hide an unchanged timeout. The keys above them are appli
 comment.
 
 A config the relay cannot use is logged and discarded, and it carries on serving the one it
-already had — that covers `state.json` as much as `lmrelay.toml`, and a value the file spells
+already had. That covers `state.json` as much as `lmrelay.toml`, and a value the file spells
 wrongly (`port = "eleven"`, `log_level = "verbose"`) as much as a syntax error. A typo must
 not take the relay down.
 
@@ -214,7 +214,7 @@ whatever the level, an accepted one at `INFO` or below.
   process makes a second start refuse, rather than letting it fail later on the bind with a
   less useful message.
 - **An unreachable upstream is a 502 that names it**, e.g.
-  `lmrelay: upstream 'ollama' at http://127.0.0.1:11434 is unreachable: ConnectError` —
+  `lmrelay: upstream 'ollama' at http://127.0.0.1:11434 is unreachable: ConnectError`,
   usually meaning Ollama itself is not running.
 - **Binding a non-loopback host with auth off logs a warning** rather than refusing, since
   running uncredentialed behind an authenticated nginx is legitimate.
@@ -279,7 +279,7 @@ Raised by the relay before it binds, and by every CLI command that loads the con
 | `lmrelay: [server] log_level '<value>' is not a logging level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL` | any command that loads the config | The level is not one `logging` knows. | Use one of the five. Refused rather than quietly read as `INFO`, which would leave a reload announcing a level the relay was not running at. |
 | `lmrelay: upstream '<name>' header '<header>' references ${VAR}, which is not set` | any command that loads the config | A header value in `lmrelay.toml` interpolates an environment variable that is absent. | Export the variable, or comment the upstream block out. This is why the shipped example has the hosted blocks commented. |
 | `lmrelay: upstream '<name>' header '<header>' has a malformed ${...} reference: <detail>` | any command that loads the config | A `$` in a header value is not a well-formed `${VAR}`. | Write `$$` for a literal `$`, or store the key with `lmrelay provider add`, which does not expand. |
-| `lmrelay: upstream name '<name>' is reserved — it would shadow the Ollama/OpenAI path root` | any command that loads the config | An `[upstream.api]` or `[upstream.v1]` table. | Rename the upstream. Those two segments are how every Ollama and OpenAI client addresses the default upstream. |
+| `lmrelay: upstream name '<name>' is reserved: it would shadow the Ollama/OpenAI path root` | any command that loads the config | An `[upstream.api]` or `[upstream.v1]` table. | Rename the upstream. Those two segments are how every Ollama and OpenAI client addresses the default upstream. |
 | `lmrelay: [upstream.<name>] must be a table` | any command that loads the config | `upstream.<name>` is a scalar or an array. | Write it as a TOML table. |
 | `lmrelay: [upstream] must be a table of upstream tables` | any command that loads the config | `[upstream]` itself is not a table. | Write the section as `[upstream.<name>]` tables. |
 | `lmrelay: upstream '<name>' needs a base_url starting with http:// or https://` | any command that loads the config | `base_url` is missing, is not a string, or has no scheme. | Give it a full origin, normally a host root with no `/v1`. |
@@ -296,11 +296,11 @@ another version.
 
 | Message | Where | Means | Do |
 |---|---|---|---|
-| `lmrelay: cannot read <path>: <Type>: <detail>` | any command that loads state | `state.json` is unreadable or is not valid JSON. | Fix the JSON, or move the file aside — a missing state file is the empty default, not an error. |
+| `lmrelay: cannot read <path>: <Type>: <detail>` | any command that loads state | `state.json` is unreadable or is not valid JSON. | Fix the JSON, or move the file aside, since a missing state file is the empty default, not an error. |
 | `lmrelay: <path> is not a JSON object` | any command that loads state | The top level is an array or a scalar. | Restore an object, or move the file aside and re-add tokens and providers. |
 | `lmrelay: <path> has a malformed token entry` | any command that loads state | A token record is missing an integer `id` or a string `token`. | Repair the entry. It is refused rather than skipped so a credential is never silently dropped. |
 | `lmrelay: <path> has a malformed providers table` | any command that loads state | `providers` is not an object of objects. | Repair the table, or delete the providers key and re-add with `lmrelay provider add`. |
-| `lmrelay: <path> has state version <N>; this lmrelay understands 1. It was written by a newer lmrelay — upgrade or move the file.` | any command that loads state | The state file came from a newer lmrelay. | Upgrade lmrelay, or move the file aside. |
+| `lmrelay: <path> has state version <N>; this lmrelay understands 1. It was written by a newer lmrelay: upgrade or move the file.` | any command that loads state | The state file came from a newer lmrelay. | Upgrade lmrelay, or move the file aside. |
 | `lmrelay: cannot write <path>: <Type>: <detail>` | any command that saves state | The state file or its directory could not be written. | Check permissions and free space on the config directory. |
 
 ### Process control errors
@@ -325,7 +325,7 @@ another version.
 | `lmrelay: token is empty` | `lmrelay token add` | The token argument was blank or whitespace. | Pass the token. |
 | `lmrelay: that token is already configured` | `lmrelay token add` | The same token value is already stored. | Nothing: it already works. `lmrelay token list --show` confirms it. |
 | `lmrelay: no token with id <N>; known ids: <list>` | `lmrelay token delete` | No stored token carries that id. | Use an id from `lmrelay token list`. |
-| `lmrelay: provider name '<name>' is reserved — it would shadow the Ollama/OpenAI path root` | `lmrelay provider add` | The name was `api` or `v1`. | Choose another name. |
+| `lmrelay: provider name '<name>' is reserved: it would shadow the Ollama/OpenAI path root` | `lmrelay provider add` | The name was `api` or `v1`. | Choose another name. |
 | `lmrelay: '<name>' is not a known provider; pass --base-url to add it. Known providers: anthropic, deepseek, grok, ollama, openai` | `lmrelay provider add` | No preset carries that name and no `--base-url` was given. | Add `--base-url`, and `--dialect` if it is not OpenAI-shaped. |
 | `lmrelay: provider '<name>' needs a base_url starting with http:// or https://` | `lmrelay provider add` | `--base-url` has no scheme. | Give a full origin. |
 | `lmrelay: provider '<name>' has dialect '<dialect>'; expected one of ollama, openai, anthropic` | `lmrelay provider add` | `--dialect` is not one of the three. | Use `ollama`, `openai` or `anthropic`. |
@@ -339,10 +339,10 @@ Logged and then ignored. Nothing is refused and nothing stops.
 
 | Message | Where | Means | Do |
 |---|---|---|---|
-| `lmrelay: listening on <host> with auth off — every caller that can reach this port can use the configured upstream credentials. Run 'lmrelay auth true'.` | relay startup, `lmrelay run --host`, `lmrelay reload` | A non-loopback bind demands no credential. On a reload it is asked about the host the socket is on, since `lmrelay auth false` can create the condition under a relay that is already listening. | Run `lmrelay auth true`, unless something in front of the relay already authenticates. |
+| `lmrelay: listening on <host> with auth off. Every caller that can reach this port can use the configured upstream credentials. Run 'lmrelay auth true'.` | relay startup, `lmrelay run --host`, `lmrelay reload` | A non-loopback bind demands no credential. On a reload it is asked about the host the socket is on, since `lmrelay auth false` can create the condition under a relay that is already listening. | Run `lmrelay auth true`, unless something in front of the relay already authenticates. |
 | `lmrelay: <N> caller token(s) configured but auth is off; run 'lmrelay auth true' to require them` | any command that loads the config | Tokens exist but nothing checks them. | Run `lmrelay auth true`, or delete the tokens if the relay is meant to stay open. |
 | `lmrelay: provider(s) <names> from state.json shadow the [upstream.*] of the same name in <config>` | any command that loads the config | A CLI-added provider is winning over a hand-written table. | Nothing, if that was the intent. Otherwise `lmrelay provider delete <name>`. |
-| `lmrelay: <fields> changed in <config> but a reload cannot apply that — the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout. |
+| `lmrelay: <fields> changed in <config> but a reload cannot apply that: the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout. |
 | `<error message>; keeping the running config` | relay log, on reload | The re-read config or state did not parse. The relay is still serving the one it already had. | Fix what the message names, then `lmrelay reload` again. |
 | `lmrelay: pid <N> ignored SIGTERM for 10s; forcing it with SIGKILL` | `lmrelay stop`, `restart` | The relay did not exit on SIGTERM inside the stop timeout. | Nothing: the stop continues. A relay that needs SIGKILL every time is worth reading the log about. |
 | `lmrelay: pid <N> is still there after SIGKILL` | `lmrelay stop`, `restart` | The process survived SIGKILL and the kernel has not finished tearing it down. | Check the process by hand before starting another relay on the same port. |
@@ -396,7 +396,7 @@ fail2ban-regex ~/.lmrelay/lmrelay.log /etc/fail2ban/filter.d/lmrelay-auth.conf
 ```
 
 The filter matches the relay refusing a credential and nothing else. A 401 that came from an
-upstream and was relayed through — an expired provider key — is logged as a served request
+upstream and was relayed through, such as an expired provider key, is logged as a served request
 and is deliberately not matched: the caller whose key stopped working is not an attacker.
 
 ### The jail ships disabled
@@ -404,7 +404,7 @@ and is deliberately not matched: the caller whose key stopped working is not an 
 `forwarded_allow_ips` is `"*"`, so uvicorn takes the client address from `X-Forwarded-For`
 whenever that header is present, whoever sent it. Against a relay its callers reach
 directly, anyone can pair a wrong token with a forged header and choose the address this
-jail bans — a gateway, a colleague, the operator. A request carrying
+jail bans: a gateway, a colleague, the operator. A request carrying
 `X-Forwarded-For: 198.51.100.42` and a bad token logs 198.51.100.42; that is measured, not
 supposed.
 
@@ -416,4 +416,4 @@ proxy. A relay listening on `0.0.0.0` must not run it.
 
 No failover, retry or load balancing. No dialect translation. No model catalogue or
 aliasing. No token accounting, usage database or budgets. No admin API, dashboard or
-metrics. No caching or rate limiting. No TLS — put nginx in front.
+metrics. No caching or rate limiting. No TLS: put nginx in front.

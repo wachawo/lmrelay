@@ -114,7 +114,7 @@ def start_relay_through_the_cli(tmp_path, attempts: int = 3):
 
     Not by calling start_detached() in this process: by the time this test runs,
     pytest is multi-threaded, and macOS kills a forked child that touches the
-    system frameworks without exec'ing — silently, leaving the empty log that
+    system frameworks without exec'ing, silently, leaving the empty log that
     sent the first diagnosis of this failure after a port race instead. A real
     `lmrelay serve` forks from a single-threaded shell, which is the path worth
     covering anyway.
@@ -179,7 +179,7 @@ class TestReadingThePidfile:
 
     def test_so_does_one_holding_a_number_too_large_to_be_a_pid(self, tmp_path):
         """A partial write parses as an int and then overflows os.kill. Reading
-        it as a live relay is not the risk; raising is — it would crash `status`
+        it as a live relay is not the risk; raising is, because it would crash `status`
         and `stop`, and `stop` is the one command that could clear the file."""
         target = tmp_path / PID_NAME
         target.write_text("999999999999999999999\n", encoding="utf-8")

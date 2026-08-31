@@ -20,7 +20,7 @@ HOP_BY_HOP = {
 
 # `host` is recomputed by httpx from the target URL. `authorization` and
 # `x-api-key` carry the CALLER's credential for lmrelay itself and must never
-# reach a provider — an upstream with no configured headers (Ollama) therefore
+# reach a provider. An upstream with no configured headers (Ollama) therefore
 # receives no credential at all.
 DROPPED_REQUEST_HEADERS = HOP_BY_HOP | {"host", "authorization", "x-api-key"}
 
@@ -67,7 +67,7 @@ def check_caller_token(headers: Mapping[str, str], tokens: Sequence[str]) -> boo
     if presented is None or not tokens:
         return False
     # Compared as bytes: compare_digest raises TypeError on a str holding any
-    # non-ASCII character, and both sides can hold one — the credential arrives
+    # non-ASCII character, and both sides can hold one, and the credential arrives
     # from a header Starlette decodes as latin-1, and a stored token is whatever
     # the operator pasted. A 500 on an unauthenticated request is not a refusal.
     candidate = presented.encode("utf-8")
@@ -153,8 +153,8 @@ def build_upstream_url(upstream: Upstream, forward_path: str, query: str) -> str
 def has_request_body(headers: Mapping[str, str]) -> bool:
     """Report whether the caller sent a body at all.
 
-    A GET with no body must not be re-framed as chunked — some upstreams reject
-    that — so an empty request is forwarded with no body rather than an empty
+    A GET with no body must not be re-framed as chunked, which some upstreams reject,
+    so an empty request is forwarded with no body rather than an empty
     stream.
     """
     if headers.get("content-length"):
@@ -171,7 +171,7 @@ def build_upstream_request(
     """Build the outbound request: same method, path, query and body bytes."""
     # Built directly rather than through client.build_request so httpx's default
     # Accept / Accept-Encoding / User-Agent do not join headers the caller never
-    # sent — an Accept-Encoding we invented would come back as a compressed body
+    # sent: an Accept-Encoding we invented would come back as a compressed body
     # the caller never asked for. The client's timeout still has to be attached
     # by hand as a result.
     body = request.stream() if has_request_body(request.headers) else b""

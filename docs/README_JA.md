@@ -140,8 +140,8 @@ autostart    systemd: enabled, active
 | `lmrelay provider delete NAME` | state が所有するプロバイダを削除する |
 
 `run`、`serve`、`restart` は `--host` と `--port` を取る。`provider add` は `--base-url`、
-`--dialect`、および繰り返し指定できる `--header K=V` を取る。名前が既知のもの — `openai`、
-`anthropic`、`deepseek`、`grok`、`ollama` — なら、ベース URL、方言、ヘッダの形はプリセットから
+`--dialect`、および繰り返し指定できる `--header K=V` を取る。名前が既知のもの（`openai`、
+`anthropic`、`deepseek`、`grok`、`ollama`）なら、ベース URL、方言、ヘッダの形はプリセットから
 来るので、`lmrelay provider add openai sk-...` だけでコマンドは終わる。`--config PATH` は設定
 または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。
 `init` は常に `~/.lmrelay/lmrelay.toml` を書き、`disable` はどちらも読まない。
@@ -224,41 +224,40 @@ pytest
 
 スイートの大半は、記録用のアップストリームを相手にアプリをインプロセスで動かすので、ネットワークも
 Ollama も要らない。例外は [`tests/test_streaming.py`](../tests/test_streaming.py) で、チャンクを
-1 つずつ返すアップストリームの前でリレーを uvicorn 上で走らせる。確かめたい性質 — アップストリーム
-が最後の行を書き終える前に、呼び出し元が最初の行を受け取っていること — は、インプロセスの
+1 つずつ返すアップストリームの前でリレーを uvicorn 上で走らせる。確かめたい性質、すなわちアップストリーム
+が最後の行を書き終える前に、呼び出し元が最初の行を受け取っていることは、インプロセスの
 クライアント越しには観測できないからだ。
 
 ### なぜ nginx ではないのか
 
-nginx はすでにリバースプロキシをこなす。だからデーモンの側が、自分の居場所を正当化しなければ
-ならない。手短に、一点ずつ:
+nginx はもともとリバースプロキシができる。だからデーモンは自分の居場所を正当化しなければ
+ならない。手短に、項目ごとに:
 
-- **Authorization ヘッダはすでに埋まっている。決め手はそこだ。** どのクライアントも
-  `Authorization: Bearer <key>`（OpenAI SDK、上の curl の例）か `x-api-key`（Anthropic SDK）を
-  送る。nginx の `auth_basic` は、その同じヘッダに `Basic <base64>` を載せることを求め、それ以外
-  はすべて拒む。ヘッダは 1 つ、持ち主は 2 つだ。URL に書いた資格情報は確かに通るが、httpx はそれ
-  を同じヘッダに書き込む。OpenAI SDK の呼び出し側は `Basic` として届き、送るはずだった bearer は
-  置き換えられている。
-- **nginx でトークンを検査するなら、トークンは `nginx.conf` に置くことになる。** `map` と
-  `internal` の location があればバックエンドなしでも判定できる。ただしトークンは root 所有の
-  `0644` ファイルに平文の 1 行として並び、1 つ追加するにも失効させるにも、編集と reload が要る。
-- **プロバイダの鍵が `nginx.conf` の中に入る。** プロバイダごとに `location` が 1 つと
-  `proxy_set_header Authorization "Bearer sk-..."` が 1 行、アップストリームが TLS を話すなら
-  `proxy_ssl_server_name on` も要る。こちらはコマンド 1 つで済み、鍵は `0600` のファイルに残る。
+- **プロバイダの鍵が `nginx.conf` の中に残る。** 各プロバイダに `location` と
+  `proxy_set_header Authorization "Bearer sk-..."` が一つずつ、上流が TLS を話すなら
+  `proxy_ssl_server_name on` も要る。ここではコマンド一つで済み、鍵は root 所有の `0644`
+  ではなく `0600` のファイルに置かれる。
+- **呼び出し側のトークンを nginx で検査すると、トークンも `nginx.conf` に入る。** `map` と
+  `internal` な `location` を使えばバックエンドなしでできるが、そのとき各トークンは同じ
+  root 所有ファイルの平文一行になり、追加も失効も編集と reload を要する。
 - **`htpasswd` には id もローテーションもない。** `lmrelay token gen --label laptop`、
   `token list`、`token delete 1` にはある。
-- **nginx の既定値はストリーミングを壊す。** `proxy_buffering` はオン、`proxy_read_timeout` は
-  60 秒。大きなローカルモデルは、最初のトークンを出すまでに 1 分以上考えることがある。どちらも
-  自分で見つけて外すことになる。たいていは、回答が半分で切れたあとで。
-- **方言の違うパスは、nginx 越しだとプロバイダ自身の 404 が返る。** リレーが見分けられる形
-  — たとえば OpenAI のアップストリームに送られた Anthropic のパス — については、リレーは自分の
-  言葉で 400 を返すので、その間違いがプロバイダのもののように読まれることはない。
-- **nginx は macOS にも Windows にも付属しない。** `pip install` はどちらでも同じように動く。
+- **nginx の既定値がストリーミングを壊す。** `proxy_buffering` は有効で
+  `proxy_read_timeout` は 60s だが、大きなローカルモデルは最初のトークンまでに一分以上
+  考えることがある。どちらも見つけて切る必要があり、たいていは回答が途中で切れた後になる。
+- **方言違いのパスは nginx 経由でプロバイダ自身の 404 を返す。** 認識できる形、たとえば
+  Anthropic のパスを OpenAI の上流に送った場合、リレーは自分の言葉で 400 を返すので、
+  その誤りがプロバイダの応答と取り違えられない。
+- **nginx は macOS にも Windows にも同梱されない。** `pip install` はどちらでも同じに動く。
+- **SDK を文書どおりのやり方で `auth_basic` に向けることはできない。** それは `Basic` だけを
+  受け取り他を拒むが、どの SDK も鍵を `Authorization: Bearer` に入れる。URL に資格情報を
+  入れれば通りはするものの、そのとき `api_key` は死に設定になる。httpx が URL の資格情報を
+  同じヘッダに書き込み、bearer は外に出ないからである。プロバイダ自身の文書にある例は
+  すべて書き換えることになる。
 
-nginx が勝つところ: TLS、本物のレート制限、そしてすでに入っていること。lmrelay はその 3 つを
-どれも持たないし、持つつもりもない。両者は競合ではなく組み合わせだ。前段の nginx が TLS を、
-トークンとプロバイダはこちらが受け持つ。
-
+nginx が勝つところ: TLS、本物のレート制限、そしてすでに入っていること。lmrelay にはどれも
+なく、今後も持たない。両者は競合ではなく組み合わせるものである。TLS のために nginx を前に
+置き、トークンとプロバイダはこちらに残す。
 ### ライセンス
 
 MIT License。[LICENSE](../LICENSE) を参照。

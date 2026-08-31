@@ -219,7 +219,7 @@ class TestProvidersAddedByName:
 
     def test_an_extra_header_replaces_a_preset_one_whatever_its_case(self, tmp_path):
         """Header names are case-insensitive, so a plain dict update would keep
-        both and the request would carry two Authorization lines — the operator
+        both and the request would carry two Authorization lines, and the operator
         would still be shipping the key they meant to replace, and which one the
         provider honours would be the provider's choice."""
         state = add_provider(

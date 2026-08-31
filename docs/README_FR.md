@@ -147,10 +147,10 @@ relais en mode détaché.
 | `lmrelay provider delete NAME` | supprimer un fournisseur détenu par l'état |
 
 `run`, `serve` et `restart` acceptent `--host` et `--port`. `provider add` accepte `--base-url`,
-`--dialect` et un `--header K=V` répétable ; avec un nom connu — `openai`, `anthropic`,
-`deepseek`, `grok`, `ollama` — l'URL de base, le dialecte et la forme des en-têtes viennent d'un
+`--dialect` et un `--header K=V` répétable ; avec un nom connu (`openai`, `anthropic`,
+`deepseek`, `grok`, `ollama`) l'URL de base, le dialecte et la forme des en-têtes viennent d'un
 préréglage, si bien que `lmrelay provider add openai sk-...` est la commande entière.
-`--config PATH` est accepté par toute commande qui lit la configuration ou l'état — c'est-à-dire
+`--config PATH` est accepté par toute commande qui lit la configuration ou l'état, c'est-à-dire
 toutes sauf `init`, qui écrit toujours `~/.lmrelay/lmrelay.toml`, et `disable`, qui ne lit ni
 l'une ni l'autre.
 
@@ -235,45 +235,44 @@ pytest
 L'essentiel de la suite pilote l'application dans le processus face à un upstream qui enregistre
 les échanges ; elle n'a donc besoin ni du réseau ni d'Ollama.
 [`tests/test_streaming.py`](../tests/test_streaming.py) fait exception : il exécute le relais sous
-uvicorn devant un upstream qui répond un fragment à la fois, car la propriété qu'il vérifie — que
-l'appelant a la première ligne avant que l'upstream ait écrit la dernière — est invisible à
+uvicorn devant un upstream qui répond un fragment à la fois, car la propriété qu'il vérifie, que
+l'appelant a la première ligne avant que l'upstream ait écrit la dernière, est invisible à
 travers un client dans le processus.
 
 ### Pourquoi pas nginx ?
 
-nginx fait déjà office de reverse proxy ; un démon doit donc justifier sa place. Brièvement,
-point par point :
+nginx fait déjà office de reverse proxy, donc un démon doit mériter sa place. En bref, point
+par point :
 
-- **L'en-tête Authorization est déjà pris, et c'est cela qui tranche.** Tout client envoie
-  `Authorization: Bearer <key>` (le SDK OpenAI, les exemples curl ci-dessus) ou `x-api-key`
-  (le SDK Anthropic) ; l'`auth_basic` de nginx a besoin de ce même en-tête pour transporter
-  `Basic <base64>`, et refuse tout le reste. Un en-tête, deux propriétaires. Les identifiants
-  placés dans l'URL passent bien, mais httpx les écrit dans ce même en-tête : un appelant
-  avec le SDK OpenAI arrive alors en `Basic`, ayant remplacé le bearer qu'il voulait envoyer.
-- **Vérifier un token dans nginx met les tokens dans `nginx.conf`.** Un `map` et un
-  location `internal` y parviennent sans backend, mais chaque token devient une ligne en
-  clair dans un fichier `0644` appartenant à root, et en ajouter ou en révoquer un coûte une
-  modification et un reload.
 - **Les clés des fournisseurs finissent dans `nginx.conf`.** Un `location` et un
-  `proxy_set_header Authorization "Bearer sk-..."` pour chacune, plus
-  `proxy_ssl_server_name on` quand l'upstream parle TLS. Ici, c'est une seule commande, et la
-  clé réside dans un fichier `0600`.
-- **`htpasswd` n'a ni ids, ni rotation.** `lmrelay token gen --label laptop`,
-  `token list` et `token delete 1`, si.
-- **Les valeurs par défaut de nginx cassent le streaming.** `proxy_buffering` est actif et
-  `proxy_read_timeout` vaut 60 s, alors qu'un gros modèle local peut réfléchir plus d'une
-  minute avant son premier token. Il faut trouver les deux et les désactiver, en général une
-  fois qu'une réponse a déjà été coupée en deux.
-- **Un chemin dans le mauvais dialecte reçoit, à travers nginx, le 404 du fournisseur.** Le
-  Pour les formes qu'il reconnaît — un chemin Anthropic envoyé à un upstream OpenAI, par
-  exemple —, le relais répond 400 avec ses propres mots, si bien que l'erreur ne passe pas
-  pour celle du fournisseur.
-- **nginx n'est livré ni avec macOS ni avec Windows.** `pip install` marche pareil sur les deux.
+  `proxy_set_header Authorization "Bearer sk-..."` pour chacun, plus
+  `proxy_ssl_server_name on` quand l'amont parle TLS. Ici c'est une seule commande, et la clé
+  vit dans un fichier `0600` plutôt que dans un `0644` appartenant à root.
+- **Vérifier le jeton d'un appelant dans nginx met aussi les jetons dans `nginx.conf`.** Un
+  `map` et un `location` `internal` le font sans backend, mais chaque jeton devient une ligne
+  en clair dans ce même fichier de root, et en ajouter ou en révoquer un demande une édition
+  et un rechargement.
+- **`htpasswd` n'a ni identifiants ni rotation.** `lmrelay token gen --label laptop`,
+  `token list` et `token delete 1` en ont.
+- **Les valeurs par défaut de nginx cassent le streaming.** `proxy_buffering` est activé et
+  `proxy_read_timeout` vaut 60s, et un gros modèle local peut réfléchir plus d'une minute
+  avant son premier jeton. Il faut trouver les deux et les désactiver, en général après
+  qu'une réponse a été coupée en deux.
+- **Un chemin du mauvais dialecte reçoit le 404 du fournisseur lui-même à travers nginx.**
+  Pour les formes qu'il reconnaît, comme un chemin Anthropic envoyé à un amont OpenAI, le
+  relais répond 400 avec ses propres mots, si bien que l'erreur n'est pas prise pour celle du
+  fournisseur.
+- **nginx n'est livré ni avec macOS ni avec Windows.** `pip install` fonctionne pareil sur les
+  deux.
+- **Un SDK ne peut pas être pointé vers `auth_basic` de la façon documentée.** Il accepte
+  `Basic` et refuse tout le reste, alors que chaque SDK met sa clé dans
+  `Authorization: Bearer`. Les identifiants dans l'URL passent bien, mais alors `api_key` ne
+  sert plus à rien : httpx écrit les identifiants de l'URL dans ce même en-tête et le bearer
+  ne sort jamais. Chaque exemple de la documentation du fournisseur doit être réécrit.
 
-Là où nginx l'emporte : le TLS, une vraie limitation de débit, et le fait d'être déjà
-installé. lmrelay n'a aucun des trois, et ne les aura pas. Les deux se composent plutôt qu'ils
-ne s'opposent — nginx devant pour le TLS, les tokens et les fournisseurs ici.
-
+Là où nginx gagne : TLS, une vraie limitation de débit, et être déjà installé. lmrelay n'a
+aucun des trois, et n'en aura pas. Les deux se composent au lieu de se concurrencer. Mettez
+nginx devant pour TLS, et laissez ici les jetons et les fournisseurs.
 ### Licence
 
 Licence MIT. Voir [LICENSE](../LICENSE).

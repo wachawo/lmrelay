@@ -65,12 +65,12 @@ def process_alive(pid: int) -> bool:
         return False
     except OverflowError:
         # A number too large for a pid names no process. Raising here would make
-        # a corrupt pidfile crash `status` and `stop` — including the `stop`
+        # a corrupt pidfile crash `status` and `stop`, including the `stop`
         # whose whole job is to clear it.
         return False
     except PermissionError:
         # Signalling is refused, which means the process is there and belongs to
-        # somebody else — still a running process, and still a reason not to
+        # somebody else: still a running process, and still a reason not to
         # start a second relay on the same port.
         return True
     return True
@@ -278,7 +278,7 @@ def stop_daemon(config_path: Path, timeout: float = STOP_TIMEOUT) -> bool:
             )
             with suppress(ProcessLookupError, PermissionError):
                 os.kill(pid, signal.SIGKILL)
-            # SIGKILL is not instant — the kernel still has to tear the process
+            # SIGKILL is not instant: the kernel still has to tear the process
             # down and release its socket, and `restart` binds the same port on
             # the very next line.
             if not wait_for_exit(pid, KILL_TIMEOUT):

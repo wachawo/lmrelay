@@ -71,7 +71,7 @@ class TestTheCallerCredential:
         assert not check_caller_token({}, TOKENS)
 
     def test_another_scheme_is_not_read_as_a_bearer(self):
-        """Basic auth carrying the token as its blob must not be accepted — and
+        """Basic auth carrying the token as its blob must not be accepted, and
         an Authorization header that is present but unusable must not fall
         through to the x-api-key branch either."""
         assert not check_caller_token(
@@ -104,7 +104,7 @@ class TestTheCallerCredential:
 
     def test_a_stored_token_with_a_non_ascii_character_does_not_break_the_others(self):
         """Nothing validates what `token add` is given, and every token is
-        compared before any result is read — so one such entry would refuse
+        compared before any result is read, so one such entry would refuse
         every other caller in the set rather than only itself."""
         assert check_caller_token({"authorization": "Bearer first"}, ("first", "cl\xe9-andre"))
 

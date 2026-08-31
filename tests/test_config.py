@@ -232,7 +232,7 @@ class TestWhatTheStateAdds:
         """${VAR} is a feature of the hand-written file. `provider add`
         substitutes {token} literally and writes the finished value down, so
         running it back through Template would rewrite an API key containing a
-        $ with an environment variable's value — and send that value to the
+        $ with an environment variable's value, and send that value to the
         provider in a header."""
         monkeypatch.setenv("HOME", "/home/somebody")
         write_state(tmp_path, providers={"openai": {

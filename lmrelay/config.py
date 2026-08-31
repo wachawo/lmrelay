@@ -113,11 +113,11 @@ def parse_upstream(name: str, table: dict, expand_env: bool = True) -> Upstream:
     do not share: `${VAR}` in the file is a documented way to keep a key out of
     it, while a key the CLI stored was already substituted literally, and
     expanding it again would rewrite an API key containing a $ with the value of
-    an environment variable — and send that value to the provider.
+    an environment variable, and send that value to the provider.
     """
     if name in RESERVED_UPSTREAM_NAMES:
         raise ConfigError(
-            f"lmrelay: upstream name '{name}' is reserved — it would shadow the "
+            f"lmrelay: upstream name '{name}' is reserved: it would shadow the "
             f"Ollama/OpenAI path root"
         )
     if not isinstance(table, dict):
@@ -150,7 +150,7 @@ def parse_upstream(name: str, table: dict, expand_env: bool = True) -> Upstream:
 
 
 def parse_upstreams(data: dict) -> dict[str, Upstream]:
-    """Validate every [upstream.*] table. None at all is legal — state may supply them."""
+    """Validate every [upstream.*] table. None at all is legal, since state may supply them."""
     section = data.get("upstream") or {}
     if not isinstance(section, dict):
         raise ConfigError("lmrelay: [upstream] must be a table of upstream tables")
@@ -227,7 +227,7 @@ def read_log_level(server: dict) -> str:
     """Read log_level, refusing a name logging would quietly read as INFO.
 
     getattr(logging, level) falls back on its own, so an unrecognised level was
-    announced as applied by the reload and then discarded — the relay ran at INFO
+    announced as applied by the reload and then discarded: the relay ran at INFO
     while the log said it was running at something else.
     """
     value = str(server.get("log_level", DEFAULT_LOG_LEVEL))
@@ -313,7 +313,7 @@ def check_exposure(config: RelayConfig) -> str | None:
     if is_loopback:
         return None
     return (
-        f"lmrelay: listening on {config.host} with auth off — every caller that can reach "
+        f"lmrelay: listening on {config.host} with auth off. Every caller that can reach "
         f"this port can use the configured upstream credentials. Run 'lmrelay auth true'."
     )
 

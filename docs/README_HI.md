@@ -145,10 +145,10 @@ autostart    systemd: enabled, active
 | `lmrelay provider delete NAME` | state के अधिकार वाला provider हटाती है |
 
 `run`, `serve` और `restart` `--host` और `--port` लेती हैं। `provider add` `--base-url`,
-`--dialect` और दोहराया जा सकने वाला `--header K=V` लेती है; जाने-पहचाने नाम के साथ — `openai`,
-`anthropic`, `deepseek`, `grok`, `ollama` — base URL, dialect और header का ढाँचा preset से आता
+`--dialect` और दोहराया जा सकने वाला `--header K=V` लेती है; जाने-पहचाने नाम के साथ (`openai`,
+`anthropic`, `deepseek`, `grok`, `ollama`) base URL, dialect और header का ढाँचा preset से आता
 है, इसलिए पूरी command बस `lmrelay provider add openai sk-...` है। `--config PATH` उन सभी
-commands में चलता है जो config या state पढ़ती हैं — यानी `init` और `disable` को छोड़कर हर command
+commands में चलता है जो config या state पढ़ती हैं, यानी `init` और `disable` को छोड़कर हर command
 में। `init` हमेशा `~/.lmrelay/lmrelay.toml` ही लिखती है, और `disable` इनमें से कुछ नहीं पढ़ती।
 
 ### upstream चुनना
@@ -202,7 +202,7 @@ lmrelay method, path, query string और body bytes को **बिना ब�
 
 ¹ Ollama अपने native `/api/*` के साथ-साथ `/v1/*` पर एक OpenAI-compatible surface भी देता है।
 व्यवहार में यही सबसे अहम खाना है: OpenAI-आकार का client सिर्फ़ path prefix बदलकर ollama, openai,
-deepseek और grok — इन **सब** तक पहुँच जाता है।
+deepseek और grok, इन **सब** तक पहुँच जाता है।
 
 जो चार मामले काम नहीं करते, और हर एक को काम करने लायक क्यों नहीं बनाया जा सकता, वे configuration
 दस्तावेज़ में हैं।
@@ -232,42 +232,39 @@ pytest
 suite का ज़्यादातर हिस्सा app को उसी process में एक recording upstream के सामने चलाता है, इसलिए
 उसे न network चाहिए न Ollama। [`tests/test_streaming.py`](../tests/test_streaming.py) अपवाद है: वह
 relay को uvicorn के नीचे ऐसे upstream के आगे चलाता है जो एक बार में एक chunk जवाब देता है, क्योंकि
-जो गुण वह जाँचता है — कि upstream के आख़िरी line लिखने से पहले caller के पास पहली line आ चुकी हो —
+जो गुण वह जाँचता है, कि upstream के आख़िरी line लिखने से पहले caller के पास पहली line आ चुकी हो,
 वह in-process client से दिखता ही नहीं।
 
 ### nginx क्यों नहीं?
 
-nginx पहले से ही reverse proxy का काम करता है, इसलिए किसी daemon को अपनी जगह कमानी पड़ती है।
-संक्षेप में, बिंदुवार:
+nginx पहले से ही reverse proxy करता है, इसलिए किसी daemon को अपनी जगह कमानी पड़ती है। संक्षेप
+में, बिंदुवार:
 
-- **Authorization header पहले से ही किसी और के पास है, और फ़ैसला यही करता है।** हर client
-  `Authorization: Bearer <key>` भेजता है (OpenAI SDK, ऊपर वाले curl उदाहरण) या `x-api-key`
-  (Anthropic SDK); nginx के `auth_basic` को उसी header में `Basic <base64>` चाहिए, और बाक़ी सब
-  वह ठुकरा देता है। एक header, दो दावेदार। URL में रखे credential निकल तो जाते हैं, पर httpx उन्हें
-  उसी header में लिख देता है: तब OpenAI SDK वाला caller `Basic` बनकर पहुँचता है, और जो bearer वह
-  भेजना चाहता था, उसकी जगह ले ली जाती है।
-- **nginx में token जाँचने का मतलब है token को `nginx.conf` में रखना।** एक `map` और एक
-  `internal` location यह बिना किसी backend के कर देते हैं, पर तब हर token root के मालिकाने वाली
-  `0644` फ़ाइल में एक सादा-पाठ पंक्ति होता है, और एक token जोड़ने या रद्द करने में एक बदलाव और एक
-  reload लगता है।
-- **provider की keys `nginx.conf` के भीतर आ बैठती हैं।** हर एक के लिए एक `location` और एक
-  `proxy_set_header Authorization "Bearer sk-..."`, और upstream TLS बोलता हो तो साथ में
-  `proxy_ssl_server_name on`। यहाँ यह एक command है, और key `0600` फ़ाइल में रहती है।
-- **`htpasswd` में न ids हैं, न rotation।** `lmrelay token gen --label laptop`,
-  `token list` और `token delete 1` में हैं।
+- **प्रोवाइडर की keys `nginx.conf` के भीतर ही रह जाती हैं।** हर एक के लिए एक `location` और एक
+  `proxy_set_header Authorization "Bearer sk-..."`, और upstream TLS बोलता हो तो
+  `proxy_ssl_server_name on` भी। यहाँ यह एक ही कमांड है, और key root के `0644` वाले फ़ाइल के
+  बजाय `0600` फ़ाइल में रहती है।
+- **nginx में caller का token जाँचने से token भी `nginx.conf` में आ जाते हैं।** एक `map` और एक
+  `internal` `location` यह बिना backend के कर देते हैं, पर तब हर token उसी root फ़ाइल में
+  plaintext की एक लाइन बन जाता है, और एक को जोड़ना या रद्द करना एक edit और एक reload माँगता है।
+- **`htpasswd` में न ids हैं न rotation।** `lmrelay token gen --label laptop`, `token list`
+  और `token delete 1` में हैं।
 - **nginx के defaults streaming तोड़ देते हैं।** `proxy_buffering` चालू है और
-  `proxy_read_timeout` 60s, जबकि बड़ा लोकल model अपना पहला token देने से पहले एक मिनट से ज़्यादा
-  सोच सकता है। दोनों को ढूँढकर बंद करना पड़ता है, और आमतौर पर तब, जब कोई जवाब बीच से कट चुका
-  होता है।
-- **ग़लत dialect वाले path पर nginx से होकर provider का अपना 404 आता है।** जिन रूपों को relay
-  पहचानता है — जैसे OpenAI upstream को भेजा गया Anthropic path — उनके लिए वह अपने शब्दों में 400
-  लौटाता है, ताकि वह ग़लती provider की कही बात न समझी जाए।
+  `proxy_read_timeout` 60s है, जबकि कोई बड़ा local model पहले token तक एक मिनट से ज़्यादा सोच
+  सकता है। दोनों को ढूँढकर बंद करना पड़ता है, आमतौर पर तब जब कोई उत्तर बीच से कट चुका होता है।
+- **गलत dialect का path nginx से होकर प्रोवाइडर का अपना 404 लौटाता है।** जिन रूपों को relay
+  पहचानता है, जैसे Anthropic का path OpenAI upstream को भेजा जाना, वहाँ वह अपने शब्दों में 400
+  देता है, ताकि गलती प्रोवाइडर की प्रतिक्रिया समझी न जाए।
 - **nginx न macOS के साथ आता है, न Windows के साथ।** `pip install` दोनों पर एक जैसा चलता है।
+- **किसी SDK को दस्तावेज़ में बताए तरीके से `auth_basic` की ओर नहीं मोड़ा जा सकता।** वह `Basic`
+  लेता है और बाकी सब मना कर देता है, जबकि हर SDK अपनी key `Authorization: Bearer` में रखता है।
+  URL में credentials सचमुच निकल जाते हैं, पर तब `api_key` बेकार वज़न बन जाता है: httpx URL के
+  credentials उसी header में लिख देता है और bearer कभी बाहर नहीं जाता। प्रोवाइडर के अपने
+  दस्तावेज़ का हर उदाहरण दोबारा लिखना पड़ता है।
 
-nginx जहाँ जीतता है: TLS, असली rate limiting, और पहले से इंस्टॉल होना। lmrelay के पास इन तीनों
-में से एक भी नहीं है, और होगा भी नहीं। ये दोनों मुक़ाबला नहीं करते, साथ बैठते हैं — TLS के लिए
-आगे nginx, tokens और providers यहाँ।
-
+जहाँ nginx जीतता है: TLS, असली rate limiting, और पहले से इंस्टॉल होना। lmrelay के पास इनमें से
+कोई नहीं है, और होगा भी नहीं। दोनों प्रतिस्पर्धा नहीं, मेल करते हैं। TLS के लिए nginx आगे रखिए,
+और tokens तथा providers यहाँ रहने दीजिए।
 ### लाइसेंस
 
 MIT License. देखें [LICENSE](../LICENSE)।

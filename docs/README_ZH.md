@@ -138,8 +138,8 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 | `lmrelay provider delete NAME` | 删除由 state 拥有的服务商 |
 
 `run`、`serve` 和 `restart` 接受 `--host` 和 `--port`。`provider add` 接受
-`--base-url`、`--dialect` 以及可重复的 `--header K=V`；如果名称是已知的那几个——
-`openai`、`anthropic`、`deepseek`、`grok`、`ollama`——base URL、方言和请求头形态都来自
+`--base-url`、`--dialect` 以及可重复的 `--header K=V`；如果名称是已知的那几个（
+`openai`、`anthropic`、`deepseek`、`grok`、`ollama`），base URL、方言和请求头形态都来自
 预设，所以 `lmrelay provider add openai sk-...` 就是完整的命令。凡是读取配置或 state
 的命令都接受 `--config PATH`，也就是除 `init` 和 `disable` 以外的全部命令；`init` 始终写入
 `~/.lmrelay/lmrelay.toml`，而 `disable` 两者都不读。
@@ -220,38 +220,37 @@ pytest
 
 测试套件大部分在进程内驱动应用，对接一个记录型上游，因此不需要网络，也不需要 Ollama。
 [`tests/test_streaming.py`](../tests/test_streaming.py) 是例外：它把中继跑在 uvicorn
-下，前面接一个每次只答一块的上游，因为它要验证的性质——调用方在上游写出最后一行之前
-就已拿到第一行——透过进程内客户端是看不见的。
+下，前面接一个每次只答一块的上游，因为它要验证的性质，即调用方在上游写出最后一行之前
+就已拿到第一行，透过进程内客户端是看不见的。
 
 ### 为什么不用 nginx？
 
-nginx 本来就会做反向代理，所以一个守护进程得先证明自己值得存在。简短地逐条说：
+nginx 本来就能做反向代理，所以一个守护进程得证明自己值得存在。简要地，逐条来说：
 
-- **Authorization 请求头已经有主了，决定性的正是这一点。** 每个客户端要么发
-  `Authorization: Bearer <key>`（OpenAI SDK，以及上面那些 curl 例子），要么发
-  `x-api-key`（Anthropic SDK）；而 nginx 的 `auth_basic` 要用同一个请求头去携带
-  `Basic <base64>`，其余一律拒绝。一个请求头，两个主人。把凭据放进 URL 确实能过去，但
-  httpx 会把它写进同一个请求头：用 OpenAI SDK 的调用方于是以 `Basic` 抵达，本来要发的
-  bearer 已经被顶掉了。
-- **在 nginx 里校验令牌，就等于把令牌放进 `nginx.conf`。** 一个 `map` 加一个 `internal`
-  location 不需要后端就能判断，但这样每个令牌都是 root 所有的 `0644` 文件里的一行明文，
-  增加或吊销一个都要改配置再 reload。
-- **服务商的密钥会落进 `nginx.conf` 里。** 每个服务商一个 `location`，加一条
-  `proxy_set_header Authorization "Bearer sk-..."`，上游走 TLS 时还得再加
-  `proxy_ssl_server_name on`。在这里则是一条命令，密钥待在一个 `0600` 的文件里。
-- **`htpasswd` 没有 id，也没有轮换。** `lmrelay token gen --label laptop`、
-  `token list` 和 `token delete 1` 都有。
-- **nginx 的默认值会弄坏流式输出。** `proxy_buffering` 是开着的，`proxy_read_timeout`
-  是 60 秒，而一个大的本地模型在吐出第一个 token 之前，可能要想上不止一分钟。这两项都得
-  先找出来再关掉，而通常是在一段回答已经被拦腰截断之后才想起来。
-- **方言不对的路径，经由 nginx 拿到的是服务商自己的 404。** 对于中继认得出的那些形态——
-  比如把 Anthropic 的路径发给 OpenAI 上游——它会用自己的话回 400，这样这个错就不会被
-  误读成服务商说的。
-- **nginx 既不随 macOS 附带，也不随 Windows 附带。** `pip install` 在两边都一样能用。
+- **服务商密钥最终会写进 `nginx.conf`。** 每家一个 `location` 和一行
+  `proxy_set_header Authorization "Bearer sk-..."`，上游走 TLS 时还要加
+  `proxy_ssl_server_name on`。在这里只要一条命令，而密钥放在 `0600` 的文件里，
+  而不是 root 所有的 `0644` 文件里。
+- **在 nginx 里校验调用方的 token，会把 token 也塞进 `nginx.conf`。** 用 `map` 加一个
+  `internal` 的 `location` 确实不需要后端，但每个 token 都会变成那个 root 文件里的一行明文，
+  新增或吊销都得改文件再 reload。
+- **`htpasswd` 没有 id，也没有轮换。** `lmrelay token gen --label laptop`、`token list`
+  和 `token delete 1` 有。
+- **nginx 的默认值会破坏流式输出。** `proxy_buffering` 是开的，`proxy_read_timeout` 是 60s，
+  而一个大的本地模型在吐出第一个 token 之前可能要想上一分钟以上。这两项都得找出来关掉，
+  通常是在一次回答被拦腰截断之后。
+- **走错方言的路径经由 nginx 拿到的是服务商自己的 404。** 对于它能识别的形态，
+  比如把 Anthropic 的路径发给 OpenAI 上游，中继会用自己的话回 400，
+  这样这个错误就不会被当成服务商的回应。
+- **macOS 和 Windows 都不自带 nginx。** `pip install` 在两者上都一样能用。
+- **无法按文档的方式把 SDK 指向 `auth_basic`。** 它只接受 `Basic`，其他一律拒绝，
+  而每个 SDK 都把密钥放进 `Authorization: Bearer`。把凭据放进 URL 确实能过，
+  但那时 `api_key` 就成了废字段：httpx 会把 URL 里的凭据写进同一个头，bearer 根本发不出去。
+  服务商文档里的每个示例都得重写。
 
-nginx 胜出的地方：TLS、真正的限流，以及本来就已经装好了。这三样 lmrelay 一样都没有，
-也不打算有。两者是搭配而不是竞争——nginx 在前面负责 TLS，令牌和服务商在这里。
-
+nginx 胜出的地方：TLS、真正的限流，以及它已经装好了。这三样 lmrelay 都没有，
+将来也不会有。两者是搭配关系，而不是竞争关系。把 nginx 放在前面做 TLS，
+token 和服务商留在这里。
 ### 许可证
 
 MIT License。见 [LICENSE](../LICENSE)。

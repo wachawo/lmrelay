@@ -51,7 +51,7 @@ def isolated_home(tmp_path, monkeypatch):
 
     A machine that has ever run `lmrelay token gen` would otherwise hand a test
     real tokens and a real auth switch through $LMRELAY_STATE, and anything that
-    resolves `~` at call time — `lmrelay init` above all — would write there.
+    resolves `~` at call time, `lmrelay init` above all, would write there.
     """
     monkeypatch.delenv(STATE_ENV_VAR, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -113,7 +113,7 @@ class Recorder:
         recorder = self
         # Always a generator, never bytes. A Response built from bytes is
         # already read, and the relay asks for `aiter_raw()` on a response it
-        # opened with stream=True — which a real upstream leaves unread. Handing
+        # opened with stream=True, which a real upstream leaves unread. Handing
         # back a consumed one would fail here for a reason no caller can meet.
         chunks = self.chunks if self.chunks is not None else [self.body]
 

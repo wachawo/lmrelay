@@ -38,7 +38,7 @@ def config_where(name: str, value: str) -> str:
 
     Spelled once here because the template's columns are aligned: a test that
     hard-codes that spacing breaks on a change to a config it does not care
-    about. A key the template omits — log_level — is added rather than replaced.
+    about. A key the template omits, log_level, is added rather than replaced.
     """
     body = CONFIG_TEMPLATE.format(token=TOKEN)
     setting = f"{name} = {value}"
@@ -54,7 +54,7 @@ class TestTheDoor:
     def test_a_request_with_no_credential_is_refused(self, relay, recorder):
         response = relay.post("/api/chat", json={})
         assert response.status_code == 401
-        # And nothing reached the upstream — a 401 that still forwarded would
+        # And nothing reached the upstream: a 401 that still forwarded would
         # spend the provider's quota on a caller who was turned away.
         assert recorder.requests == []
 
@@ -89,7 +89,7 @@ class TestTheDoor:
 
     @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
     def test_health_is_exempt_by_method_as_well_as_by_path(self, relay, recorder, method):
-        """The health route answers GET only — FastAPI does not add HEAD — so
+        """The health route answers GET only, and FastAPI does not add HEAD, so
         every other method on /healthz falls through to the catch-all relay.
         Exempting the path alone would let an anonymous caller reach the default
         upstream with the operator's provider credential attached, choosing the
@@ -121,7 +121,7 @@ class TestAnOpenRelay:
 
 
 class TestATokenNobodyIsChecking:
-    """A valid token in state.json with the switch off — an operator who ran
+    """A valid token in state.json with the switch off, from an operator who ran
     `lmrelay token gen` and never ran `lmrelay auth true`. The switch is what
     decides, not whether tokens exist, so the relay is open either way. Half of
     it would be worse than both: a relay that honoured the token and refused
@@ -144,7 +144,7 @@ class TestATokenNobodyIsChecking:
         assert response.status_code == 200
         # And the genuine relay-issued credential is stripped like any other.
         # Nothing read it on the way in, which is exactly how it could have been
-        # forwarded — handing a provider a working lmrelay token.
+        # forwarded, handing a provider a working lmrelay token.
         assert "authorization" not in recorder.last.headers
 
     def test_and_a_caller_presenting_nothing_gets_through_too(self, unchecked):
@@ -178,7 +178,7 @@ class TestWhatTheUpstreamReceives:
 
     def test_the_callers_credential_is_stripped(self, authed, recorder):
         """The property this whole relay exists to hold: a caller's token
-        authenticates them HERE and is meaningless — and dangerous — onward."""
+        authenticates them HERE and is meaningless, and dangerous, onward."""
         authed.post("/api/chat", json={})
         assert "authorization" not in recorder.last.headers
 
@@ -328,7 +328,7 @@ class TestWhenTheUpstreamIsNotThere:
         breaks afterwards has no status left to be reported in: the iterator
         raises, the relay's 500 handler cannot send a response that has already
         started, and the exception leaves the app. Recorded rather than endorsed
-        — nothing better is available once the 200 is gone."""
+        Nothing better is available once the 200 is gone."""
         recorder.chunks = fails_after_the_first_chunk()
         with pytest.raises(httpx.ReadError):
             authed.post("/api/generate", json={"stream": True})
@@ -375,7 +375,7 @@ class TestStartup:
     def test_but_it_does_not_clear_one_another_relay_has_claimed(self, tmp_path, monkeypatch):
         """uvicorn runs the shutdown half of the lifespan when the bind fails
         too, so a relay that never served would otherwise delete the pidfile of
-        the live relay that beat it to the port — leaving a running relay that
+        the live relay that beat it to the port, leaving a running relay that
         `status` calls stopped and `stop` cannot find."""
         from lmrelay.app import app
 
@@ -397,8 +397,8 @@ class TestReloadingInPlace:
     def logging_restored(self):
         """Put the root logger back afterwards.
 
-        setup_logging reconfigures it for the whole process — that is the point
-        of the setting — so a test that moves the level would otherwise hand the
+        setup_logging reconfigures it for the whole process, which is the point
+        of the setting, so a test that moves the level would otherwise hand the
         next one a logger it never asked for.
         """
         root = logging.getLogger()
@@ -571,7 +571,7 @@ class TestReloadingARelayAnyoneCanReach:
         write_state(tmp_path, auth_enabled=False, tokens=(TOKEN,))
         with caplog.at_level(logging.WARNING):
             reload_config(app)
-        assert "every caller that can reach this port" in caplog.text
+        assert "caller that can reach this port" in caplog.text
 
     def test_and_editing_the_host_back_does_not_quiet_it(self, public_relay, tmp_path, caplog):
         """Asked about the host the socket is on, not the one now in the file:
@@ -583,4 +583,4 @@ class TestReloadingARelayAnyoneCanReach:
         write_state(tmp_path, auth_enabled=False, tokens=(TOKEN,))
         with caplog.at_level(logging.WARNING):
             reload_config(app)
-        assert "every caller that can reach this port" in caplog.text
+        assert "caller that can reach this port" in caplog.text

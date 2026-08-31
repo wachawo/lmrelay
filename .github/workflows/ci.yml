@@ -28,7 +28,7 @@ jobs:
       #
       # The series bound is deliberate: an unpinned linter turns a new rule in
       # someone else's release into a red build on a commit that changed
-      # nothing. It has to be the 0.14 series and not `<1` — ruff is pre-1.0
+      # nothing. It has to be the 0.14 series and not `<1`: ruff is pre-1.0
       # and has never shipped a 1.x, so `<1` excludes nothing at all and lets
       # in exactly the minor bumps that carry the new rules.
       - name: Install
@@ -54,7 +54,7 @@ jobs:
         # reach detect_manager's darwin branch on ubuntu by faking sys.platform,
         # and reach the launchd registration on neither OS, because every
         # enable/disable/status test replaces detect_manager with a lambda. It
-        # is here for what cannot be faked — a real fork, real sockets and a
+        # is here for what cannot be faked: a real fork, real sockets and a
         # real uvicorn on the other OS the classifiers promise.
         include:
           - os: macos-latest

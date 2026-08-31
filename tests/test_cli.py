@@ -146,7 +146,7 @@ class TestTurningAuthOn:
 
     def test_a_token_in_the_config_file_counts_as_a_token(self, config_path):
         """[auth] token is a valid credential, so auth on with one configured
-        does not 401 everybody — and load_config warns about exactly this setup
+        does not 401 everybody, and load_config warns about exactly this setup
         by telling the operator to run the command that used to refuse it."""
         config_path.write_text(CONFIG_BODY + '\n[auth]\ntoken = "from-the-toml"\n', encoding="utf-8")
         run_command(["auth", "true", "--config", str(config_path)])

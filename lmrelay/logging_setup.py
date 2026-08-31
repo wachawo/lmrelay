@@ -7,7 +7,7 @@ import logging
 LOG_FORMAT  = "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s) %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-# Command output that is data — a status block, a token table — is a table only
+# Command output that is data (a status block, a token table) is a table only
 # without a timestamp and a logger name in front of every row.
 PLAIN_FORMAT = "%(message)s"
 

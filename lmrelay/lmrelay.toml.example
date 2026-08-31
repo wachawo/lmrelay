@@ -60,7 +60,7 @@ dialect  = "ollama"
 # headers  = { Authorization = "Bearer ${OPENAI_API_KEY}" }
 
 # Anthropic. Wants x-api-key plus a dated version header, and speaks its
-# own dialect on /v1/messages — not /v1/chat/completions.
+# own dialect on /v1/messages, not /v1/chat/completions.
 # [upstream.anthropic]
 # base_url = "https://api.anthropic.com"
 # dialect  = "anthropic"

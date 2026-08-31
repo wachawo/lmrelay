@@ -4,8 +4,8 @@
 
 The relay's reason for being a StreamingResponse is that a caller sees the
 first token while the model is still writing the rest. That cannot be measured
-through an in-process test client — it drives the app through a portal that
-settles the response before handing it back — so this module runs the relay
+through an in-process test client, which drives the app through a portal that
+settles the response before handing it back, so this module runs the relay
 under uvicorn against an upstream that answers slowly, and reads it with an
 ordinary HTTP client.
 """
@@ -117,7 +117,7 @@ def test_the_first_chunk_arrives_before_the_upstream_has_written_the_last(relay_
 
     The upstream holds for CHUNK_DELAY between chunks, so a relay that read the
     answer whole before sending could not deliver line one until every line
-    existed — which is the arithmetic the assertion rests on.
+    existed, which is the arithmetic the assertion rests on.
     """
     started = time.monotonic()
     with (

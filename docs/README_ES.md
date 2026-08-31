@@ -147,8 +147,8 @@ segundo plano.
 | `lmrelay provider delete NAME` | elimina un proveedor que pertenece al estado |
 
 `run`, `serve` y `restart` aceptan `--host` y `--port`. `provider add` acepta `--base-url`,
-`--dialect` y un `--header K=V` repetible; con un nombre conocido —`openai`, `anthropic`,
-`deepseek`, `grok`, `ollama`— la URL base, el dialecto y la forma de las cabeceras salen de un
+`--dialect` y un `--header K=V` repetible; con un nombre conocido (`openai`, `anthropic`,
+`deepseek`, `grok`, `ollama`) la URL base, el dialecto y la forma de las cabeceras salen de un
 preajuste, así que `lmrelay provider add openai sk-...` es el comando entero. `--config PATH`
 lo acepta todo comando que lee la configuración o el estado, es decir, todos menos `init`, que
 siempre escribe `~/.lmrelay/lmrelay.toml`, y `disable`, que no lee ninguno de los dos.
@@ -205,7 +205,7 @@ no traduce entre dialectos de API.
 
 ¹ Ollama expone una superficie compatible con OpenAI en `/v1/*` junto a su `/api/*` nativo.
 Esta es la casilla que importa en la práctica: un cliente con forma de OpenAI llega a **todos**
-—ollama, openai, deepseek y grok— cambiando solo el prefijo de la ruta.
+(ollama, openai, deepseek y grok) cambiando solo el prefijo de la ruta.
 
 Los cuatro casos que no funcionan, y la razón por la que ninguno puede hacerse funcionar, están
 en el documento de configuración.
@@ -236,43 +236,42 @@ La mayor parte de la suite ejecuta la aplicación en el mismo proceso contra un 
 graba lo que recibe, así que no necesita red ni Ollama.
 [`tests/test_streaming.py`](../tests/test_streaming.py) es la excepción: levanta el relay bajo
 uvicorn delante de un upstream que responde un fragmento cada vez, porque la propiedad que
-comprueba —que quien llama tiene la primera línea antes de que el upstream haya escrito la
-última— no se puede observar a través de un cliente en el mismo proceso.
+comprueba, que quien llama tiene la primera línea antes de que el upstream haya escrito la
+última, no se puede observar a través de un cliente en el mismo proceso.
 
 ### ¿Por qué no nginx?
 
-nginx ya hace de reverse proxy, así que un demonio tiene que ganarse el sitio. En corto, punto
+nginx ya hace de reverse proxy, así que un demonio tiene que ganarse su sitio. En breve, punto
 por punto:
 
-- **La cabecera Authorization ya está ocupada, y eso es lo que lo decide.** Todo cliente
-  envía `Authorization: Bearer <key>` (el SDK de OpenAI, los ejemplos de curl de arriba) o
-  `x-api-key` (el SDK de Anthropic); el `auth_basic` de nginx necesita esa misma cabecera para
-  llevar `Basic <base64>`, y rechaza todo lo demás. Una cabecera, dos dueños. Las credenciales
-  en la URL sí pasan, pero httpx las escribe en esa misma cabecera: un cliente con el SDK de
-  OpenAI llega entonces como `Basic`, habiendo reemplazado el bearer que pretendía enviar.
-- **Comprobar un token en nginx mete los tokens en `nginx.conf`.** Un `map` y un location
-  `internal` lo hacen sin backend, pero cada token queda como una línea en texto plano en un
-  archivo `0644` propiedad de root, y añadir o revocar uno cuesta una edición y un reload.
-- **Las claves de los proveedores terminan dentro de `nginx.conf`.** Un `location` y un
+- **Las claves de los proveedores acaban dentro de `nginx.conf`.** Un `location` y un
   `proxy_set_header Authorization "Bearer sk-..."` por cada uno, más
-  `proxy_ssl_server_name on` cuando el upstream habla TLS. Aquí es un solo comando, y la clave
-  vive en un archivo `0600`.
-- **`htpasswd` no tiene ids ni rotación.** `lmrelay token gen --label laptop`,
-  `token list` y `token delete 1` sí.
-- **Los valores por defecto de nginx rompen el streaming.** `proxy_buffering` viene activado y
-  `proxy_read_timeout` son 60s, y un modelo local grande puede pensar más de un minuto antes de
-  su primer token. Hay que dar con los dos y desactivarlos, normalmente después de que una
-  respuesta se haya cortado por la mitad.
-- **Una ruta del dialecto equivocado recibe, a través de nginx, el 404 del propio proveedor.**
-  Para las formas que reconoce — una ruta de Anthropic enviada a un upstream de OpenAI, por
-  ejemplo —, el relay responde 400 con sus propias palabras, así que el error no se lee como
-  si fuera del proveedor.
+  `proxy_ssl_server_name on` cuando el upstream habla TLS. Aquí es un solo comando, y la
+  clave vive en un archivo `0600` en lugar de en uno `0644` propiedad de root.
+- **Comprobar el token de un cliente en nginx mete también los tokens en `nginx.conf`.** Un
+  `map` y un `location` `internal` lo hacen sin backend, pero cada token pasa a ser una línea
+  en texto plano en ese mismo archivo de root, y añadir o revocar uno exige editarlo y
+  recargar.
+- **`htpasswd` no tiene ids ni rotación.** `lmrelay token gen --label laptop`, `token list` y
+  `token delete 1` sí.
+- **Los valores por defecto de nginx rompen el streaming.** `proxy_buffering` está activado y
+  `proxy_read_timeout` es de 60s, y un modelo local grande puede pensar más de un minuto
+  antes de su primer token. Hay que encontrar ambos y desactivarlos, normalmente después de
+  que una respuesta se haya cortado por la mitad.
+- **Una ruta del dialecto equivocado devuelve el 404 del propio proveedor a través de
+  nginx.** Para las formas que reconoce, como una ruta de Anthropic enviada a un upstream de
+  OpenAI, el relay responde 400 con sus propias palabras, así que el error no se confunde con
+  el del proveedor.
 - **nginx no viene ni con macOS ni con Windows.** `pip install` funciona igual en ambos.
+- **Un SDK no se puede apuntar a `auth_basic` de la forma documentada.** Acepta `Basic` y
+  rechaza todo lo demás, mientras que cada SDK pone su clave en `Authorization: Bearer`. Las
+  credenciales en la URL sí pasan, pero entonces `api_key` sobra: httpx escribe las
+  credenciales de la URL en esa misma cabecera y el bearer nunca sale. Cada ejemplo de la
+  documentación del proveedor hay que reescribirlo.
 
-Donde gana nginx: TLS, límites de tasa de verdad y estar ya instalado. lmrelay no tiene ninguna
-de las tres cosas, ni las va a tener. Los dos se componen en vez de competir: nginx delante para
-el TLS, y los tokens y los proveedores aquí.
-
+Donde nginx gana: TLS, limitación de tasa de verdad, y estar ya instalado. lmrelay no tiene
+ninguna de las tres, y no las va a tener. Los dos se componen en lugar de competir. Pon nginx
+delante para TLS, y deja aquí los tokens y los proveedores.
 ### Licencia
 
 Licencia MIT. Véase [LICENSE](../LICENSE).

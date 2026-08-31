@@ -96,7 +96,7 @@ class TestTheSystemdUnit:
 
     def test_it_tells_the_process_it_is_the_unit(self, tmp_path):
         """Type=simple marks the unit active the moment systemd forks it, so
-        the ExecStart — which is `lmrelay run` — would find its own unit running
+        the ExecStart, which is `lmrelay run`, would find its own unit running
         and refuse the port to itself. Without this the unit never serves a
         request: it fails, is restarted, and reaches the start limit."""
         assert self.parsed(tmp_path)["Service"]["Environment"] == f"{SERVICE_ENV_VAR}=1"

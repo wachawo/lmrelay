@@ -148,10 +148,10 @@ können, wem der Prozess gehört. Auf einem POSIX-System ohne beide Manager star
 | `lmrelay provider delete NAME` | einen Anbieter entfernen, der dem State gehört |
 
 `run`, `serve` und `restart` nehmen `--host` und `--port`. `provider add` nimmt `--base-url`,
-`--dialect` und ein wiederholbares `--header K=V`; bei einem bekannten Namen — `openai`,
-`anthropic`, `deepseek`, `grok`, `ollama` — stammen Basis-URL, Dialekt und Header-Form aus
+`--dialect` und ein wiederholbares `--header K=V`; bei einem bekannten Namen (`openai`,
+`anthropic`, `deepseek`, `grok`, `ollama`) stammen Basis-URL, Dialekt und Header-Form aus
 einem Preset, sodass `lmrelay provider add openai sk-...` der ganze Befehl ist.
-`--config PATH` nimmt jeder Befehl an, der die Konfiguration oder den State liest — also
+`--config PATH` nimmt jeder Befehl an, der die Konfiguration oder den State liest, also
 jeder Befehl außer `init`, das immer `~/.lmrelay/lmrelay.toml` schreibt, und `disable`, das
 weder das eine noch das andere liest.
 
@@ -207,7 +207,7 @@ lmrelay leitet Methode, Pfad, Query-String und Body-Bytes **unverändert** weite
 
 ¹ Ollama stellt neben seinem nativen `/api/*` eine OpenAI-kompatible Oberfläche unter `/v1/*`
 bereit. Das ist die praktisch wichtige Zelle: Ein Client im OpenAI-Format erreicht **alle**
-— ollama, openai, deepseek und grok — allein über ein anderes Pfadpräfix.
+(ollama, openai, deepseek und grok) allein über ein anderes Pfadpräfix.
 
 Die vier Fälle, die nicht funktionieren, und der Grund, warum sich keiner davon zum
 Funktionieren bringen lässt, stehen im Konfigurationsdokument.
@@ -238,44 +238,43 @@ Der größte Teil der Suite treibt die Anwendung im selben Prozess gegen einen a
 Upstream und braucht daher weder Netzwerk noch Ollama.
 [`tests/test_streaming.py`](../tests/test_streaming.py) ist die Ausnahme: Dort läuft das Relay
 unter uvicorn vor einem Upstream, der Chunk für Chunk antwortet, denn die geprüfte
-Eigenschaft — dass der Aufrufer die erste Zeile hat, bevor der Upstream die letzte
-geschrieben hat — ist durch einen In-Process-Client nicht zu sehen.
+Eigenschaft, dass der Aufrufer die erste Zeile hat, bevor der Upstream die letzte
+geschrieben hat, ist durch einen In-Process-Client nicht zu sehen.
 
 ### Warum nicht nginx?
 
-nginx macht Reverse-Proxying längst, ein eigener Daemon muss sich seinen Platz also
-verdienen. Kurz, Punkt für Punkt:
+nginx macht bereits Reverse Proxy, also muss sich ein Daemon seinen Platz verdienen. Kurz,
+Punkt für Punkt:
 
-- **Der Authorization-Header ist schon vergeben, und daran entscheidet es sich.** Jeder
-  Client schickt `Authorization: Bearer <key>` (das OpenAI-SDK, die curl-Beispiele oben) oder
-  `x-api-key` (das Anthropic-SDK); das `auth_basic` von nginx braucht genau denselben Header,
-  um `Basic <base64>` zu tragen, und weist alles andere ab. Ein Header, zwei Besitzer.
-  Zugangsdaten in der URL kommen zwar durch, aber httpx schreibt sie in genau diesen Header:
-  ein Aufrufer mit dem OpenAI-SDK kommt dann als `Basic` an und hat den Bearer ersetzt, den
-  er eigentlich schicken wollte.
-- **Ein Token in nginx zu prüfen heißt, die Tokens in die `nginx.conf` zu legen.** Ein `map`
-  und ein `internal`-location schaffen das ohne Backend, aber jedes Token ist dann eine
-  Klartextzeile in einer root-eigenen `0644`-Datei, und eines hinzuzufügen oder zu widerrufen
-  kostet eine Änderung und ein Reload.
-- **Anbieter-Schlüssel landen in der `nginx.conf`.** Für jeden ein `location` und ein
-  `proxy_set_header Authorization "Bearer sk-..."`, dazu `proxy_ssl_server_name on`, wenn der
-  Upstream TLS spricht. Hier ist es ein einziger Befehl, und der Schlüssel liegt in einer
-  `0600`-Datei.
-- **`htpasswd` kennt weder IDs noch Rotation.** `lmrelay token gen --label laptop`,
-  `token list` und `token delete 1` schon.
-- **Die Voreinstellungen von nginx machen Streaming kaputt.** `proxy_buffering` ist an und
+- **Provider-Schlüssel landen in `nginx.conf`.** Ein `location` und ein
+  `proxy_set_header Authorization "Bearer sk-..."` je Provider, dazu
+  `proxy_ssl_server_name on`, wenn der Upstream TLS spricht. Hier ist es ein Befehl, und der
+  Schlüssel liegt in einer `0600`-Datei statt in einer `0644`-Datei, die root gehört.
+- **Ein Aufrufer-Token in nginx zu prüfen legt die Token ebenfalls in `nginx.conf`.** Ein
+  `map` und ein `internal` `location` erledigen das ohne Backend, aber jedes Token wird dann
+  zu einer Klartextzeile in derselben root-Datei, und eines hinzuzufügen oder zurückzuziehen
+  kostet eine Bearbeitung und ein Reload.
+- **`htpasswd` hat weder Ids noch Rotation.** `lmrelay token gen --label laptop`,
+  `token list` und `token delete 1` haben beides.
+- **nginx' Voreinstellungen brechen das Streaming.** `proxy_buffering` ist an und
   `proxy_read_timeout` steht auf 60s, und ein großes lokales Modell kann länger als eine
-  Minute nachdenken, bevor sein erstes Token kommt. Beides muss man erst finden und
-  abschalten, meist erst nachdem eine Antwort schon mittendrin abgeschnitten wurde.
-- **Ein Pfad im falschen Dialekt bekommt durch nginx den 404 des Anbieters.** Für die
-  Formen, die es erkennt — etwa ein Anthropic-Pfad an einen OpenAI-Upstream —, antwortet das
-  Relay mit 400 in eigenen Worten, damit der Irrtum nicht dem Anbieter zugeschrieben wird.
+  Minute bis zum ersten Token denken. Beide müssen gefunden und abgeschaltet werden, meist
+  nachdem eine Antwort schon in der Mitte abgeschnitten wurde.
+- **Ein Pfad im falschen Dialekt bekommt durch nginx den 404 des Providers selbst.** Für die
+  Formen, die er erkennt, etwa einen Anthropic-Pfad an einen OpenAI-Upstream, antwortet der
+  Relay mit 400 in eigenen Worten, sodass der Fehler nicht für den des Providers gehalten
+  wird.
 - **nginx liegt weder macOS noch Windows bei.** `pip install` funktioniert auf beiden gleich.
+- **Ein SDK lässt sich nicht auf dem dokumentierten Weg auf `auth_basic` richten.** Es
+  akzeptiert `Basic` und weist alles andere ab, während jedes SDK seinen Schlüssel in
+  `Authorization: Bearer` setzt. Zugangsdaten in der URL kommen zwar durch, aber dann ist
+  `api_key` totes Gewicht: httpx schreibt die Zugangsdaten der URL in denselben Header, und
+  der Bearer verlässt den Prozess nie. Jedes Beispiel aus der Provider-Dokumentation muss
+  umgeschrieben werden.
 
-Wo nginx gewinnt: TLS, echtes Rate Limiting, und dass es ohnehin schon installiert ist.
-lmrelay hat nichts von den dreien und wird es auch nicht bekommen. Die beiden ergänzen sich,
-statt zu konkurrieren — nginx davor für TLS, Tokens und Anbieter hier.
-
+Wo nginx gewinnt: TLS, echtes Rate Limiting, und bereits installiert zu sein. lmrelay hat
+nichts davon und wird es auch nicht bekommen. Die beiden ergänzen sich, statt zu konkurrieren.
+Stell nginx für TLS davor, und lass Token und Provider hier.
 ### Lizenz
 
 MIT License. Siehe [LICENSE](../LICENSE).

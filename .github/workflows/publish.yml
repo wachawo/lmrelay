@@ -27,7 +27,7 @@ jobs:
           python -m build
 
       # Catches a description PyPI would reject and a wheel missing the files
-      # the package needs — lmrelay.toml.example among them, which `lmrelay
+      # the package needs, lmrelay.toml.example among them, which `lmrelay
       # init` reads out of the installed package.
       - name: Check the artefacts
         run: |

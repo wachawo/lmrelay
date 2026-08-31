@@ -129,7 +129,7 @@ def load_state(path: Path) -> RelayState:
     if not isinstance(version, int) or version > STATE_VERSION:
         raise StateError(
             f"lmrelay: {path} has state version {version}; this lmrelay understands "
-            f"{STATE_VERSION}. It was written by a newer lmrelay — upgrade or move the file."
+            f"{STATE_VERSION}. It was written by a newer lmrelay: upgrade or move the file."
         )
 
     providers = data.get("providers") or {}
@@ -172,7 +172,7 @@ def save_state(state: RelayState) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         # mkstemp rather than write_text plus chmod, for two reasons. It creates
-        # the file at 0600, so the tokens are never on disk world-readable — a
+        # the file at 0600, so the tokens are never on disk world-readable. A
         # chmod after the write leaves them so for as long as the two calls are
         # apart, and forever if the process dies in between. And it names the
         # file uniquely, so two concurrent saves cannot write into one another's
@@ -247,7 +247,7 @@ def merge_headers(preset: dict[str, str], extra: dict[str, str]) -> dict[str, st
     """Lay extra headers over the preset ones, matching names case-insensitively.
 
     A plain dict update would keep both `Authorization` and `authorization`, and
-    the request would carry two of them — an operator who typed the lowercase
+    the request would carry two of them, and an operator who typed the lowercase
     one to replace a preset's key would still be shipping the old key, and which
     one the provider honours would be the provider's choice.
     """
@@ -275,7 +275,7 @@ def add_provider(
     """
     if name in RESERVED_UPSTREAM_NAMES:
         raise StateError(
-            f"lmrelay: provider name '{name}' is reserved — it would shadow the "
+            f"lmrelay: provider name '{name}' is reserved: it would shadow the "
             f"Ollama/OpenAI path root"
         )
     preset = PROVIDER_PRESETS.get(name, {})

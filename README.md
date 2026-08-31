@@ -20,7 +20,7 @@ and, when you want it to, requires a credential for access.
 ### Requirements
 
 - Python 3.11 or higher, and four dependencies: FastAPI, starlette, uvicorn and httpx.
-- Linux and macOS run every command, including `serve` (detached) and `enable` — a systemd
+- Linux and macOS run every command, including `serve` (detached) and `enable`: a systemd
   `--user` unit on Linux, a launchd agent on macOS, and a refusal where neither is installed.
 - Windows runs `run` only. `serve` reports that the platform has no `os.fork`, and `enable`
   that there is no systemd or launchd, rather than half-starting.
@@ -143,10 +143,10 @@ manager, `lmrelay serve` runs the relay detached.
 | `lmrelay provider delete NAME` | remove a provider that state owns |
 
 `run`, `serve` and `restart` take `--host` and `--port`. `provider add` takes `--base-url`,
-`--dialect` and a repeatable `--header K=V`; with a known name — `openai`, `anthropic`,
-`deepseek`, `grok`, `ollama` — the base URL, dialect and header shape come from a preset,
+`--dialect` and a repeatable `--header K=V`; with a known name (`openai`, `anthropic`,
+`deepseek`, `grok`, `ollama`) the base URL, dialect and header shape come from a preset,
 so `lmrelay provider add openai sk-...` is the whole command. `--config PATH` is accepted by
-every command that reads the config or the state — that is, every command except `init`,
+every command that reads the config or the state, which is every command except `init`,
 which always writes `~/.lmrelay/lmrelay.toml`, and `disable`, which reads neither.
 
 ### Choosing an upstream
@@ -230,39 +230,38 @@ pytest
 Most of the suite drives the app in process against a recording upstream, so it needs no
 network and no Ollama. [`tests/test_streaming.py`](tests/test_streaming.py) is the
 exception: it runs the relay under uvicorn in front of an upstream that answers a chunk at a
-time, because the property it checks — that the caller has the first line before the
-upstream has written the last — cannot be seen through an in-process client.
+time, because the property it checks, that the caller has the first line before the
+upstream has written the last, cannot be seen through an in-process client.
 
 ### Why not nginx?
 
 nginx already reverse-proxies, so a daemon has to earn its place. Briefly, point by point:
 
-- **The Authorization header is already taken, and that is what decides it.** Every client
-  sends `Authorization: Bearer <key>` (the OpenAI SDK, the curl examples above) or
-  `x-api-key` (the Anthropic SDK); nginx's `auth_basic` needs that same header to carry
-  `Basic <base64>`, and refuses everything else. One header, two owners. Credentials in the
-  URL do get past it, but httpx writes them into that same header: an OpenAI-SDK caller then
-  arrives as `Basic`, having replaced the bearer it meant to send.
-- **Checking a token in nginx puts the tokens in `nginx.conf`.** A `map` and an `internal`
-  location do it without a backend, but each token is then a plaintext line in a root-owned
-  `0644` file, and adding or revoking one takes an edit and a reload.
 - **Provider keys end up inside `nginx.conf`.** A `location` and a
   `proxy_set_header Authorization "Bearer sk-..."` for each one, plus
   `proxy_ssl_server_name on` when the upstream speaks TLS. Here it is one command, and the
-  key lives in a `0600` file.
+  key lives in a `0600` file rather than in a root-owned `0644` one.
+- **Checking a caller's token in nginx puts the tokens in `nginx.conf` too.** A `map` and an
+  `internal` location do it without a backend, but each token becomes a plaintext line in
+  that same root-owned file, and adding or revoking one takes an edit and a reload.
 - **`htpasswd` has no ids or rotation.** `lmrelay token gen --label laptop`, `token list`
   and `token delete 1` do.
 - **nginx's defaults break streaming.** `proxy_buffering` is on and `proxy_read_timeout` is
   60s, and a large local model can think for longer than a minute before its first token.
   Both have to be found and turned off, usually after an answer has been cut in half.
 - **A wrong-dialect path gets the provider's own 404 through nginx.** For the shapes it
-  recognises — an Anthropic path sent to an OpenAI upstream, say — the relay answers 400 in
+  recognises, such as an Anthropic path sent to an OpenAI upstream, the relay answers 400 in
   its own words, so the mistake is not misread as the provider's.
 - **nginx ships with neither macOS nor Windows.** `pip install` works the same on both.
+- **An SDK cannot be pointed at `auth_basic` the documented way.** It accepts `Basic` and
+  refuses everything else, while every SDK puts its key in `Authorization: Bearer`.
+  Credentials in the URL do get through, but then `api_key` is dead weight: httpx writes the
+  URL's credentials into that same header and the bearer never leaves. Every example in the
+  provider's own documentation has to be rewritten.
 
 Where nginx wins: TLS, real rate limiting, and already being installed. lmrelay has none of
-the three, and is not going to. The two compose rather than compete — nginx in front for
-TLS, tokens and providers here.
+the three, and is not going to. The two compose rather than compete. Put nginx in front for
+TLS, and leave tokens and providers here.
 
 ### License
 
