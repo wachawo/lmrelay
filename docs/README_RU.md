@@ -6,12 +6,14 @@
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-У Ollama нет никакой аутентификации, поэтому она отвечает на loopback и там же остаётся.
-Чтобы дотянуться до неё с другой машины, до сих пор приходилось ставить перед ней nginx и
-поддерживать его в живых. lmrelay — это та же самая работа, оформленная как демон, который
-ставится через pip: слушает 11435 рядом с Ollama, требует учётные данные от обращающихся к
-нему клиентов и — раз уж он всё равно стоит на пути — выходит на OpenAI, Anthropic,
-DeepSeek или Grok через один добавленный в начало пути сегмент.
+Если вы работаете с **Ollama**, то сталкиваетесь с тем, что по умолчанию она доступна
+только с localhost и не имеет встроенной аутентификации.
+
+Если нужно подключаться к Ollama с другой машины, обычно приходится менять
+systemd-конфигурацию или ставить перед ней reverse proxy.
+
+**lmrelay** решает эту задачу. Он устанавливается через `pip` и запускается как демон рядом
+с Ollama: слушает отдельный порт и, при необходимости, требует учётные данные для доступа.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | **[Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md)** | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 

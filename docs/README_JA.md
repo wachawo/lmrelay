@@ -6,11 +6,14 @@
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-Ollama には認証が一切ない。だから loopback で応答し、そこから出ない。別のマシンから届かせる
-には、これまで前段に nginx を置き、それを維持し続ける必要があった。lmrelay はその仕事を、
-pip で入れるデーモンにしたものである。Ollama の隣で 11435 を待ち受け、呼び出し側に資格情報を
-要求し、どのみち経路上にいるのだから、パスの先頭に一区切り足すだけで OpenAI、Anthropic、
-DeepSeek、Grok にも届く。
+**Ollama** を使っていると、これに突き当たる。既定では localhost からしか到達できず、
+認証の仕組みを持たない。
+
+別のマシンから Ollama につなぐには、たいてい systemd の設定を変えるか、前段にリバース
+プロキシを置くことになる。
+
+**lmrelay** はそこを解決する。`pip` で入り、Ollama の隣でデーモンとして動く。自分の
+ポートを待ち受け、必要であればアクセスに資格情報を要求する。
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | **[日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md)** | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 

@@ -6,12 +6,14 @@
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-Ollama bringt überhaupt keine Authentifizierung mit, antwortet also auf der Loopback und
-bleibt dort. Es von einer anderen Maschine aus zu erreichen hieß bisher, einen nginx
-davorzusetzen und ihn am Leben zu halten. lmrelay ist genau diese Aufgabe als Daemon, den
-man mit pip installiert: er lauscht auf 11435 neben Ollama, verlangt von seinen Aufrufern
-Zugangsdaten und erreicht — da er ohnehin im Weg steht — OpenAI, Anthropic, DeepSeek oder
-Grok über ein vorangestelltes Pfadsegment.
+Wer mit **Ollama** arbeitet, stößt darauf: standardmäßig ist sie nur von localhost aus
+erreichbar und bringt keine eingebaute Authentifizierung mit.
+
+Ollama von einer anderen Maschine aus anzusprechen heißt meist, ihre systemd-Konfiguration
+zu ändern oder einen Reverse Proxy davorzusetzen.
+
+**lmrelay** löst das. Es wird mit `pip` installiert und läuft als Daemon neben Ollama: es
+lauscht auf einem eigenen Port und verlangt, wenn gewünscht, Zugangsdaten für den Zugriff.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | **[Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md)** | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 

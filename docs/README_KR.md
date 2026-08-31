@@ -6,11 +6,14 @@
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-Ollama에는 인증이 전혀 없습니다. 그래서 loopback에서만 응답하고 거기에 머뭅니다. 다른
-머신에서 닿으려면 지금까지는 앞에 nginx를 세우고 그것을 계속 살려 두어야 했습니다.
-lmrelay는 바로 그 일을 pip으로 설치하는 데몬으로 만든 것입니다. Ollama 옆에서 11435를 듣고,
-호출하는 쪽에 자격 증명을 요구하며, 어차피 경로 위에 있으니 경로 앞에 한 구간만 붙이면
-OpenAI, Anthropic, DeepSeek, Grok에도 닿습니다.
+**Ollama**를 쓰다 보면 이런 상황을 만납니다. 기본값으로는 localhost에서만 닿을 수 있고,
+내장된 인증이 없습니다.
+
+다른 머신에서 Ollama에 접속하려면 보통 systemd 설정을 바꾸거나, 앞에 리버스 프록시를
+세워야 합니다.
+
+**lmrelay**는 그 문제를 해결합니다. `pip`으로 설치되고 Ollama 옆에서 데몬으로 돕니다.
+자기 포트를 듣고, 원한다면 접근에 자격 증명을 요구합니다.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | **[한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)**
 

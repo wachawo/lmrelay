@@ -6,11 +6,14 @@
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-O Ollama não vem com autenticação nenhuma, então responde no loopback e fica por ali.
-Alcançá-lo de outra máquina significou colocar um nginx à frente e mantê-lo de pé. O
-lmrelay é esse mesmo trabalho como um daemon que se instala com pip: escuta na 11435 ao
-lado do Ollama, exige credenciais de quem o chama e — já que está no caminho — alcança
-OpenAI, Anthropic, DeepSeek ou Grok prefixando um segmento ao caminho.
+Se você trabalha com **Ollama**, esbarra nisto: por padrão ela só é acessível a partir do
+localhost e não traz autenticação integrada.
+
+Conectar-se ao Ollama de outra máquina costuma exigir mudar a configuração do systemd, ou
+colocar um reverse proxy à frente.
+
+**lmrelay** resolve isso. Instala-se com `pip` e roda como daemon ao lado do Ollama: escuta
+em uma porta própria e, quando você quiser, exige credenciais para o acesso.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | **[Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md)** | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 

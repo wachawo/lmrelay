@@ -6,11 +6,14 @@
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-Ollama n'embarque aucune authentification : il répond sur la loopback et n'en sort pas.
-L'atteindre depuis une autre machine a signifié placer un nginx devant, puis le maintenir.
-lmrelay fait ce même travail sous forme de démon installé avec pip : il écoute sur 11435 à
-côté d'Ollama, exige des identifiants de ses appelants et — puisqu'il est déjà sur le
-chemin — atteint OpenAI, Anthropic, DeepSeek ou Grok en préfixant un segment de chemin.
+Si vous travaillez avec **Ollama**, vous rencontrez ceci : par défaut, elle n'est accessible
+que depuis localhost et n'embarque aucune authentification.
+
+Se connecter à Ollama depuis une autre machine impose en général de modifier sa
+configuration systemd, ou de placer un reverse proxy devant.
+
+**lmrelay** répond à cela. Il s'installe avec `pip` et tourne en démon à côté d'Ollama : il
+écoute sur un port qui lui est propre et, si vous le souhaitez, exige des identifiants.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | **[Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md)** | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
