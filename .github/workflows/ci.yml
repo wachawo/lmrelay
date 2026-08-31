@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The workflow only reads the tree. Saying so keeps the repository default
+# (often contents:write) out of a job that runs the build backend and a suite
+# that forks and binds sockets.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # One interpreter, not the test matrix: `target-version = "py311"` is
+      # fixed in pyproject.toml, so every other leg would lint the same tree
+      # against the same target for the same answer.
+      #
+      # The series bound is deliberate: an unpinned linter turns a new rule in
+      # someone else's release into a red build on a commit that changed
+      # nothing. It has to be the 0.14 series and not `<1` — ruff is pre-1.0
+      # and has never shipped a 1.x, so `<1` excludes nothing at all and lets
+      # in exactly the minor bumps that carry the new rules.
+      - name: Install
+        run: pip install 'ruff~=0.14.2'
+
+      - name: Lint
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    # The suite forks, binds sockets and runs uvicorn. Without this a child
+    # that will not exit holds the runner for the 360-minute default, once per
+    # matrix leg.
+    timeout-minutes: 15
+    strategy:
+      # Every interpreter reports: the classifiers promise all three, and a
+      # failure on one must not hide the state of the other two.
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: pip install -e '.[test]'
+
+      - name: Test
+        run: pytest

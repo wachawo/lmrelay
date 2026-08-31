@@ -1,9 +1,10 @@
 ## lmrelay - 로컬 Ollama 옆에 두는 자격 증명 릴레이
 
+[![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
+[![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
 로컬 [Ollama](https://ollama.com) 옆에서 11435 포트를 수신하는 작은 HTTP 릴레이입니다. 호출자에게 자격 증명을 요구할 수 있고, 경로 앞에 세그먼트 하나를 붙이면 호스팅 제공자로 연결합니다.
 
@@ -18,7 +19,7 @@ flowchart LR
 
 ### 요구 사항
 
-- Python 3.11 이상, 그리고 세 개의 의존성: FastAPI, uvicorn, httpx.
+- Python 3.11 이상, 그리고 네 개의 의존성: FastAPI, starlette, uvicorn, httpx.
 - Linux와 macOS는 모든 명령을 실행합니다. `serve`(분리 실행)와 `enable`도 포함합니다. `enable`은
   Linux에서는 systemd `--user` 유닛, macOS에서는 launchd 에이전트를 쓰며, 둘 다 설치돼 있지 않은
   곳에서는 거부합니다.

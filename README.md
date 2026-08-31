@@ -1,9 +1,10 @@
 ## lmrelay - a credentialed relay beside a local Ollama
 
+[![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
+[![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
 A small HTTP relay that listens on 11435 beside a local [Ollama](https://ollama.com), can require a credential from its callers, and reaches a hosted provider by prefixing one path segment.
 
@@ -18,7 +19,7 @@ flowchart LR
 
 ### Requirements
 
-- Python 3.11 or higher, and three dependencies: FastAPI, uvicorn and httpx.
+- Python 3.11 or higher, and four dependencies: FastAPI, starlette, uvicorn and httpx.
 - Linux and macOS run every command, including `serve` (detached) and `enable` — a systemd
   `--user` unit on Linux, a launchd agent on macOS, and a refusal where neither is installed.
 - Windows runs `run` only. `serve` reports that the platform has no `os.fork`, and `enable`

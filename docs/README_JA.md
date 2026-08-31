@@ -1,9 +1,10 @@
 ## lmrelay - ローカルの Ollama の隣に置く、資格情報つきリレー
 
+[![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
+[![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
 ローカルの [Ollama](https://ollama.com) の隣で 11435 を待ち受ける小さな HTTP リレー。呼び出し元に資格情報を要求でき、パスの先頭にセグメントを 1 つ付けるだけでホスト型プロバイダに届く。
 
@@ -18,7 +19,7 @@ flowchart LR
 
 ### 要件
 
-- Python 3.11 以上と、3 つの依存パッケージ: FastAPI、uvicorn、httpx。
+- Python 3.11 以上と、4 つの依存パッケージ: FastAPI、starlette、uvicorn、httpx。
 - Linux と macOS はすべてのコマンドを実行できる。`serve`（デタッチ実行）と `enable` も含む。
   `enable` は Linux では systemd の `--user` ユニット、macOS では launchd エージェントで、
   どちらも入っていない環境では拒否する。

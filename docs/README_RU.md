@@ -1,9 +1,10 @@
 ## lmrelay - релей с проверкой учётных данных рядом с локальной Ollama
 
+[![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
+[![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
 Небольшой HTTP-релей: слушает 11435 рядом с локальной [Ollama](https://ollama.com), умеет требовать учётные данные от обращающихся к нему клиентов и выходит на облачного провайдера через один добавленный в начало пути сегмент.
 
@@ -18,7 +19,7 @@ flowchart LR
 
 ### Требования
 
-- Python 3.11 или новее и три зависимости: FastAPI, uvicorn и httpx.
+- Python 3.11 или новее и четыре зависимости: FastAPI, starlette, uvicorn и httpx.
 - Linux и macOS выполняют все команды, включая `serve` (в фоне) и `enable`: юнит systemd
   `--user` в Linux, агент launchd в macOS и отказ там, где не установлено ни то ни другое.
 - Windows выполняет только `run`. `serve` сообщает, что на этой платформе нет `os.fork`, а

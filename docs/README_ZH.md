@@ -1,9 +1,10 @@
 ## lmrelay - 本地 Ollama 旁的凭据中继
 
+[![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
+[![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
 一个小型 HTTP 中继，在本地 [Ollama](https://ollama.com) 旁监听 11435，可要求调用方出示凭据，并通过在路径前加一个路径段来访问托管服务商。
 
@@ -18,7 +19,7 @@ flowchart LR
 
 ### 环境要求
 
-- Python 3.11 或更高版本，以及三个依赖：FastAPI、uvicorn 和 httpx。
+- Python 3.11 或更高版本，以及四个依赖：FastAPI、starlette、uvicorn 和 httpx。
 - Linux 和 macOS 支持全部命令，包括 `serve`（后台运行）和 `enable`：在 Linux 上是 systemd
   `--user` 单元，在 macOS 上是 launchd agent；两者都没装的地方则直接拒绝。
 - Windows 只支持 `run`。`serve` 会指出该平台没有 `os.fork`，`enable` 会指出既没有 systemd

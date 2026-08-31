@@ -1,9 +1,10 @@
 ## lmrelay - ein zugangsgeschütztes Relay neben einem lokalen Ollama
 
+[![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
+[![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
 Ein kleines HTTP-Relay, das neben einem lokalen [Ollama](https://ollama.com) auf 11435 lauscht, von seinen Aufrufern Zugangsdaten verlangen kann und gehostete Anbieter über ein vorangestelltes Pfadsegment erreicht.
 
@@ -18,7 +19,7 @@ flowchart LR
 
 ### Voraussetzungen
 
-- Python 3.11 oder höher und drei Abhängigkeiten: FastAPI, uvicorn und httpx.
+- Python 3.11 oder höher und vier Abhängigkeiten: FastAPI, starlette, uvicorn und httpx.
 - Linux und macOS führen jeden Befehl aus, auch `serve` (im Hintergrund) und `enable`: eine
   systemd-`--user`-Unit unter Linux, ein launchd-Agent unter macOS, und eine Absage dort, wo
   keiner von beiden installiert ist.

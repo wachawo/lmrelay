@@ -1,9 +1,10 @@
 ## lmrelay - लोकल Ollama के बगल में एक credential-आधारित relay
 
+[![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
+[![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
 एक छोटा HTTP relay जो लोकल [Ollama](https://ollama.com) के बगल में 11435 पर सुनता है, अपने callers से credential माँग सकता है, और path के आगे एक segment जोड़कर hosted provider तक पहुँचता है।
 
@@ -18,7 +19,7 @@ flowchart LR
 
 ### आवश्यकताएँ
 
-- Python 3.11 या उससे ऊपर, और तीन dependencies: FastAPI, uvicorn और httpx।
+- Python 3.11 या उससे ऊपर, और चार dependencies: FastAPI, starlette, uvicorn और httpx।
 - Linux और macOS पर हर command चलती है, `serve` (detached) और `enable` समेत। `enable` Linux पर
   systemd `--user` unit और macOS पर launchd agent बनाती है, और जहाँ इनमें से कोई भी इंस्टॉल
   नहीं है वहाँ मना कर देती है।
