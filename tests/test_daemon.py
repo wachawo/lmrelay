@@ -109,29 +109,39 @@ def read_log(config_path) -> str:
     return target.read_text(encoding="utf-8") if target.exists() else "no log was written"
 
 
-def start_on_a_port_that_stays_free(tmp_path, attempts: int = 3):
-    """Start a detached relay, conceding the port race rather than failing it.
+def start_relay_through_the_cli(tmp_path, attempts: int = 3):
+    """Start a detached relay the way an operator does, by running the command.
 
-    free_port() closes the socket before returning the number, so between that
-    and the child's bind the port belongs to whoever asks next. A busy runner
-    loses that race often enough to redden a build over nothing — which is how
-    this arrived, as a macOS failure on a commit that changed one line of prose.
-    A lost race is retried; anything else is re-raised with the relay's own log,
-    because the message otherwise names a file nobody reading CI output can open.
+    Not by calling start_detached() in this process: by the time this test runs,
+    pytest is multi-threaded, and macOS kills a forked child that touches the
+    system frameworks without exec'ing — silently, leaving the empty log that
+    sent the first diagnosis of this failure after a port race instead. A real
+    `lmrelay serve` forks from a single-threaded shell, which is the path worth
+    covering anyway.
+
+    free_port() closes its probe socket before returning the number, so the port
+    can still be taken in between; that specific loss is retried rather than
+    failed, and everything else is reported with both sides' output, because the
+    relay's log lives on the runner where nobody reading CI can open it.
     """
-    last_log = ""
+    last = ""
     for remaining in range(attempts - 1, -1, -1):
         port = free_port()
         config = write_config(tmp_path, port)
-        try:
-            return start_detached(config, "127.0.0.1", port), config, port
-        except LmrelayError:
-            last_log = read_log(config)
-            if remaining and "address already in use" in last_log.lower():
-                remove_pid(pid_file(config))
-                continue
-            raise AssertionError(f"the relay did not start. Its log said:\n{last_log}")
-    raise AssertionError(f"the port race was lost {attempts} times. Last log:\n{last_log}")
+        done = subprocess.run(
+            [sys.executable, "-m", "lmrelay", "serve",
+             "--config", str(config), "--port", str(port)],
+            capture_output=True, text=True, timeout=60,
+        )
+        pid = read_pid(pid_file(config))
+        if done.returncode == 0 and pid is not None:
+            return pid, config, port
+        last = f"exit {done.returncode}\n{done.stdout}{done.stderr}\n{read_log(config)}"
+        if remaining and "address already in use" in last.lower():
+            remove_pid(pid_file(config))
+            continue
+        raise AssertionError(f"`lmrelay serve` did not leave a relay running:\n{last}")
+    raise AssertionError(f"the port was taken {attempts} times over. Last attempt:\n{last}")
 
 
 class TestWhereTheProcessFilesGo:
@@ -386,7 +396,7 @@ class TestARealDetachedRelay:
         # the start, since the helper may write the config more than once.
         monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "lmrelay.toml"))
 
-        pid, config, port = start_on_a_port_that_stays_free(tmp_path)
+        pid, config, port = start_relay_through_the_cli(tmp_path)
         try:
             assert process_alive(pid)
             healthy = wait_until(lambda: probe_health("127.0.0.1", port))
