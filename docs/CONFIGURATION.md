@@ -2,8 +2,8 @@
 
 The [README](https://github.com/wachawo/lmrelay/blob/main/README.md) covers installation and
 usage. This document covers the config file, the state file, autostart, the behaviour that is
-not obvious from the outside, what every message the relay prints means, and how the relay
-sits behind nginx and fail2ban.
+not obvious from the outside, what every message the relay prints means, and how to have
+fail2ban act on refused credentials.
 
 ## Files on disk
 
@@ -350,269 +350,41 @@ Logged and then ignored. Nothing is refused and nothing stops.
 | `status` says running but not responding | The pidfile names a live process, but `/healthz` did not answer on the recorded address | Read `lmrelay.log`, then `lmrelay restart` |
 | A start refuses with `already running` | A relay, or a service manager unit, already owns the port | `lmrelay status` names the pid and the manager; then `lmrelay restart` |
 
-## Behind nginx
-
-lmrelay terminates no TLS and limits no rate. nginx does both, and it is also what puts a
-real client address into the relay's own log, which is what the next section reads. This is
-a whole server block, not a fragment.
-
-```nginx
-# /etc/nginx/conf.d/lmrelay.conf
-
-# Keyed on the address nginx sees. 10m of shared memory holds about 160 000 of them.
-limit_req_zone $binary_remote_addr zone=lmrelay:10m rate=30r/m;
-
-# combined, plus the one field that says whether the request reached the relay at all.
-# The fail2ban section below bans on that field; combined alone cannot tell a refusal
-# nginx wrote from one it proxied.
-log_format lmrelay_f2b '$remote_addr - - [$time_local] "$request" '
-                       '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
-                       'upstream=$upstream_status';
-
-upstream lmrelay {
-    server 127.0.0.1:11435;
-    keepalive 8;
-}
-
-server {
-    listen 443 ssl;
-    server_name relay.example.com;
-
-    ssl_certificate     /etc/letsencrypt/live/relay.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/relay.example.com/privkey.pem;
-
-    access_log /var/log/nginx/lmrelay.access.log lmrelay_f2b;
-
-    # 429 and not nginx's default 503: a 503 says the service is down, which sends the
-    # operator to the relay and most client libraries into a retry.
-    limit_req_status 429;
-
-    # nginx defaults to 1m, which a prompt carrying an image exceeds.
-    client_max_body_size 64m;
-
-    location / {
-        # One request every two seconds, ten in hand. A chat client sends one
-        # request per answer, so the burst is what covers a few open tabs.
-        limit_req zone=lmrelay burst=10 nodelay;
-
-        proxy_pass http://lmrelay;
-        proxy_http_version 1.1;
-
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Connection        "";
-
-        # Streaming. Both defaults are wrong for this relay.
-        proxy_buffering         off;
-        proxy_request_buffering off;
-        proxy_connect_timeout   10s;
-        proxy_send_timeout      1h;
-        proxy_read_timeout      1h;
-    }
-}
-```
-
-- **`proxy_read_timeout` is the one that will bite.** nginx's default is 60 seconds, and a
-  large local model can take longer than that to produce its first token — the relay has no
-  read timeout of its own precisely because that wait is legitimate. At the default, nginx
-  cuts the connection mid-answer and the caller sees a 504 that reads as a model fault. It
-  is written as a duration rather than `0` because nginx documents no value here that means
-  never; the way not to cut an answer off is a number larger than any answer.
-- **`proxy_buffering off` is the other one.** With buffering on, nginx collects the response
-  and releases it in chunks of its own, so a token-by-token stream arrives in lumps or all
-  at once at the end. `proxy_request_buffering off` keeps the other direction streaming too,
-  which is how the relay itself behaves.
-- **`X-Forwarded-For` is the address lmrelay logs.** uvicorn runs with `proxy_headers=True`
-  and `forwarded_allow_ips="*"`, so the address in that header replaces the connecting one,
-  and it is what lands in the access log. Without it every line would read `127.0.0.1` and
-  the fail2ban work below would have nothing to ban. `X-Real-IP` is set because nginx's own
-  log and anything else in the path expect it; uvicorn does not read it, but the two saying
-  different things would make the two logs disagree.
-- **Set it to `$remote_addr`, not `$proxy_add_x_forwarded_for`.** The usual nginx idiom
-  appends the connecting address to whatever the caller already sent, and uvicorn — trusting
-  every hop, because `forwarded_allow_ips` is `"*"` — takes the **first** entry in the list.
-  A caller sending its own `X-Forwarded-For: 203.0.113.7` therefore keeps first place and
-  chooses the address in the log. `$remote_addr` overwrites the header with the one address
-  nginx actually saw.
-- **Bind the relay to loopback: `[server] host = "127.0.0.1"`.** A relay that also listens
-  on a routable address is a second front door with no TLS, no rate limit and no record in
-  nginx's log — and, by the hazard at the end of the next section, a caller's free choice of
-  which address gets banned. `ss -ltnp | grep 11435` must show `127.0.0.1:11435` and nothing
-  else.
-
 ## Banning repeat offenders with fail2ban
 
-An exposed relay gets its token guessed at. fail2ban reads a log and bans the address at the
-firewall. There are two logs in the arrangement above, and which refusal you are banning
-decides which one to read.
-
-| Status | Emitted by | Written to | Read by |
-|---|---|---|---|
-| 401 | lmrelay, when auth is on and the credential is missing or unknown | `~/.lmrelay/lmrelay.log` as `-> -: 401 (auth)`, and nginx's log as the status it proxied | `lmrelay-auth` below |
-| 401, 403 | nginx, doing its own denying | nginx's access log, with `upstream=-` | `lmrelay-nginx` below |
-| 401, 403 | an upstream, relayed unchanged | both logs; nginx's with `upstream=` that status | neither — a key that stopped working is not an attacker |
-| 429 | nginx, from `limit_req_status` | nginx's access log, with `upstream=-` | `lmrelay-nginx`, if you add it |
-
-**lmrelay emits no 403 of its own.** Its own refusals are 400, 401, 500 and 502. But it
-relays the upstream's status unchanged, so a provider answering 401 or 403 — a revoked key,
-a region block, a missing org permission — reaches the caller with that status and is
-logged by the relay as well as by nginx. Neither status is by itself evidence of who
-refused, and separating the three rows above is what the two filters below are built to do.
-
-### The filter for lmrelay's log
-
-An auth failure is exactly one line, and this is it verbatim:
+Every refused credential is one line in the relay's own log, carrying the caller's address:
 
 ```text
-2026-08-31 10:25:34.595 [WARNING]: (lmrelay.app) 127.0.0.1 GET /api/tags -> -: 401 (auth)
+2026-08-31 10:25:34.595 [WARNING]: (lmrelay.app) 203.0.113.7 GET /api/tags -> -: 401 (auth)
 ```
 
-```ini
-# /etc/fail2ban/filter.d/lmrelay-auth.conf
-[Definition]
-datepattern = ^%%Y-%%m-%%d %%H:%%M:%%S\.%%f
-failregex   = ^\s*\[WARNING\]: \(lmrelay\.app\) <HOST> \S+ \S+ -> -: 401 \(auth\)$
-ignoreregex =
-```
+A filter and a jail that read it ship with the source:
 
-fail2ban removes the part of the line that `datepattern` matched before applying
-`failregex`, which is why the expression starts at `[WARNING]` and not at the date. The
-percent signs are doubled because fail2ban interpolates its own config files.
-
-Both anchors matter. The request path is logged as the caller sent it, percent-decoding
-included, so a caller can put the text of a whole log line inside a path; anchored, the path
-still has to be a single token with no spaces in it, and `<HOST>` still sits where the relay
-wrote the client address.
-
-Test it before enabling anything. Against the line above:
+- [`contrib/fail2ban/filter.d/lmrelay-auth.conf`](../contrib/fail2ban/filter.d/lmrelay-auth.conf)
+- [`contrib/fail2ban/jail.d/lmrelay.conf`](../contrib/fail2ban/jail.d/lmrelay.conf)
 
 ```bash
-fail2ban-regex \
-  '2026-08-31 10:25:34.595 [WARNING]: (lmrelay.app) 127.0.0.1 GET /api/tags -> -: 401 (auth)' \
-  /etc/fail2ban/filter.d/lmrelay-auth.conf
+sudo cp contrib/fail2ban/filter.d/lmrelay-auth.conf /etc/fail2ban/filter.d/
+sudo cp contrib/fail2ban/jail.d/lmrelay.conf /etc/fail2ban/jail.d/
+fail2ban-regex ~/.lmrelay/lmrelay.log /etc/fail2ban/filter.d/lmrelay-auth.conf
 ```
 
-and against the real log, which also proves that served requests do not match:
+The filter matches the relay refusing a credential and nothing else. A 401 that came from an
+upstream and was relayed through — an expired provider key — is logged as a served request
+and is deliberately not matched: the caller whose key stopped working is not an attacker.
 
-```bash
-fail2ban-regex /home/you/.lmrelay/lmrelay.log /etc/fail2ban/filter.d/lmrelay-auth.conf
-```
+### The jail ships disabled
 
-The summary line must count every 401 as matched and every `200 (0.01s)` line as missed.
+`forwarded_allow_ips` is `"*"`, so uvicorn takes the client address from `X-Forwarded-For`
+whenever that header is present, whoever sent it. Against a relay its callers reach
+directly, anyone can pair a wrong token with a forged header and choose the address this
+jail bans — a gateway, a colleague, the operator. A request carrying
+`X-Forwarded-For: 198.51.100.42` and a bad token logs 198.51.100.42; that is measured, not
+supposed.
 
-A run that matches nothing has two causes and the counters cannot tell them apart. Every
-line tested lands in one of the two buckets, so a `datepattern` that stopped matching reads
-as `0 matched, N missed` — the same pair a wrong `failregex` produces. It gets there by a
-different route: with the date left in place, `failregex` is applied to the whole line, and
-`^\s*\[WARNING\]` cannot match past a leading timestamp. What separates them is the
-date-template report `fail2ban-regex` prints below the counters; a template credited with
-no hits means the date was never recognised, and the `failregex` is not the half to edit.
-
-### The jail
-
-This jail bans on an address the relay took from `X-Forwarded-For`, so it is only safe once
-the relay is bound to loopback and nginx is the sole path to it. Run the three checks under
-[The hazard](#the-hazard) before setting `enabled = true`.
-
-```ini
-# /etc/fail2ban/jail.d/lmrelay.conf
-[lmrelay-auth]
-enabled  = true
-filter   = lmrelay-auth
-logpath  = /home/you/.lmrelay/lmrelay.log
-maxretry = 5
-findtime = 10m
-bantime  = 1h
-port     = http,https
-```
-
-- `logpath` is spelled out. fail2ban does not expand `~`, and it reads the file as root, so
-  the path has to name the home directory of whoever runs the relay.
-- That file only exists for a relay started by `lmrelay serve`, or by the launchd agent
-  `lmrelay enable` installs on macOS. `lmrelay run` logs to stdout, and the systemd `--user`
-  unit does not redirect it, so under systemd the lines are in the journal and this jail has
-  nothing to tail. Read them with fail2ban's `systemd` backend, or run the relay detached.
-- `port = http,https`, not 11435. The address in the log is a client of nginx, and after the
-  section above nothing outside can reach 11435 at all.
-- Five failures in ten minutes, banned for an hour. A client left holding a withdrawn token
-  will trip this, which is the intent; an hour is short enough that fixing the token is
-  still the fast way out.
-
-### The filter for nginx's log
-
-For the deployment where nginx does its own denying — an `auth_basic`, an `allow`/`deny`, a
-`map` over tokens — the refusal never reaches the relay, and nginx's access log is the only
-record of it.
-
-```text
-203.0.113.7 - - [31/Aug/2026:10:25:34 +0000] "GET /api/tags HTTP/1.1" 401 45 "-" "curl/8.5.0" upstream=-
-```
-
-```ini
-# /etc/fail2ban/filter.d/lmrelay-nginx.conf
-[Definition]
-datepattern = ^[^\[]*\[({DATE})
-failregex   = ^<HOST> \S+ \S+ \[[^]]*\] "[A-Z]+ [^"]*" (?:401|403) \d+ .* upstream=-$
-ignoreregex =
-```
-
-```ini
-[lmrelay-nginx]
-enabled  = true
-filter   = lmrelay-nginx
-logpath  = /var/log/nginx/lmrelay.access.log
-maxretry = 5
-findtime = 10m
-bantime  = 1h
-port     = http,https
-```
-
-```bash
-fail2ban-regex /var/log/nginx/lmrelay.access.log /etc/fail2ban/filter.d/lmrelay-nginx.conf
-```
-
-**`upstream=-` is the whole point of this filter, not decoration.** The status alone cannot
-say who refused. lmrelay relays the upstream's status unchanged, so a provider answering
-401 or 403 — a revoked key, a region block, a missing org permission — is logged here
-exactly like a refusal nginx wrote itself. A key that has been revoked answers that way to
-every call, so a filter keyed on the status bans the caller whose key broke: five requests
-and they are at the firewall for an hour, with the relay working as designed.
-`$upstream_status` is `-` only when nginx answered without reaching the relay, which is
-precisely the case this filter is for.
-
-That leaves each log to the refusals it can actually account for. nginx's own denials are
-banned here; the relay's own 401s are banned by `lmrelay-auth`, which reads them from the
-relay's log where `-> -: 401 (auth)` distinguishes them from a relayed one. A status the
-relay merely passed along is banned by neither.
-
-Add `|429` to the status alternation to ban a caller that keeps tripping the rate limit.
-`limit_req` is served by nginx, so those lines carry `upstream=-` and this filter sees them.
-Leaving it out lets `limit_req` handle that caller by itself, which is what it is for.
-
-### The hazard
-
-`forwarded_allow_ips` is `"*"`, so uvicorn trusts `X-Forwarded-For` from whoever sent it and
-takes the first address in the list, and that is the address lmrelay writes to its log. Any
-caller able to open a connection to the relay directly can therefore choose the address that
-appears there — which turns a jail reading that log into a way to make fail2ban ban an
-arbitrary third party: a colleague, a monitoring host, the office gateway everyone else
-shares.
-
-The jail is only safe when the relay is bound to loopback and nginx is the sole path to it.
-Check all of this, and check it again after any change to `[server] host`:
-
-```bash
-ss -ltnp | grep 11435                    # 127.0.0.1:11435 only, never 0.0.0.0 or [::]
-grep -n '^host' ~/.lmrelay/lmrelay.toml  # host = "127.0.0.1"
-curl -sS --max-time 3 http://<public-address>:11435/healthz   # must fail to connect
-```
-
-And on the nginx side, `proxy_set_header X-Forwarded-For $remote_addr;` — it overwrites
-whatever the caller sent. With the more usual `$proxy_add_x_forwarded_for` the caller's own
-value stays first in the list, and first is the one uvicorn takes: nginx in front is not by
-itself enough.
+The jail is therefore safe in one arrangement only: the relay bound to `127.0.0.1`, with a
+trusted reverse proxy as the sole route in, so the header can only have come from that
+proxy. A relay listening on `0.0.0.0` must not run it.
 
 ## Not in scope
 
