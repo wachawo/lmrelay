@@ -17,6 +17,10 @@ flowchart LR
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
 
+Ollama 自身没有鉴权。把它暴露到回环地址之外——让本地网络的其他机器也能访问它——一直意味着
+要在它前面加一层东西，实际上就是 nginx。lmrelay 就是把这一件事做成一个用 pip 安装的守护
+进程，而且只做这一件事。
+
 ### 环境要求
 
 - Python 3.11 或更高版本，以及四个依赖：FastAPI、starlette、uvicorn 和 httpx。

@@ -17,6 +17,10 @@ flowchart LR
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
 
+Ollama के पास अपना कोई authentication नहीं है। उसे loopback से आगे खोलने के लिए — ताकि बाक़ी लोकल
+network उस तक पहुँच सके — अब तक उसके आगे कुछ रखना पड़ता रहा है, व्यवहार में nginx। lmrelay वही एक
+काम है, ऐसे daemon के रूप में जिसे आप pip से इंस्टॉल करते हैं, और वह सिर्फ़ वही काम है।
+
 ### आवश्यकताएँ
 
 - Python 3.11 या उससे ऊपर, और चार dependencies: FastAPI, starlette, uvicorn और httpx।

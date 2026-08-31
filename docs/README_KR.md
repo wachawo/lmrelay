@@ -17,6 +17,10 @@ flowchart LR
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
 
+Ollama에는 자체 인증이 없습니다. 루프백 너머로 노출하려면 — 로컬 네트워크의 나머지가 도달할 수 있게
+하려면 — 그 앞에 무언가를, 실제로는 nginx를 두어야 했습니다. lmrelay는 그 한 가지 일을 pip으로
+설치하는 데몬으로 만든 것이고, 그 일만 합니다.
+
 ### 요구 사항
 
 - Python 3.11 이상, 그리고 네 개의 의존성: FastAPI, starlette, uvicorn, httpx.

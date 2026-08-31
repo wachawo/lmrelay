@@ -17,6 +17,10 @@ flowchart LR
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
 
+O Ollama não tem autenticação própria. Expô-lo além do loopback — para que o resto da rede
+local o alcance — sempre significou colocar algo na frente dele, na prática o nginx. O lmrelay
+é esse único trabalho na forma de um daemon que você instala com pip, e é apenas esse trabalho.
+
 ### Requisitos
 
 - Python 3.11 ou superior e quatro dependências: FastAPI, starlette, uvicorn e httpx.

@@ -17,6 +17,10 @@ flowchart LR
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
 
+Ollama 自身には認証がない。ループバックの外に公開して、ローカルネットワークの他のマシンから届く
+ようにするには、これまで何かをその前に置くしかなかった。実際には nginx だ。lmrelay はその 1 つの
+仕事を pip で入れるデーモンにしたものであり、その仕事しかしない。
+
 ### 要件
 
 - Python 3.11 以上と、4 つの依存パッケージ: FastAPI、starlette、uvicorn、httpx。

@@ -17,6 +17,11 @@ flowchart LR
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
 
+Ollama hat keine eigene Authentifizierung. Es über Loopback hinaus verfügbar zu machen —
+damit das übrige lokale Netz es erreichen kann — hieß bisher, etwas davorzuschalten, in der
+Praxis nginx. lmrelay ist genau diese eine Aufgabe als Daemon, den man mit pip installiert,
+und es ist nur diese Aufgabe.
+
 ### Voraussetzungen
 
 - Python 3.11 oder höher und vier Abhängigkeiten: FastAPI, starlette, uvicorn und httpx.

@@ -17,6 +17,11 @@ flowchart LR
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
 
+Ollama non ha un'autenticazione propria. Esporlo oltre il loopback — perché il resto della
+rete locale possa raggiungerlo — ha sempre significato mettergli davanti qualcosa, in pratica
+nginx. lmrelay è quell'unico compito sotto forma di daemon che si installa con pip, ed è
+solo quel compito.
+
 ### Requisiti
 
 - Python 3.11 o superiore e quattro dipendenze: FastAPI, starlette, uvicorn e httpx.
