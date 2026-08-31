@@ -109,6 +109,31 @@ def read_log(config_path) -> str:
     return target.read_text(encoding="utf-8") if target.exists() else "no log was written"
 
 
+def start_on_a_port_that_stays_free(tmp_path, attempts: int = 3):
+    """Start a detached relay, conceding the port race rather than failing it.
+
+    free_port() closes the socket before returning the number, so between that
+    and the child's bind the port belongs to whoever asks next. A busy runner
+    loses that race often enough to redden a build over nothing — which is how
+    this arrived, as a macOS failure on a commit that changed one line of prose.
+    A lost race is retried; anything else is re-raised with the relay's own log,
+    because the message otherwise names a file nobody reading CI output can open.
+    """
+    last_log = ""
+    for remaining in range(attempts - 1, -1, -1):
+        port = free_port()
+        config = write_config(tmp_path, port)
+        try:
+            return start_detached(config, "127.0.0.1", port), config, port
+        except LmrelayError:
+            last_log = read_log(config)
+            if remaining and "address already in use" in last_log.lower():
+                remove_pid(pid_file(config))
+                continue
+            raise AssertionError(f"the relay did not start. Its log said:\n{last_log}")
+    raise AssertionError(f"the port race was lost {attempts} times. Last log:\n{last_log}")
+
+
 class TestWhereTheProcessFilesGo:
     """Beside the config, so every command looks in one place."""
 
@@ -356,13 +381,12 @@ class TestARealDetachedRelay:
     """The only test in the suite that starts a process. It also stops it."""
 
     def test_it_starts_answers_and_stops(self, tmp_path, monkeypatch):
-        port = free_port()
-        config = write_config(tmp_path, port)
         # The detached child inherits the environment, and this is how the CLI
-        # passes --config on to a relay that loads the config itself.
-        monkeypatch.setenv(CONFIG_ENV_VAR, str(config))
+        # passes --config on to a relay that loads the config itself. Set before
+        # the start, since the helper may write the config more than once.
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "lmrelay.toml"))
 
-        pid = start_detached(config, "127.0.0.1", port)
+        pid, config, port = start_on_a_port_that_stays_free(tmp_path)
         try:
             assert process_alive(pid)
             healthy = wait_until(lambda: probe_health("127.0.0.1", port))
