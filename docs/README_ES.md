@@ -15,12 +15,7 @@ lo quieres, exige credenciales para el acceso.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | **[Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md)** | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
-```mermaid
-flowchart LR
-    C["clients"] --> R["lmrelay<br/>:11435"]
-    R --> O["Ollama<br/>:11434"]
-    R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
-```
+![lmrelay dirige a los clientes a un Ollama local o a un proveedor alojado](https://raw.githubusercontent.com/wachawo/lmrelay/main/docs/diagram.svg)
 
 ### Requisitos
 
