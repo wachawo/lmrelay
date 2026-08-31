@@ -111,13 +111,16 @@ of Ollama. `lmrelay auth true` requires a credential and `lmrelay auth false` re
 relay; nothing in `lmrelay.toml` moves that switch.
 
 ```bash
-lmrelay token gen --label laptop   # prints the token once, turns auth on
+lmrelay token gen --label laptop   # prints the token once
+lmrelay auth true                  # now start requiring it
 lmrelay token list                 # masked unless --show
 lmrelay token delete 1             # by the id token list prints
 ```
 
-`token gen` prints the token in full once and never again, and it turns auth on when it is
-the first token — an operator who adds a credential and finds the relay still open has been
+`token gen` prints the token in full once and never again. It does not turn auth on: minting
+a credential and requiring one are two decisions, and a relay already serving other callers
+should not start refusing them because a token was created. It does say that auth is still
+off, so nobody is left believing the relay closed itself — an operator who has been
 surprised for no reason. `auth true` with no tokens is refused, because it would 401 every
 request including yours.
 
@@ -291,7 +294,7 @@ another version.
 
 | Message | Where | Means | Do |
 |---|---|---|---|
-| `lmrelay: no tokens configured; run 'lmrelay token gen' first` | `lmrelay auth true` | Turning auth on with an empty token set would 401 every request, yours included. | Run `lmrelay token gen`, which turns auth on by itself when it is the first token. |
+| `lmrelay: no tokens configured; run 'lmrelay token gen' first` | `lmrelay auth true` | Turning auth on with an empty token set would 401 every request, yours included. | Run `lmrelay token gen`, then `lmrelay auth true`. |
 | `lmrelay: token is empty` | `lmrelay token add` | The token argument was blank or whitespace. | Pass the token. |
 | `lmrelay: that token is already configured` | `lmrelay token add` | The same token value is already stored. | Nothing: it already works. `lmrelay token list --show` confirms it. |
 | `lmrelay: no token with id <N>; known ids: <list>` | `lmrelay token delete` | No stored token carries that id. | Use an id from `lmrelay token list`. |

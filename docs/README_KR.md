@@ -105,7 +105,8 @@ curl http://127.0.0.1:11435/api/tags \
 ### 실제로 운용하기
 
 ```bash
-lmrelay token gen --label laptop   # printed once; turns auth on
+lmrelay token gen --label laptop   # printed once, never again
+lmrelay auth true                  # now start requiring it
 lmrelay enable                     # start at login, and start now
 lmrelay status
 ```

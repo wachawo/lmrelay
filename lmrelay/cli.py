@@ -156,19 +156,19 @@ def describe_autostart(status: dict) -> str:
 
 
 def save_new_token(state: RelayState, record: CallerToken) -> None:
-    """Persist a freshly added token, turning auth on when it is the first one.
+    """Persist a freshly added token, and say so if it is not yet being required.
 
-    An operator who adds a token and finds the relay still open has been misled
-    by their own tooling, so the switch moves in the same save.
+    Minting a credential and requiring one are two decisions, and this command
+    only makes the first: an operator who adds a token to a relay that is still
+    serving other traffic has not asked for that traffic to start failing. The
+    reminder is here because the alternative — saying nothing — leaves them
+    believing the relay is closed when it is not.
     """
-    turned_on = not state.auth_enabled and len(state.tokens) == 1
-    if turned_on:
-        state = set_auth_enabled(state, True)
     save_state(state)
     label = f" ({record.label})" if record.label else ""
     logger.info(f"Token {record.id}{label} added to {state.state_path}.")
-    if turned_on:
-        logger.info("Auth was off and is now on, because this is the first token.")
+    if not state.auth_enabled:
+        logger.info("Auth is off, so this token is not required yet. Run 'lmrelay auth true'.")
 
 
 def init_config(unused_args: argparse.Namespace) -> None:

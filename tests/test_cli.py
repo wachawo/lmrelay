@@ -174,12 +174,12 @@ class TestTurningAuthOn:
 class TestCallerTokens:
     """gen, add, delete, and what the first one does to the switch."""
 
-    def test_the_first_token_turns_auth_on(self, config_path):
-        """An operator who adds a token and finds the relay still open has been
-        misled by their own command."""
+    def test_the_first_token_is_stored_without_being_required(self, config_path):
+        """Minting a credential is not the same decision as requiring one, and
+        `lmrelay auth true` is where the second one is made."""
         run_command(["token", "gen", "--config", str(config_path)])
         state = state_for(config_path)
-        assert len(state.tokens) == 1 and state.auth_enabled is True
+        assert len(state.tokens) == 1 and state.auth_enabled is False
 
     def test_a_generated_token_is_recognisably_ours(self, config_path):
         run_command(["token", "gen", "--config", str(config_path)])
@@ -198,13 +198,17 @@ class TestCallerTokens:
         with pytest.raises(LmrelayError):
             run_command(["token", "add", "lmr_pasted", "--config", str(config_path)])
 
-    def test_a_later_token_leaves_a_switch_the_operator_turned_off_alone(self, config_path):
-        """Only the first token turns auth on; after that the switch is the
-        operator's, and a second `token gen` must not undo their decision."""
-        run_command(["token", "gen", "--config", str(config_path)])
-        run_command(["auth", "false", "--config", str(config_path)])
+    def test_minting_a_token_does_not_start_requiring_one(self, config_path):
+        """Two decisions, two commands: a relay already serving other callers
+        must not begin refusing them because a token was created."""
         run_command(["token", "gen", "--config", str(config_path)])
         assert state_for(config_path).auth_enabled is False
+
+    def test_a_later_token_leaves_the_switch_where_the_operator_put_it(self, config_path):
+        run_command(["token", "gen", "--config", str(config_path)])
+        run_command(["auth", "true", "--config", str(config_path)])
+        run_command(["token", "gen", "--config", str(config_path)])
+        assert state_for(config_path).auth_enabled is True
 
     def test_deleting_by_the_id_that_was_printed(self, config_path):
         run_command(["token", "gen", "--config", str(config_path)])
