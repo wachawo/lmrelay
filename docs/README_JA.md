@@ -1,19 +1,13 @@
 ## lmrelay - ローカルの Ollama の隣に置く、資格情報つきリレー
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-**Ollama** を使っていると、これに突き当たる。既定では localhost からしか到達できず、
-認証の仕組みを持たない。
-
-別のマシンから Ollama につなぐには、たいてい systemd の設定を変えるか、前段にリバース
-プロキシを置くことになる。
-
-**lmrelay** はそこを解決する。`pip` で入り、Ollama の隣でデーモンとして動く。自分の
-ポートを待ち受け、必要であればアクセスに資格情報を要求する。
+**Ollama** を使っていると、これに突き当たる。既定では localhost からしか到達できず、認証の仕組みを持たない。別のマシンから Ollama につなぐには、たいてい systemd の設定を変えるか、前段にリバースプロキシを置くことになる。**lmrelay** はそこを解決する。`pip` で入り、Ollama の隣でデーモンとして動く。自分のポートを待ち受け、必要であればアクセスに資格情報を要求する。
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | **[日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md)** | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
@@ -38,14 +32,13 @@ flowchart LR
 ### インストール
 
 ```bash
-pip install git+https://github.com/wachawo/lmrelay.git
+pip install lmrelay
 ```
 
-`git+` は飾りではない。`github.com/...` をそのまま渡すと、pip はそれをパッケージ名として読み、
-失敗する。git が入っていない環境では、git を必要としないソースアーカイブが使える:
+あるいは現在の `main`。公開済みバージョンより先に進んでいることがある:
 
 ```bash
-pip install https://github.com/wachawo/lmrelay/archive/refs/heads/main.tar.gz
+pip install git+https://github.com/wachawo/lmrelay.git
 ```
 
 ### クイックスタート

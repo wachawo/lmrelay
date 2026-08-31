@@ -1,19 +1,17 @@
 ## lmrelay - a credentialed relay beside a local Ollama
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-If you work with **Ollama**, you run into this: by default it is reachable only from
-localhost, and it has no built-in authentication.
-
-Connecting to Ollama from another machine usually means changing its systemd
-configuration, or putting a reverse proxy in front of it.
-
-**lmrelay** solves that. It installs with `pip` and runs as a daemon beside Ollama: it
-listens on a port of its own and, when you want it to, requires a credential for access.
+If you work with **Ollama**, you run into this: by default it is reachable only from localhost,
+and it has no built-in authentication. Connecting to Ollama from another machine usually means
+changing its systemd configuration, or putting a reverse proxy in front of it. **lmrelay** solves
+that. It installs with `pip` and runs as a daemon beside Ollama: it listens on a port of its own
+and, when you want it to, requires a credential for access.
 
 **[English](https://github.com/wachawo/lmrelay/blob/main/README.md)** | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
@@ -37,14 +35,13 @@ flowchart LR
 ### Installation
 
 ```bash
-pip install git+https://github.com/wachawo/lmrelay.git
+pip install lmrelay
 ```
 
-The `git+` prefix is not decoration: pip reads a bare `github.com/...` as a package name and
-fails. Where git is not installed, the source archive works and needs none:
+Or the current `main`, which may be ahead of the release:
 
 ```bash
-pip install https://github.com/wachawo/lmrelay/archive/refs/heads/main.tar.gz
+pip install git+https://github.com/wachawo/lmrelay.git
 ```
 
 ### Quick start

@@ -1,19 +1,13 @@
 ## lmrelay - 로컬 Ollama 옆에 두는 자격 증명 릴레이
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-**Ollama**를 쓰다 보면 이런 상황을 만납니다. 기본값으로는 localhost에서만 닿을 수 있고,
-내장된 인증이 없습니다.
-
-다른 머신에서 Ollama에 접속하려면 보통 systemd 설정을 바꾸거나, 앞에 리버스 프록시를
-세워야 합니다.
-
-**lmrelay**는 그 문제를 해결합니다. `pip`으로 설치되고 Ollama 옆에서 데몬으로 돕니다.
-자기 포트를 듣고, 원한다면 접근에 자격 증명을 요구합니다.
+**Ollama**를 쓰다 보면 이런 상황을 만납니다. 기본값으로는 localhost에서만 닿을 수 있고, 내장된 인증이 없습니다. 다른 머신에서 Ollama에 접속하려면 보통 systemd 설정을 바꾸거나, 앞에 리버스 프록시를 세워야 합니다. **lmrelay**는 그 문제를 해결합니다. `pip`으로 설치되고 Ollama 옆에서 데몬으로 돕니다. 자기 포트를 듣고, 원한다면 접근에 자격 증명을 요구합니다.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | **[한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)**
 
@@ -38,14 +32,13 @@ flowchart LR
 ### 설치
 
 ```bash
-pip install git+https://github.com/wachawo/lmrelay.git
+pip install lmrelay
 ```
 
-`git+` 접두사는 장식이 아닙니다. pip은 접두사 없는 `github.com/...`을 패키지 이름으로 읽고 실패합니다.
-git이 없는 환경에서는 소스 아카이브를 쓰면 되고, 이 방식은 git이 필요 없습니다:
+또는 현재 `main`. 공개된 릴리스보다 앞서 있을 수 있습니다:
 
 ```bash
-pip install https://github.com/wachawo/lmrelay/archive/refs/heads/main.tar.gz
+pip install git+https://github.com/wachawo/lmrelay.git
 ```
 
 ### 빠른 시작

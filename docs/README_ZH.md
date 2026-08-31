@@ -1,18 +1,13 @@
 ## lmrelay - 本地 Ollama 旁的凭据中继
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-如果你在用 **Ollama**，就会碰到这一点：默认情况下它只能从 localhost 访问，而且不带任何
-内置鉴权。
-
-要从另一台机器连上 Ollama，通常得改它的 systemd 配置，或者在前面架一个反向代理。
-
-**lmrelay** 解决的就是这件事。它用 `pip` 安装，作为守护进程跑在 Ollama 旁边：监听自己的
-端口，并在你需要时要求提供访问凭据。
+如果你在用 **Ollama**，就会碰到这一点：默认情况下它只能从 localhost 访问，而且不带任何内置鉴权。要从另一台机器连上 Ollama，通常得改它的 systemd 配置，或者在前面架一个反向代理。**lmrelay** 解决的就是这件事。它用 `pip` 安装，作为守护进程跑在 Ollama 旁边：监听自己的端口，并在你需要时要求提供访问凭据。
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | **[中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md)** | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
@@ -36,14 +31,13 @@ flowchart LR
 ### 安装
 
 ```bash
-pip install git+https://github.com/wachawo/lmrelay.git
+pip install lmrelay
 ```
 
-`git+` 前缀不是装饰：pip 会把裸的 `github.com/...` 当成包名，然后失败。如果机器上没有
-git，源码归档同样可用，且不需要 git：
+或者当前的 `main`，它可能比已发布的版本更新：
 
 ```bash
-pip install https://github.com/wachawo/lmrelay/archive/refs/heads/main.tar.gz
+pip install git+https://github.com/wachawo/lmrelay.git
 ```
 
 ### 快速开始
