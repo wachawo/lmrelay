@@ -3,10 +3,13 @@
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-一个小型 HTTP 中继，在本地 [Ollama](https://ollama.com) 旁监听 11435，可要求调用方出示凭据，并通过在路径前加一个路径段来访问托管服务商。
+Ollama 自身完全没有鉴权，所以它只在 loopback 上应答，也就只留在那里。要从另一台机器访问它，
+一直意味着在前面架一个 nginx，并且得一直维护它。lmrelay 就是这件事，做成一个用 pip 安装的
+守护进程：它在 Ollama 旁边监听 11435，要求调用方提供凭据；而既然它本来就在路径上，只要在
+路径前加一个字段，就能到达 OpenAI、Anthropic、DeepSeek 或 Grok。
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | **[中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md)** | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
@@ -16,10 +19,6 @@ flowchart LR
     R --> O["Ollama<br/>:11434"]
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
-
-Ollama 自身没有鉴权。把它暴露到回环地址之外——让本地网络的其他机器也能访问它——一直意味着
-要在它前面加一层东西，实际上就是 nginx。lmrelay 就是把这一件事做成一个用 pip 安装的守护
-进程，而且只做这一件事。
 
 ### 环境要求
 

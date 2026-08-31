@@ -3,10 +3,14 @@
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-로컬 [Ollama](https://ollama.com) 옆에서 11435 포트를 수신하는 작은 HTTP 릴레이입니다. 호출자에게 자격 증명을 요구할 수 있고, 경로 앞에 세그먼트 하나를 붙이면 호스팅 제공자로 연결합니다.
+Ollama에는 인증이 전혀 없습니다. 그래서 loopback에서만 응답하고 거기에 머뭅니다. 다른
+머신에서 닿으려면 지금까지는 앞에 nginx를 세우고 그것을 계속 살려 두어야 했습니다.
+lmrelay는 바로 그 일을 pip으로 설치하는 데몬으로 만든 것입니다. Ollama 옆에서 11435를 듣고,
+호출하는 쪽에 자격 증명을 요구하며, 어차피 경로 위에 있으니 경로 앞에 한 구간만 붙이면
+OpenAI, Anthropic, DeepSeek, Grok에도 닿습니다.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | **[한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)**
 
@@ -16,10 +20,6 @@ flowchart LR
     R --> O["Ollama<br/>:11434"]
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
-
-Ollama에는 자체 인증이 없습니다. 루프백 너머로 노출하려면 — 로컬 네트워크의 나머지가 도달할 수 있게
-하려면 — 그 앞에 무언가를, 실제로는 nginx를 두어야 했습니다. lmrelay는 그 한 가지 일을 pip으로
-설치하는 데몬으로 만든 것이고, 그 일만 합니다.
 
 ### 요구 사항
 

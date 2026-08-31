@@ -3,10 +3,14 @@
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-Um pequeno relay HTTP que escuta na 11435 ao lado de um [Ollama](https://ollama.com) local, pode exigir uma credencial de quem o chama e alcança um provedor hospedado prefixando um segmento de caminho.
+O Ollama não vem com autenticação nenhuma, então responde no loopback e fica por ali.
+Alcançá-lo de outra máquina significou colocar um nginx à frente e mantê-lo de pé. O
+lmrelay é esse mesmo trabalho como um daemon que se instala com pip: escuta na 11435 ao
+lado do Ollama, exige credenciais de quem o chama e — já que está no caminho — alcança
+OpenAI, Anthropic, DeepSeek ou Grok prefixando um segmento ao caminho.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | **[Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md)** | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
@@ -16,10 +20,6 @@ flowchart LR
     R --> O["Ollama<br/>:11434"]
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
-
-O Ollama não tem autenticação própria. Expô-lo além do loopback — para que o resto da rede
-local o alcance — sempre significou colocar algo na frente dele, na prática o nginx. O lmrelay
-é esse único trabalho na forma de um daemon que você instala com pip, e é apenas esse trabalho.
 
 ### Requisitos
 

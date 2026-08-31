@@ -3,10 +3,14 @@
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-ローカルの [Ollama](https://ollama.com) の隣で 11435 を待ち受ける小さな HTTP リレー。呼び出し元に資格情報を要求でき、パスの先頭にセグメントを 1 つ付けるだけでホスト型プロバイダに届く。
+Ollama には認証が一切ない。だから loopback で応答し、そこから出ない。別のマシンから届かせる
+には、これまで前段に nginx を置き、それを維持し続ける必要があった。lmrelay はその仕事を、
+pip で入れるデーモンにしたものである。Ollama の隣で 11435 を待ち受け、呼び出し側に資格情報を
+要求し、どのみち経路上にいるのだから、パスの先頭に一区切り足すだけで OpenAI、Anthropic、
+DeepSeek、Grok にも届く。
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | [Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md) | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | **[日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md)** | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
@@ -16,10 +20,6 @@ flowchart LR
     R --> O["Ollama<br/>:11434"]
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
-
-Ollama 自身には認証がない。ループバックの外に公開して、ローカルネットワークの他のマシンから届く
-ようにするには、これまで何かをその前に置くしかなかった。実際には nginx だ。lmrelay はその 1 つの
-仕事を pip で入れるデーモンにしたものであり、その仕事しかしない。
 
 ### 要件
 

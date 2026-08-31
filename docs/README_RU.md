@@ -3,10 +3,15 @@
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-lightgrey.svg)](https://github.com/wachawo/lmrelay)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20windows-informational.svg)](https://github.com/wachawo/lmrelay)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen.svg)](https://github.com/wachawo/lmrelay/blob/main/pyproject.toml)
 
-Небольшой HTTP-релей: слушает 11435 рядом с локальной [Ollama](https://ollama.com), умеет требовать учётные данные от обращающихся к нему клиентов и выходит на облачного провайдера через один добавленный в начало пути сегмент.
+У Ollama нет никакой аутентификации, поэтому она отвечает на loopback и там же остаётся.
+Чтобы дотянуться до неё с другой машины, до сих пор приходилось ставить перед ней nginx и
+поддерживать его в живых. lmrelay — это та же самая работа, оформленная как демон, который
+ставится через pip: слушает 11435 рядом с Ollama, требует учётные данные от обращающихся к
+нему клиентов и — раз уж он всё равно стоит на пути — выходит на OpenAI, Anthropic,
+DeepSeek или Grok через один добавленный в начало пути сегмент.
 
 [English](https://github.com/wachawo/lmrelay/blob/main/README.md) | [Español](https://github.com/wachawo/lmrelay/blob/main/docs/README_ES.md) | [Português](https://github.com/wachawo/lmrelay/blob/main/docs/README_PT.md) | [Français](https://github.com/wachawo/lmrelay/blob/main/docs/README_FR.md) | [Deutsch](https://github.com/wachawo/lmrelay/blob/main/docs/README_DE.md) | [Italiano](https://github.com/wachawo/lmrelay/blob/main/docs/README_IT.md) | **[Русский](https://github.com/wachawo/lmrelay/blob/main/docs/README_RU.md)** | [中文](https://github.com/wachawo/lmrelay/blob/main/docs/README_ZH.md) | [日本語](https://github.com/wachawo/lmrelay/blob/main/docs/README_JA.md) | [हिन्दी](https://github.com/wachawo/lmrelay/blob/main/docs/README_HI.md) | [한국어](https://github.com/wachawo/lmrelay/blob/main/docs/README_KR.md)
 
@@ -16,11 +21,6 @@ flowchart LR
     R --> O["Ollama<br/>:11434"]
     R --> H["OpenAI, Anthropic,<br/>DeepSeek, Grok"]
 ```
-
-У Ollama нет собственной проверки учётных данных. Выпустить её за пределы loopback, чтобы до
-неё дотянулась остальная локальная сеть, до сих пор означало поставить перед ней что-то ещё —
-на практике nginx. lmrelay — это та же самая одна задача, оформленная как демон, который
-ставится через pip, и ничего, кроме неё.
 
 ### Требования
 
