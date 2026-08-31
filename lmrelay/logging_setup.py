@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Centralized logging configuration. Called once at startup."""
+"""Centralized logging configuration. Set at startup, and again by a reload that moves the level."""
 
 import logging
 
@@ -13,7 +13,7 @@ PLAIN_FORMAT = "%(message)s"
 
 
 def setup_logging(level: str = "INFO", plain: bool = False) -> None:
-    """Initialize logging once. Safe to call multiple times (uses force=True)."""
+    """Initialize logging. Safe to call again under a live process (uses force=True)."""
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
         handlers=[logging.StreamHandler()],

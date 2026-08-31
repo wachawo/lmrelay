@@ -104,7 +104,7 @@ def service_control(action: str, config_path: Path) -> str:
     if action == "reload":
         # launchd has no reload verb, and it is the same process either way.
         reload_daemon(config_path)
-        return "lmrelay: reloaded the launchd-managed process with SIGHUP."
+        return "lmrelay: signalled the launchd-managed process to re-read its config (SIGHUP)."
     # No -w: that flag writes the job into launchd's disabled database, where it
     # survives a reboot. A stop is meant to be temporary, and only `lmrelay
     # disable` may decide the relay stops coming back at login.
@@ -260,7 +260,10 @@ def reload_relay(args: argparse.Namespace) -> None:
         logger.info(service_control("reload", config_path))
         return
     if reload_daemon(config_path):
-        logger.info("lmrelay: reloaded (SIGHUP).")
+        # "Signalled", not "reloaded", for the reason spelled out at
+        # reload_running_relay: a relay that cannot parse what it re-reads keeps
+        # the config it had, and this command exits 0 either way.
+        logger.info("lmrelay: signalled the running relay to re-read its config (SIGHUP).")
     else:
         logger.info("lmrelay: not running; nothing to reload.")
 

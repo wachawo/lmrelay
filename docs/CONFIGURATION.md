@@ -162,6 +162,38 @@ runs the relay detached, and on Windows only `lmrelay run` works.
 From then on `stop`, `restart` and `reload` go through that manager instead of the pidfile,
 so the two cannot disagree about who owns the process; each command says which path it took.
 
+## Reload
+
+`lmrelay reload` sends the running relay a SIGHUP, and it re-reads `lmrelay.toml` and
+`state.json` in place. Nothing in flight is disturbed: connections stay open and a stream
+already being relayed runs to its end. Every command that writes a change — `token gen`,
+`auth true`, `provider add` and the rest — signals the relay for you, so an explicit reload
+is what you run after editing `lmrelay.toml` by hand.
+
+| Key | Applied by | Why |
+|---|---|---|
+| `[upstream.*]`, and providers added by `lmrelay provider add` | `lmrelay reload` | Base URLs and headers are read from the config on every request, so the next request uses the new set. |
+| `default_upstream` | `lmrelay reload` | Chosen per request, out of that same config. |
+| Caller tokens, and the auth switch | `lmrelay reload` | Also read per request, so `lmrelay auth true` starts requiring a credential as soon as the relay has re-read state. |
+| `log_level` | `lmrelay reload` | Logging is reconfigured in place, and the new level governs the next line the relay writes. |
+| `host`, `port` | `lmrelay restart` | The socket is already bound, and a running server cannot move it. |
+| `connect_timeout` | `lmrelay restart` | The shared httpx client is already open and carries the timeout; closing it to re-time would abort every stream being relayed through it. |
+
+The reload log names whichever of `host`, `port` and `connect_timeout` differs from what the
+running relay started with, and says a restart applies them. They are named individually, so
+a changed port does not hide an unchanged timeout. The keys above them are applied without
+comment.
+
+A config the relay cannot use is logged and discarded, and it carries on serving the one it
+already had — that covers `state.json` as much as `lmrelay.toml`, and a value the file spells
+wrongly (`port = "eleven"`, `log_level = "verbose"`) as much as a syntax error. A typo must
+not take the relay down.
+
+The CLI reports that it signalled the relay, never that the change took effect. SIGHUP is
+delivered, not acknowledged, so `lmrelay reload` and every command that reloads on your
+behalf stop at what they did. The outcome is in `lmrelay.log`: a discarded reload is logged
+whatever the level, an accepted one at `INFO` or below.
+
 ## Behaviour worth knowing
 
 - **Nothing is buffered.** Request and response bodies stream in both directions; the
@@ -176,14 +208,6 @@ so the two cannot disagree about who owns the process; each command says which p
   an upstream with no configured headers receives no credential at all.
 - **The elapsed time in the access log is time to first byte**, not the duration of a
   streamed answer.
-- **A reload applies upstreams, tokens and the auth switch — not `host`, `port` or
-  `connect_timeout`.** A running server cannot rebind its socket or re-time a client that is
-  already open. The reload log names the ones that changed and says a restart applies them.
-- **A config that fails to parse on reload is logged and discarded**, and the relay keeps
-  serving the one it already had. A typo must not take the relay down. That covers
-  `state.json` as well as `lmrelay.toml`, and it is why `token gen`, `auth true` and the rest
-  say they signalled the relay rather than that the change is live: the reload is delivered,
-  not acknowledged, and its outcome is in the relay's log.
 - **The pidfile is written by the relay itself**, whether it was started by `run`, by
   `serve` or by a service manager, so `status`, `stop` and `reload` have one place to look
   regardless. A pidfile naming a dead process is overwritten silently; one naming a live
@@ -251,6 +275,8 @@ Raised by the relay before it binds, and by every CLI command that loads the con
 | `lmrelay: cannot read <path>: <Type>: <detail>` | any command that loads the config | The file could not be opened, or TOML could not parse it. | Fix the syntax the detail names, or the permissions on the path. |
 | `lmrelay: config has no [upstream.*] sections in <config> and no providers in <state>. Run 'lmrelay provider add' or add an [upstream.*] table.` | any command that loads the config | The config parses but defines no upstream at all, and state has none either. | Add an `[upstream.*]` table, or run `lmrelay provider add`. |
 | `lmrelay: default_upstream '<name>' is not defined; known upstreams: <list>` | any command that loads the config | `[server] default_upstream` names an upstream that no source defines. | Set it to one of the names listed, or define the one it names. |
+| `lmrelay: [server] <port\|connect_timeout> must be a whole number, got <value>` | any command that loads the config | The key holds something `int()` cannot read, usually a quoted number or a typo. | Write it unquoted, as a number. Refused rather than coerced, so a reload discards it like any other unusable config instead of raising out of the signal handler. |
+| `lmrelay: [server] log_level '<value>' is not a logging level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL` | any command that loads the config | The level is not one `logging` knows. | Use one of the five. Refused rather than quietly read as `INFO`, which would leave a reload announcing a level the relay was not running at. |
 | `lmrelay: upstream '<name>' header '<header>' references ${VAR}, which is not set` | any command that loads the config | A header value in `lmrelay.toml` interpolates an environment variable that is absent. | Export the variable, or comment the upstream block out. This is why the shipped example has the hosted blocks commented. |
 | `lmrelay: upstream '<name>' header '<header>' has a malformed ${...} reference: <detail>` | any command that loads the config | A `$` in a header value is not a well-formed `${VAR}`. | Write `$$` for a literal `$`, or store the key with `lmrelay provider add`, which does not expand. |
 | `lmrelay: upstream name '<name>' is reserved — it would shadow the Ollama/OpenAI path root` | any command that loads the config | An `[upstream.api]` or `[upstream.v1]` table. | Rename the upstream. Those two segments are how every Ollama and OpenAI client addresses the default upstream. |
@@ -313,7 +339,7 @@ Logged and then ignored. Nothing is refused and nothing stops.
 
 | Message | Where | Means | Do |
 |---|---|---|---|
-| `lmrelay: listening on <host> with auth off — every caller that can reach this port can use the configured upstream credentials. Run 'lmrelay auth true'.` | relay startup, `lmrelay run --host` | A non-loopback bind demands no credential. | Run `lmrelay auth true`, unless something in front of the relay already authenticates. |
+| `lmrelay: listening on <host> with auth off — every caller that can reach this port can use the configured upstream credentials. Run 'lmrelay auth true'.` | relay startup, `lmrelay run --host`, `lmrelay reload` | A non-loopback bind demands no credential. On a reload it is asked about the host the socket is on, since `lmrelay auth false` can create the condition under a relay that is already listening. | Run `lmrelay auth true`, unless something in front of the relay already authenticates. |
 | `lmrelay: <N> caller token(s) configured but auth is off; run 'lmrelay auth true' to require them` | any command that loads the config | Tokens exist but nothing checks them. | Run `lmrelay auth true`, or delete the tokens if the relay is meant to stay open. |
 | `lmrelay: provider(s) <names> from state.json shadow the [upstream.*] of the same name in <config>` | any command that loads the config | A CLI-added provider is winning over a hand-written table. | Nothing, if that was the intent. Otherwise `lmrelay provider delete <name>`. |
 | `lmrelay: <fields> changed in <config> but a reload cannot apply that — the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout. |
@@ -330,10 +356,10 @@ Logged and then ignored. Nothing is refused and nothing stops.
   neither the other process nor a way out.
 - The exposure warning is a **warning and not a refusal**, since running uncredentialed
   behind an authenticated nginx is legitimate.
-- `token gen`, `auth true`, `provider add` and the rest report that they **signalled** the
-  running relay rather than that the change is live. SIGHUP is delivered, not acknowledged,
-  and a relay that cannot parse what it re-reads keeps the config it had. The outcome is in
-  `lmrelay.log`.
+- `lmrelay reload`, and `token gen`, `auth true`, `provider add` and the rest, report that
+  they **signalled** the running relay rather than that the change is live. SIGHUP is
+  delivered, not acknowledged, and a relay that cannot parse what it re-reads keeps the
+  config it had. The outcome is in `lmrelay.log`.
 - A 401 is written to the access log as `<client> <METHOD> <path> -> -: 401 (auth)`. No
   upstream was chosen, which is what the `-` says.
 

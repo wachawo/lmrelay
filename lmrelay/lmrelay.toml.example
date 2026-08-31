@@ -10,6 +10,8 @@
 # ${VAR} in any header value is read from the process environment, so API
 # keys can stay out of this file.
 
+# host, port and connect_timeout are read at startup only; changing any of them
+# needs 'lmrelay restart'. The rest of this file is picked up by 'lmrelay reload'.
 [server]
 host             = "127.0.0.1"   # 0.0.0.0 only with auth on
 port             = 11435         # beside Ollama, which keeps 11434; point

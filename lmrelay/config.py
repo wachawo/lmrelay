@@ -208,6 +208,37 @@ def collect_auth_tokens(state: RelayState, data: dict) -> tuple[str, ...]:
     return tuple(dict.fromkeys(token for token in candidates if token))
 
 
+def read_int(server: dict, name: str, default: int) -> int:
+    """Read one numeric [server] key as the operator's error rather than int()'s.
+
+    A bare int() raises ValueError, which is a sibling of ConfigError rather than
+    one of its own kind, so a reload's `except LmrelayError` does not catch it:
+    `port = "eleven"` left the signal handler as a traceback, from a file that
+    had parsed perfectly well as TOML.
+    """
+    value = server.get(name, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"lmrelay: [server] {name} must be a whole number, got {value!r}")
+
+
+def read_log_level(server: dict) -> str:
+    """Read log_level, refusing a name logging would quietly read as INFO.
+
+    getattr(logging, level) falls back on its own, so an unrecognised level was
+    announced as applied by the reload and then discarded — the relay ran at INFO
+    while the log said it was running at something else.
+    """
+    value = str(server.get("log_level", DEFAULT_LOG_LEVEL))
+    if value.upper() not in logging.getLevelNamesMapping():
+        raise ConfigError(
+            f"lmrelay: [server] log_level '{value}' is not a logging level; "
+            f"expected DEBUG, INFO, WARNING, ERROR or CRITICAL"
+        )
+    return value
+
+
 def load_config(path: Path | None = None) -> RelayConfig:
     """Read and validate the config. Raises ConfigError with an operator-facing message."""
     target = path or find_config_path()
@@ -250,10 +281,10 @@ def load_config(path: Path | None = None) -> RelayConfig:
 
     return RelayConfig(
         host=server.get("host", DEFAULT_HOST),
-        port=int(server.get("port", DEFAULT_PORT)),
+        port=read_int(server, "port", DEFAULT_PORT),
         default_upstream=default_upstream,
-        connect_timeout=int(server.get("connect_timeout", DEFAULT_CONNECT_TIMEOUT)),
-        log_level=str(server.get("log_level", DEFAULT_LOG_LEVEL)),
+        connect_timeout=read_int(server, "connect_timeout", DEFAULT_CONNECT_TIMEOUT),
+        log_level=read_log_level(server),
         auth_enabled=state.auth_enabled,
         auth_tokens=auth_tokens,
         upstreams=upstreams,

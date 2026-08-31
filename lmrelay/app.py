@@ -11,6 +11,7 @@ import time
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from dataclasses import replace
 
 import httpx
 from fastapi import FastAPI, Request, Response
@@ -55,11 +56,15 @@ def reload_config(app: FastAPI) -> None:
         logger.error(f"{exc}; keeping the running config")
         return
 
-    # Named individually rather than as one fixed sentence, so an operator who
-    # changed the port can tell that connect_timeout did not also drift.
+    # Measured against what this process started with, not against what it last
+    # read: no reload moves these three, so a second reload that leaves the port
+    # where the first one put it has still not moved the socket, and must say so
+    # again. Named individually rather than as one fixed sentence, so an
+    # operator who changed the port can tell that connect_timeout did not drift.
+    started = app.state.startup_config
     unapplied = [
         name for name in ("host", "port", "connect_timeout")
-        if getattr(config, name) != getattr(current, name)
+        if getattr(config, name) != getattr(started, name)
     ]
     if unapplied:
         logger.warning(
@@ -67,6 +72,29 @@ def reload_config(app: FastAPI) -> None:
             f"cannot apply that — the socket is already bound and the client already open; "
             f"restart to apply"
         )
+
+    # Re-checked because a reload is one of the ways to create the condition it
+    # warns about: `lmrelay auth false` opens a relay that is already listening.
+    # Asked about the host the socket is on rather than the one now in the file,
+    # since a file edited back to 127.0.0.1 has closed nothing until a restart.
+    exposure_warning = check_exposure(replace(config, host=started.host))
+    if exposure_warning:
+        logger.warning(exposure_warning)
+
+    # Applied rather than listed above: a logger can be reconfigured under a
+    # live process, where the socket is already bound and the client already
+    # open, so log_level is the one server setting a reload can honour.
+    if config.log_level != current.log_level:
+        message = f"lmrelay: log_level {current.log_level} -> {config.log_level}"
+        # Said under whichever of the two levels admits an INFO line: the old one
+        # where it still does, the new one otherwise. Only ever before the switch
+        # would lose every change made out of WARNING or above.
+        said_already = logger.isEnabledFor(logging.INFO)
+        if said_already:
+            logger.info(message)
+        setup_logging(config.log_level)
+        if not said_already:
+            logger.info(message)
 
     # The httpx client is deliberately left alone: closing it would abort every
     # stream currently being relayed, and nothing a reload changes lives in it —
@@ -104,6 +132,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     write_pid(pidfile, os.getpid(), recorded_bind(config))
 
     app.state.config = config
+    # Kept alongside it as the baseline a reload measures host, port and
+    # connect_timeout against: they are what this process bound and opened with,
+    # and app.state.config moves out from under them at every accepted reload.
+    app.state.startup_config = config
     # No read timeout on purpose: a large local model can think for minutes
     # before its first token, and a read timeout would kill it in a way that
     # looks like a model fault. Failing fast on an unreachable host is the

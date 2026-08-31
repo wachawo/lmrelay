@@ -12,13 +12,40 @@ from starlette.testclient import TestClient
 # Local imports
 from lmrelay.daemon import PID_NAME, read_pid, write_pid
 from lmrelay.state import STATE_NAME
-from tests.conftest import CONFIG_TEMPLATE, TOKEN, build_relay, write_config
+from tests.conftest import CONFIG_TEMPLATE, TOKEN, build_relay, write_config, write_state
 
 EXTRA_UPSTREAM = """
 [upstream.second]
 base_url = "http://second.invalid:11434"
 dialect  = "ollama"
 """
+
+FIRST_CHUNK = b'{"response":"a"}\n'
+
+
+def fails_after_the_first_chunk():
+    """An upstream body that starts an answer and then breaks.
+
+    Synchronous because the recorder iterates its chunks synchronously, and a
+    generator rather than a list because a list has no way to stop badly.
+    """
+    yield FIRST_CHUNK
+    raise httpx.ReadError("connection reset")
+
+
+def config_where(name: str, value: str) -> str:
+    """The standard config with one [server] key set to something a test needs.
+
+    Spelled once here because the template's columns are aligned: a test that
+    hard-codes that spacing breaks on a change to a config it does not care
+    about. A key the template omits — log_level — is added rather than replaced.
+    """
+    body = CONFIG_TEMPLATE.format(token=TOKEN)
+    setting = f"{name} = {value}"
+    for line in body.splitlines():
+        if line.startswith(f"{name} "):
+            return body.replace(line, setting)
+    return body.replace("[server]", f"[server]\n{setting}")
 
 
 class TestTheDoor:
@@ -91,6 +118,37 @@ class TestAnOpenRelay:
         provider."""
         open_relay.post("/api/chat", json={}, headers={"Authorization": "Bearer whatever"})
         assert "authorization" not in recorder.last.headers
+
+
+class TestATokenNobodyIsChecking:
+    """A valid token in state.json with the switch off — an operator who ran
+    `lmrelay token gen` and never ran `lmrelay auth true`. The switch is what
+    decides, not whether tokens exist, so the relay is open either way. Half of
+    it would be worse than both: a relay that honoured the token and refused
+    its absence would have auth on with the switch off, and `lmrelay auth true`
+    would then be the command that changes nothing."""
+
+    @pytest.fixture
+    def unchecked(self, tmp_path, monkeypatch, recorder):
+        monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+        monkeypatch.setenv(
+            "LMRELAY_CONFIG", write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN))
+        )
+        write_state(tmp_path, auth_enabled=False, tokens=(TOKEN,))
+        yield from build_relay(recorder)
+
+    def test_a_caller_presenting_the_token_gets_through(self, unchecked, recorder):
+        response = unchecked.post(
+            "/api/chat", json={}, headers={"Authorization": f"Bearer {TOKEN}"}
+        )
+        assert response.status_code == 200
+        # And the genuine relay-issued credential is stripped like any other.
+        # Nothing read it on the way in, which is exactly how it could have been
+        # forwarded — handing a provider a working lmrelay token.
+        assert "authorization" not in recorder.last.headers
+
+    def test_and_a_caller_presenting_nothing_gets_through_too(self, unchecked):
+        assert unchecked.post("/api/chat", json={}).status_code == 200
 
 
 class TestWhatTheUpstreamReceives:
@@ -238,7 +296,8 @@ class TestRefusingWhatCannotWork:
 
 
 class TestWhenTheUpstreamIsNotThere:
-    """Failures of the connection, reported as the relay's own."""
+    """Failures of the connection, reported as the relay's own for as long as
+    there is still a status to report them in."""
 
     def test_an_unreachable_upstream_is_a_502(self, authed, recorder):
         recorder.raises = httpx.ConnectError("nothing listening")
@@ -256,11 +315,36 @@ class TestWhenTheUpstreamIsNotThere:
         recorder.raises = httpx.ConnectTimeout("too slow")
         assert authed.post("/api/chat", json={}).status_code == 502
 
-    def test_a_read_failure_mid_answer_is_also_a_502(self, authed, recorder):
+    def test_a_failure_before_the_first_byte_is_a_502(self, authed, recorder):
+        """`raises` fires in the upstream's handler, so no response exists yet
+        and the relay is still free to choose the status the caller gets."""
         recorder.raises = httpx.ReadError("connection reset")
         response = authed.post("/api/chat", json={})
         assert response.status_code == 502
         assert "ollama" in response.json()["error"]
+
+    def test_a_failure_part_way_through_a_stream_cannot_become_a_502(self, authed, recorder):
+        """The status is spent. It went out with the first chunk, so a body that
+        breaks afterwards has no status left to be reported in: the iterator
+        raises, the relay's 500 handler cannot send a response that has already
+        started, and the exception leaves the app. Recorded rather than endorsed
+        — nothing better is available once the 200 is gone."""
+        recorder.chunks = fails_after_the_first_chunk()
+        with pytest.raises(httpx.ReadError):
+            authed.post("/api/generate", json={"stream": True})
+        # And the first chunk really was produced, which is what makes this the
+        # case above's opposite rather than a second spelling of it.
+        assert recorder.produced == [FIRST_CHUNK]
+
+    def test_and_the_only_account_of_it_is_two_log_lines(self, authed, recorder, caplog):
+        """The access line is written when the headers leave, so it says 200 and
+        keeps saying it; the failure is a separate line. An operator reading
+        either one alone sees a request that went fine."""
+        recorder.chunks = fails_after_the_first_chunk()
+        with caplog.at_level(logging.INFO), pytest.raises(httpx.ReadError):
+            authed.post("/api/generate", json={"stream": True})
+        assert "-> ollama: 200" in caplog.text
+        assert "ReadError: connection reset" in caplog.text
 
 
 class TestStartup:
@@ -308,6 +392,20 @@ class TestStartup:
 
 class TestReloadingInPlace:
     """What SIGHUP does, called directly: the config changes under a live relay."""
+
+    @pytest.fixture
+    def logging_restored(self):
+        """Put the root logger back afterwards.
+
+        setup_logging reconfigures it for the whole process — that is the point
+        of the setting — so a test that moves the level would otherwise hand the
+        next one a logger it never asked for.
+        """
+        root = logging.getLogger()
+        handlers, level = root.handlers[:], root.level
+        yield
+        root.handlers[:] = handlers
+        root.setLevel(level)
 
     def test_an_upstream_added_to_the_file_is_in_effect_without_a_restart(
         self, authed, recorder, tmp_path
@@ -357,6 +455,19 @@ class TestReloadingInPlace:
         assert app.state.config is before
         assert "keeping the running config" in caplog.text
 
+    def test_a_wrong_typed_value_is_discarded_like_a_syntax_error(self, authed, tmp_path, caplog):
+        """`port = "eleven"` parses as TOML and fails at int(). A bare ValueError
+        is not the LmrelayError this catches, so it left the signal handler as a
+        traceback while the CLI had already reported the signal sent."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.config
+        write_config(tmp_path, config_where("port", '"eleven"'))
+        with caplog.at_level(logging.ERROR):
+            reload_config(app)
+        assert app.state.config is before
+        assert "keeping the running config" in caplog.text
+
     def test_the_warning_names_only_the_bind_setting_that_changed(self, authed, tmp_path, caplog):
         """An operator who moved the port has to be able to tell that
         connect_timeout did not also drift, so one fixed sentence naming all
@@ -369,3 +480,107 @@ class TestReloadingInPlace:
             reload_config(app)
         assert "port changed" in caplog.text
         assert "connect_timeout" not in caplog.text
+
+    def test_and_it_keeps_saying_so_on_every_later_reload(self, authed, tmp_path, caplog):
+        """The socket is still where it was bound, so a second reload that leaves
+        the port where the first one put it has not made the two agree. Measured
+        against the last config read, this warning went quiet after one reload
+        and left the operator believing the move had landed."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_where("port", "11439"))
+        reload_config(app)
+        # Cleared, or the first reload's warning would answer for the second.
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "port changed" in caplog.text
+
+    def test_and_putting_it_back_stops_the_warning(self, authed, tmp_path, caplog):
+        """The other half of the same baseline: a file that once again names the
+        bound port needs no restart, and saying it does would send an operator to
+        undo something they had already undone."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_where("port", "11439"))
+        reload_config(app)
+        write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN))
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "port" not in caplog.text
+
+    def test_a_changed_log_level_is_in_force_for_the_next_line(
+        self, authed, tmp_path, logging_restored
+    ):
+        """The one [server] key a reload can honour: a logger can be
+        reconfigured under a live process, where a bound socket cannot."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_where("log_level", '"DEBUG"'))
+        reload_config(app)
+        assert logging.getLogger().level == logging.DEBUG
+
+    def test_and_it_is_not_named_as_needing_a_restart(
+        self, authed, tmp_path, caplog, logging_restored
+    ):
+        """It is applied, so listing it beside host and port would send the
+        operator to restart a relay that had already done what they asked."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_where("log_level", '"DEBUG"'))
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "log_level" not in caplog.text
+
+    def test_a_level_logging_does_not_know_is_refused_rather_than_announced(
+        self, authed, tmp_path, caplog, logging_restored
+    ):
+        """getattr(logging, name) falls back on its own, so an unknown level was
+        announced as applied and then quietly dropped: the relay ran at INFO
+        while the log said it was running at something else."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.config
+        write_config(tmp_path, config_where("log_level", '"verbose"'))
+        with caplog.at_level(logging.ERROR):
+            reload_config(app)
+        assert app.state.config is before
+        assert "is not a logging level" in caplog.text
+
+
+class TestReloadingARelayAnyoneCanReach:
+    """The bind is public, so the auth switch decides whether the upstream
+    credentials are. A reload can move that switch, which makes it one of the
+    ways to create the condition the startup check exists to warn about."""
+
+    @pytest.fixture
+    def public_relay(self, tmp_path, monkeypatch, recorder):
+        monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+        monkeypatch.setenv("LMRELAY_CONFIG", write_config(
+            tmp_path, config_where("host", '"0.0.0.0"')
+        ))
+        write_state(tmp_path, auth_enabled=True, tokens=(TOKEN,))
+        yield from build_relay(recorder)
+
+    def test_turning_auth_off_says_the_relay_is_now_open(self, public_relay, tmp_path, caplog):
+        """`lmrelay auth false` opens a relay that is already listening, and the
+        operator who ran it is the one who most needs telling."""
+        from lmrelay.app import app, reload_config
+
+        write_state(tmp_path, auth_enabled=False, tokens=(TOKEN,))
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "every caller that can reach this port" in caplog.text
+
+    def test_and_editing_the_host_back_does_not_quiet_it(self, public_relay, tmp_path, caplog):
+        """Asked about the host the socket is on, not the one now in the file:
+        the relay is still bound to 0.0.0.0 until a restart, so a config that
+        says 127.0.0.1 has closed nothing yet."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN))
+        write_state(tmp_path, auth_enabled=False, tokens=(TOKEN,))
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "every caller that can reach this port" in caplog.text
