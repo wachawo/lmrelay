@@ -31,6 +31,7 @@ def make_config(**overrides) -> RelayConfig:
     settings = {
         "host": "127.0.0.1", "port": 11435, "default_upstream": "ollama",
         "connect_timeout": 10, "log_level": "INFO",
+        "rate_limit": 0.0, "rate_burst": 0.0, "max_concurrent": 0,
         "auth_enabled": True, "auth_tokens": TOKENS,
         "upstreams": {"ollama": OLLAMA, "anthropic": CLAUDE, "openai": GPT},
         "config_path": None, "state_path": None,

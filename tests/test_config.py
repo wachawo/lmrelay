@@ -309,6 +309,42 @@ class TestDefaults:
                                 '[upstream.x]\nbase_url = "https://api.openai.com/"\n')
         assert load_config(target).upstreams["x"].base_url == "https://api.openai.com"
 
+    def test_every_limit_is_off(self, tmp_path):
+        """A relay in front of one operator's own Ollama has nobody to limit,
+        and an install that predates these keys must behave as it did."""
+        loaded = load_config(write(tmp_path, MINIMAL))
+        assert (loaded.rate_limit, loaded.rate_burst, loaded.max_concurrent) == (0, 0, 0)
+
+
+class TestRefusingALimitNobodyMeant:
+    """The numbers that bound a caller, and the values that are a slip rather
+    than a setting."""
+
+    def test_a_cap_is_read_as_written(self, tmp_path):
+        target = write(tmp_path, "[server]\nmax_concurrent = 3\n" + MINIMAL)
+        assert load_config(target).max_concurrent == 3
+
+    def test_a_negative_cap_is_refused_rather_than_read_as_off(self, tmp_path):
+        """0 already means off, so a negative one is a mistake. Admitting it as
+        a second spelling would hide the mistake behind the behaviour the
+        operator was trying to change."""
+        target = write(tmp_path, "[server]\nmax_concurrent = -1\n" + MINIMAL)
+        with pytest.raises(ConfigError, match="max_concurrent"):
+            load_config(target)
+
+    def test_and_so_is_one_that_is_not_a_number(self, tmp_path):
+        """int() raises ValueError, which a reload's `except LmrelayError` does
+        not catch: it would leave the signal handler as a traceback."""
+        target = write(tmp_path, '[server]\nmax_concurrent = "lots"\n' + MINIMAL)
+        with pytest.raises(ConfigError, match="whole number"):
+            load_config(target)
+
+    def test_a_port_is_still_read_without_a_floor(self, tmp_path):
+        """The floor is passed by one key. Ports and timeouts were not given
+        one, and this change must not have quietly handed them one."""
+        target = write(tmp_path, "[server]\nport = 65535\n" + MINIMAL)
+        assert load_config(target).port == 65535
+
 
 class TestSayingWhenThePortIsOpen:
     """A warning, not a refusal: uncredentialed behind an authenticated nginx

@@ -272,9 +272,12 @@ Punkt für Punkt:
   der Bearer verlässt den Prozess nie. Jedes Beispiel aus der Provider-Dokumentation muss
   umgeschrieben werden.
 
-Wo nginx gewinnt: TLS, echtes Rate Limiting, und bereits installiert zu sein. lmrelay hat
-nichts davon und wird es auch nicht bekommen. Die beiden ergänzen sich, statt zu konkurrieren.
-Stell nginx für TLS davor, und lass Token und Provider hier.
+Wo nginx gewinnt: TLS, bereits installiert zu sein, und Rate-Limiting, das über einen
+einzelnen Prozess hinaus trägt. Die ersten beiden kommen nicht. lmrelay hat sehr wohl
+[Limits pro Aufrufer](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits), die am Token des Aufrufers hängen, was nginx nicht kann, ohne
+die Token selbst zu halten; gezählt werden sie aber in diesem einen Prozess, und ohne Auth
+fallen sie auf die Adresse zurück. Die beiden ergänzen sich, statt zu konkurrieren. Stell
+nginx für TLS davor, und lass Token und Provider hier.
 ### Lizenz
 
 MIT License. Siehe [LICENSE](../LICENSE).

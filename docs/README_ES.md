@@ -269,9 +269,12 @@ por punto:
   credenciales de la URL en esa misma cabecera y el bearer nunca sale. Cada ejemplo de la
   documentación del proveedor hay que reescribirlo.
 
-Donde nginx gana: TLS, limitación de tasa de verdad, y estar ya instalado. lmrelay no tiene
-ninguna de las tres, y no las va a tener. Los dos se componen en lugar de competir. Pon nginx
-delante para TLS, y deja aquí los tokens y los proveedores.
+Donde nginx gana: TLS, estar ya instalado, y un límite de tasa que aguanta fuera de un solo
+proceso. Las dos primeras no van a llegar. lmrelay sí tiene
+[límites por llamante](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits), asociados al token de quien llama, algo que nginx no puede
+hacer sin guardar los tokens él mismo; pero se cuentan en este único proceso y, con la
+autenticación apagada, recaen en la dirección. Los dos se componen en lugar de competir. Pon
+nginx delante para TLS, y deja aquí los tokens y los proveedores.
 ### Licencia
 
 Licencia MIT. Véase [LICENSE](../LICENSE).

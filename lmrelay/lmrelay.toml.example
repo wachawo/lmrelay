@@ -21,6 +21,26 @@ connect_timeout  = 10            # seconds to reach the upstream; there is
                                  # deliberately no read timeout (see README)
 log_level        = "INFO"
 
+# Per-caller limits, all three off by default: a relay in front of one
+# operator's own Ollama has nobody to limit, and a limit nobody chose is a
+# refusal nobody expects. A caller is its token when auth is on and its address
+# otherwise, so two machines sharing a token share one allowance while an
+# address behind NAT is many callers wearing one number. The counts live in
+# memory in this one process, so a second relay beside this one counts its own
+# callers and a client reaching both has both allowances.
+rate_limit       = 0             # requests per second per caller, 0 off. A
+                                 # fraction is allowed, so 0.5 is one request
+                                 # every two seconds rather than a limit a
+                                 # whole number would have rounded to off
+rate_burst       = 0             # how many may arrive at once before the rate
+                                 # bites. Anything under 1 is read as 1, and
+                                 # the key does nothing while rate_limit is 0
+max_concurrent   = 0             # most simultaneous relayed requests one
+                                 # caller may hold, 0 off. A streamed answer
+                                 # holds its slot until its last byte, and
+                                 # there is no read timeout, so one slow
+                                 # generation can hold one for minutes
+
 # Caller credentials are not configured here. They live in state.json and are
 # managed by the CLI:
 #

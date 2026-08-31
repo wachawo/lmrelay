@@ -269,8 +269,11 @@ punto:
   dell'URL in quella stessa intestazione e il bearer non esce mai. Ogni esempio della
   documentazione del provider va riscritto.
 
-Dove nginx vince: TLS, rate limiting vero, ed essere già installato. lmrelay non ha nessuna
-delle tre cose, e non le avrà. I due si compongono invece di competere. Metti nginx davanti
+Dove nginx vince: TLS, essere già installato, e un rate limiting che regge fuori da un solo
+processo. Le prime due non arriveranno. lmrelay ha invece
+[limiti per chiamante](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits), legati al token di chi chiama, cosa che nginx non può fare
+senza custodire lui stesso i token; ma sono contati in questo unico processo e, con l'auth
+spenta, ricadono sull'indirizzo. I due si compongono invece di competere. Metti nginx davanti
 per il TLS, e lascia qui token e provider.
 ### Licenza
 

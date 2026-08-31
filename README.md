@@ -259,9 +259,13 @@ nginx already reverse-proxies, so a daemon has to earn its place. Briefly, point
   URL's credentials into that same header and the bearer never leaves. Every example in the
   provider's own documentation has to be rewritten.
 
-Where nginx wins: TLS, real rate limiting, and already being installed. lmrelay has none of
-the three, and is not going to. The two compose rather than compete. Put nginx in front for
-TLS, and leave tokens and providers here.
+Where nginx wins: TLS, already being installed, and rate limiting that holds up outside one
+process. The first two are not coming. lmrelay does have
+[per-caller limits](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits),
+keyed on the caller's token in a way nginx cannot manage without holding the tokens itself,
+but they are counted in this one process and fall back to an address when auth is off. The
+two compose rather than compete. Put nginx in front for TLS, and leave tokens and providers
+here.
 
 ### License
 

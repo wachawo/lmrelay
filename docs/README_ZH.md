@@ -248,8 +248,10 @@ nginx 本来就能做反向代理，所以一个守护进程得证明自己值�
   但那时 `api_key` 就成了废字段：httpx 会把 URL 里的凭据写进同一个头，bearer 根本发不出去。
   服务商文档里的每个示例都得重写。
 
-nginx 胜出的地方：TLS、真正的限流，以及它已经装好了。这三样 lmrelay 都没有，
-将来也不会有。两者是搭配关系，而不是竞争关系。把 nginx 放在前面做 TLS，
+nginx 胜出的地方：TLS、它已经装好了，以及在单个进程之外仍然成立的限流。前两样
+lmrelay 将来也不会有。但它确有[按调用方的限制](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits)，以调用方的 token 为键，
+而 nginx 不自己保管 token 就做不到这一点；只是这些计数只存在于这一个进程里，
+关掉鉴权后又退回到地址。两者是搭配关系，而不是竞争关系。把 nginx 放在前面做 TLS，
 token 和服务商留在这里。
 ### 许可证
 

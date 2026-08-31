@@ -45,6 +45,11 @@ DEFAULT_PORT            = 11435
 DEFAULT_UPSTREAM        = "ollama"
 DEFAULT_DIALECT         = "openai"
 DEFAULT_CONNECT_TIMEOUT = 10
+# Off unless asked for: a relay in front of one operator's own Ollama has
+# nobody to limit, and a limit nobody chose is a refusal nobody expects.
+DEFAULT_RATE_LIMIT      = 0
+DEFAULT_RATE_BURST      = 0
+DEFAULT_MAX_CONCURRENT  = 0
 DEFAULT_LOG_LEVEL       = "INFO"
 
 
@@ -67,6 +72,9 @@ class RelayConfig:
     default_upstream: str
     connect_timeout: int
     log_level: str
+    rate_limit: float
+    rate_burst: float
+    max_concurrent: int
     auth_enabled: bool
     auth_tokens: tuple[str, ...]
     upstreams: dict[str, Upstream]
@@ -208,19 +216,47 @@ def collect_auth_tokens(state: RelayState, data: dict) -> tuple[str, ...]:
     return tuple(dict.fromkeys(token for token in candidates if token))
 
 
-def read_int(server: dict, name: str, default: int) -> int:
+def read_int(server: dict, name: str, default: int, minimum: int | None = None) -> int:
     """Read one numeric [server] key as the operator's error rather than int()'s.
 
     A bare int() raises ValueError, which is a sibling of ConfigError rather than
     one of its own kind, so a reload's `except LmrelayError` does not catch it:
     `port = "eleven"` left the signal handler as a traceback, from a file that
     had parsed perfectly well as TOML.
+
+    `minimum` is passed only by keys where a number below it would be read as
+    something the operator did not write: `max_concurrent = -1` is a mistake,
+    and admitting it as another spelling of "off" would hide the mistake behind
+    the behaviour they were trying to change. Ports and timeouts pass none and
+    are unaffected.
     """
     value = server.get(name, default)
     try:
-        return int(value)
+        number = int(value)
     except (TypeError, ValueError):
         raise ConfigError(f"lmrelay: [server] {name} must be a whole number, got {value!r}")
+    if minimum is not None and number < minimum:
+        raise ConfigError(
+            f"lmrelay: [server] {name} cannot be less than {minimum}, got {value!r}"
+        )
+    return number
+
+
+def read_rate(server: dict, name: str, default: int) -> float:
+    """Read one rate key, refusing a negative as the operator's error.
+
+    A float rather than an int so that a limit under one request per minute can
+    be written as one: `rate_limit = 0.5` is thirty an hour, and rounding it to
+    zero would silently turn the limit off.
+    """
+    value = server.get(name, default)
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"lmrelay: [server] {name} must be a number, got {value!r}")
+    if rate < 0:
+        raise ConfigError(f"lmrelay: [server] {name} cannot be negative, got {value!r}")
+    return rate
 
 
 def read_log_level(server: dict) -> str:
@@ -285,6 +321,9 @@ def load_config(path: Path | None = None) -> RelayConfig:
         default_upstream=default_upstream,
         connect_timeout=read_int(server, "connect_timeout", DEFAULT_CONNECT_TIMEOUT),
         log_level=read_log_level(server),
+        rate_limit=read_rate(server, "rate_limit", DEFAULT_RATE_LIMIT),
+        rate_burst=read_rate(server, "rate_burst", DEFAULT_RATE_BURST),
+        max_concurrent=read_int(server, "max_concurrent", DEFAULT_MAX_CONCURRENT, minimum=0),
         auth_enabled=state.auth_enabled,
         auth_tokens=auth_tokens,
         upstreams=upstreams,

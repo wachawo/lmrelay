@@ -1,9 +1,9 @@
 # Configuration and Errors
 
 The [README](https://github.com/wachawo/lmrelay/blob/main/README.md) covers installation and
-usage. This document covers the config file, the state file, autostart, the behaviour that is
-not obvious from the outside, what every message the relay prints means, and how to have
-fail2ban act on refused credentials.
+usage. This document covers the config file, the state file, autostart, the per-caller limits,
+the behaviour that is not obvious from the outside, what every message the relay prints means,
+and how to have fail2ban act on refused credentials.
 
 ## Files on disk
 
@@ -39,6 +39,9 @@ port             = 11435         # beside Ollama, which keeps 11434
 default_upstream = "ollama"      # used when the path has no upstream prefix
 connect_timeout  = 10            # seconds to reach the upstream
 log_level        = "INFO"
+rate_limit       = 0             # requests per second per caller, 0 off
+rate_burst       = 0             # how many may arrive at once, 0 off
+max_concurrent   = 0             # simultaneous requests per caller, 0 off
 
 # Local Ollama, exactly where it already listens. Needs no credential, so it
 # has no headers at all.
@@ -132,6 +135,228 @@ on. Both count towards the token set that `auth true` requires.
 `token list` masks tokens unless `--show` is passed. Token ids are monotonic, so an id keeps
 meaning the same token after an unrelated delete.
 
+## Per-caller limits
+
+Two limits, both off unless you set them, and both counting the same caller:
+
+| Keys | Count | Off when |
+|---|---|---|
+| `rate_limit`, `rate_burst` | requests per second, as a token bucket | `rate_limit = 0` |
+| `max_concurrent` | requests in flight at the same moment | `max_concurrent = 0` |
+
+They answer different questions. `rate_limit` is how often a caller may ask. `max_concurrent`
+is how many requests it may have forwarded and not yet finished, which in front of one local
+model is the one that decides whether anybody else gets a turn. Not "receiving at once": a
+request waiting its turn inside Ollama, with `OLLAMA_NUM_PARALLEL` already spent, holds a
+relay slot the whole time it is receiving nothing. That is the intent, since it is occupying
+the upstream either way, but it matters when sizing this number against
+`OLLAMA_NUM_PARALLEL`.
+
+`rate_limit` is a token bucket rather than a counter per fixed window, because a window lets a
+caller spend its whole allowance in the last instant of one window and again in the first
+instant of the next, which is twice the rate across the boundary and exactly the burst a limit
+is meant to prevent. `rate_burst` is how much may be spent at once; anything below 1 is read
+as 1, and the key does nothing on its own while `rate_limit` is 0. Both are floats, so a limit
+below one request per second can be written as one: `rate_limit = 0.5` is one request every
+two seconds, where a whole number would have rounded it to 0 and turned the limit off.
+`max_concurrent` is a whole number, because half a request cannot be in flight.
+
+### What a caller is
+
+Both key on the same thing: **the token when auth is on, the address otherwise**. One keying
+rule to learn, not two.
+
+The token comes first because it is what identifies a caller. Two machines sharing one token
+are one caller and should share one allowance, while an address behind NAT is many callers
+wearing one number, and limiting it limits the office rather than the offender. The address is
+the fallback for a relay with auth off, where nothing else distinguishes anyone.
+
+The check happens **after** the credential, so a wrong guess is a 401 and never spends the
+allowance of the caller whose token was being guessed at.
+
+`GET /healthz` is exempt from both, as it is from auth: it touches no upstream. A dialect
+refusal spends a rate token, because the rate limit is charged before the path is examined,
+but never a concurrency slot, because nothing was relayed.
+
+**The address key is only as trustworthy as whatever is in front of the relay.** The relay
+runs uvicorn with `proxy_headers` on and every forwarder trusted, so the address it counts
+against is taken from `X-Forwarded-For` when that header is present. Behind an nginx that sets
+it, that is the point: the count follows the real client rather than the proxy. Reachable
+directly by anyone, it is a header the caller writes, and rotating it defeats both limits at
+once. Measured, with auth off and `rate_limit = 1`: three requests with no header gave
+`200, 429, 429`, while six requests each carrying a different made-up `X-Forwarded-For` all
+gave `200`, and left six buckets behind. The same forgery lets a caller occupy a named
+victim's concurrency slots.
+
+So the address key bounds a cooperating client, not an adversarial one. If the limits have to
+hold against callers you do not trust, turn auth on and let them key on the token, which a
+caller cannot choose. This is the same caveat the fail2ban section below states for its own
+reason, and it applies here for the same one.
+
+### What a refused caller sees
+
+Over the rate limit, `429` and a `Retry-After` in whole seconds:
+
+```json
+{"error": "lmrelay: rate limit of 2/s burst 5 exceeded"}
+```
+
+That header is computed, not guessed: it is the time until one token has refilled, rounded up
+because the header takes no fractions and rounding down would invite a retry that is refused
+again.
+
+The two numbers in the message are the ones the limiter is **using**, which are not always the
+ones in the file: `rate_burst` defaults to 0, meaning unset, and anything below 1 is read as 1.
+So `rate_limit = 2` on its own is reported as `burst 1`, because that is what is being
+enforced. A message quoting the configured `0` would be telling a caller no request is allowed
+at the moment one has just been served.
+
+Over the concurrency limit, `429` and **no** `Retry-After`:
+
+```json
+{"error": "lmrelay: too many simultaneous requests (limit 4); one of yours must finish first"}
+```
+
+There is deliberately no header here. A slot is freed when some other request finishes, and
+with no read timeout a generation can run for minutes, so the relay does not know when that
+will be. A guessed number would be a lie.
+
+The clause after the semicolon is there because the limit is per caller: what has to end is
+one of this caller's own requests, not somebody else's. That is exact when the key is a token.
+When auth is off and the key is an address, "yours" is whatever shares that address, so behind
+NAT the request that has to finish may be a colleague's, and the caller is being told to look
+for something of its own that does not exist. It is the same fact as the NAT caveat two
+sections up, arriving where it is least convenient.
+
+Neither is a 503. Nothing is wrong with the relay or with the upstream, and the same request
+from another caller is served at that instant.
+
+Both are logged as one line naming the caller:
+
+```text
+203.0.113.7 POST /api/chat -> -: 429 (rate limit)
+203.0.113.7 POST /api/chat -> ollama: 429 (concurrency)
+```
+
+The upstream is `-` on the first and named on the second, and that is not an inconsistency:
+the rate limit is charged in the middleware, before any upstream has been chosen, while the
+concurrency slot is taken in the relay route, after selection and after the dialect check. The
+fail2ban filter that ships with the source matches neither. A rate-limited caller is a
+misconfigured client far more often than an attacker, and it is already being refused.
+
+### A slot is held until the last byte
+
+A concurrency slot is released when the response **body ends**, not when its headers arrive.
+That is the whole point: the relay streams, so a request whose headers came back in 30ms may
+still be delivering tokens two minutes later, and a slot freed at the headers would bound
+nothing. A client that hangs up mid-stream releases its slot too.
+
+The relay never cuts a stream to reclaim a slot. Admission is the only lever, because
+interrupting a response in flight would break the guarantee the rest of this document rests
+on.
+
+### The counts live in this process, in memory
+
+There is no database, no Redis and no shared state. That has consequences worth stating:
+
+- **More uvicorn workers are not a way around it, because the relay does not run that way.**
+  Started with `--workers 3`, the first worker to reach the pidfile claims it and the rest
+  refuse with `already running`, at which point uvicorn stops the parent too. The result is no
+  relay at all rather than three sets of counts, so the number you wrote is the number one
+  caller gets.
+- **Two relays are.** Separate processes, separate config directories, separate counts: a
+  caller that can reach both has both allowances. If something is balancing across a pair of
+  relays, either give each the whole limit and accept the doubling, or put the limit in front
+  of them.
+- **A restart forgets everything.** Every caller starts with a full bucket and no slots held.
+- **The tables do not grow without bound.** The concurrency counter holds an entry only while
+  that caller has something in flight, and the last release deletes it. The bucket table needs
+  a sweep, which runs at most once a minute and drops any caller idle long enough that its
+  bucket has refilled to full: forgetting a full bucket changes no decision, because a caller
+  with no bucket starts with one. A bucket that has *not* refilled is kept however idle it is,
+  since dropping that one would be handing back an allowance nobody waited for. So the table
+  holds roughly the callers seen in the last five minutes, not every address that ever knocked.
+- **A reload applies new numbers without disturbing anything in flight.** Changing
+  `rate_limit` or `rate_burst` rebuilds the bucket table, which starts every caller full, so
+  it is done only when one of the two numbers actually moved rather than on every unrelated
+  reload. `max_concurrent` needs no such care: it is read per request, so a live request keeps
+  the slot it holds and the new number applies to the next arrival.
+
+## When Ollama has no room to load a model
+
+Ollama keeps models resident and evicts one to load another. Interleaving requests for models
+that cannot coexist costs a full reload every time, and with enough interleaving the machine
+spends its time loading rather than answering.
+
+The tax is large. Measured here, a model answered in 0.18-0.65s warm and 5.9-7.0s cold, so a
+swap costs between 9x and 24x what the same request costs without one. Treat the ratio as the
+finding and the seconds as this machine's: in one run of two models alternating, individual
+swaps of the same pair ranged from 8.1s to 13.7s, and a "cold" load after an unload still
+reads the weights out of the page cache, so a first load after boot is worse again. Ollama's
+own `load_duration` under-reports what the caller waits by
+3.6-5.1x, because it excludes the queueing and the prompt evaluation around it. Do not size
+anything from it.
+
+### First find out which of the two constraints you are hitting
+
+This matters more than any setting below, because the usual advice fixes one of them and does
+nothing whatever for the other. Send a request for each model in rotation, then ask
+`curl 127.0.0.1:11434/api/ps` what stayed:
+
+- **More than one model resident, but fewer than you rotate through:** the model *count*
+  binds. The table below is exactly the fix.
+- **One model resident, however high you set the count:** *VRAM* binds. The models you are
+  alternating cannot coexist on the card at the contexts you are asking for, and no Ollama
+  setting will make them. The table below will not help, and half of it will hurt.
+
+**When the count binds, raise it:**
+
+| Variable | Set it to |
+|---|---|
+| `OLLAMA_MAX_LOADED_MODELS` | at least the number of models in regular rotation |
+| `OLLAMA_NUM_PARALLEL` | how many callers one model serves at once, but see the warning below |
+
+Measured, three small models that comfortably fit together, alternating strictly serially:
+with `OLLAMA_MAX_LOADED_MODELS=2` each request cost 5.10s on average and one model was evicted
+per cycle; at `3` it cost 0.18s and nothing was evicted. That is a 28x difference, and it is
+the whole of what this setting does.
+
+**When VRAM binds, it does nothing.** Same test with two models that cannot coexist, an 8B at
+16k context and a 3B at 32k on a 12GB card: `OLLAMA_MAX_LOADED_MODELS=0` (the default) cost
+10.08s per swap, and `4` cost 9.88s. Two percent apart, with one model resident either way.
+The count was never the constraint, so raising it changed nothing.
+
+> **`OLLAMA_NUM_PARALLEL` makes the VRAM case worse, not better.** Each parallel slot gets its
+> own KV cache, so raising it makes every model larger and coexistence strictly less likely.
+> Measured on the same card: at `1` the 8B held 9.57 GB and the 3B 4.84 GB; at `2` they held
+> 10.34 GB and 7.23 GB. The 3B grew by 49%. Read the table as two independent knobs, and turn
+> this one up only when a single model is serving several callers at once.
+
+If VRAM is what binds, the levers are smaller contexts (`num_ctx` is usually the largest term
+and the easiest to overpay for), smaller quantisations, fewer models in rotation, or a bigger
+card. None of them are relay settings.
+
+`ollama serve` prints both variables at startup, which is the quickest way to see what they
+resolved to. Note that an unset `OLLAMA_MAX_LOADED_MODELS` prints as `0`, not as the number it
+will use: `0` is the sentinel for "decide automatically", which Ollama resolves internally to
+3 per GPU and never prints. So `OLLAMA_MAX_LOADED_MODELS:0 ... OLLAMA_NUM_PARALLEL:1` is what
+an untouched install looks like, and a `0` there does **not** mean no model may be loaded.
+
+**What the relay does:** it bounds how many requests one caller can have in flight, which is
+`max_concurrent` above. **What the relay does not do:** it does not know which model a request
+names, does not queue by model, and cannot prevent an eviction. The model name is in the
+request body, and the body is a stream the relay forwards without reading.
+
+One result is worth stating because it is counter-intuitive, and because it stops an operator
+configuring against a problem they do not have: **concurrency on one model was never the
+problem.** Six simultaneous callers for one cold model cost one load, shared: all six came
+back reporting the same `load_duration` to within 0.04s, and all six finished in 9.12s against
+5.95s for a single cold request on its own. Two models that both fit alternate for free, at
+0.18s a turn. What costs is the sequence of model names over time, not the overlap between
+requests, which is also why **no concurrency limit can fix thrashing**: alternating two models
+strictly serially, one at a time, still paid a full cold load on every swap. `max_concurrent`
+is not a thrashing setting and will not be made into one.
+
 ## Providers
 
 `lmrelay provider add NAME TOKEN` adds or rotates an upstream. With a known name (`openai`,
@@ -176,13 +401,23 @@ is what you run after editing `lmrelay.toml` by hand.
 | `default_upstream` | `lmrelay reload` | Chosen per request, out of that same config. |
 | Caller tokens, and the auth switch | `lmrelay reload` | Also read per request, so `lmrelay auth true` starts requiring a credential as soon as the relay has re-read state. |
 | `log_level` | `lmrelay reload` | Logging is reconfigured in place, and the new level governs the next line the relay writes. |
+| `rate_limit`, `rate_burst` | `lmrelay reload` | The limiter is rebuilt when either number moves, and left alone when neither does: a fresh limiter starts every caller with a full bucket, which would clear the allowance of whoever was being limited at that moment. |
+| `max_concurrent` | `lmrelay reload` | Read per request rather than built into anything, so a request already streaming keeps the slot it holds and the new number governs the next arrival. |
 | `host`, `port` | `lmrelay restart` | The socket is already bound, and a running server cannot move it. |
 | `connect_timeout` | `lmrelay restart` | The shared httpx client is already open and carries the timeout; closing it to re-time would abort every stream being relayed through it. |
 
 The reload log names whichever of `host`, `port` and `connect_timeout` differs from what the
 running relay started with, and says a restart applies them. They are named individually, so
-a changed port does not hide an unchanged timeout. The keys above them are applied without
-comment.
+a changed port does not hide an unchanged timeout.
+
+The keys above them are applied without comment, except the three that say what they moved
+from and to, so that a reload can be read back afterwards:
+
+```text
+lmrelay: log_level INFO -> DEBUG
+lmrelay: rate limit off -> 2/s burst 5
+lmrelay: concurrency off -> 4 in flight (from the next request; answers in flight keep the slot they hold)
+```
 
 A config the relay cannot use is logged and discarded, and it carries on serving the one it
 already had. That covers `state.json` as much as `lmrelay.toml`, and a value the file spells
@@ -251,6 +486,8 @@ These are JSON bodies of the form `{"error": "..."}` returned to the caller.
 | Message | Where | Means | Do |
 |---|---|---|---|
 | `lmrelay: missing or invalid credential` | relay response, 401 | Auth is on and the request carried no credential, or one that matches no configured token. | Present a configured token. Both `Authorization: Bearer <token>` and `x-api-key: <token>` are accepted carriers. `lmrelay token list` shows which exist; `lmrelay auth false` reopens the relay. |
+| `lmrelay: rate limit of <rate>/s burst <burst> exceeded` | relay response, 429 | The caller has asked more often than `[server] rate_limit` allows. The two numbers are the ones being enforced, so the burst reads as `1` when `rate_burst` is unset or below 1. | Wait: `Retry-After` on the response is the whole number of seconds until one request has refilled. Raise `rate_limit`, or `rate_burst` if the traffic is bursty rather than fast. |
+| `lmrelay: too many simultaneous requests (limit <N>); one of yours must finish first` | relay response, 429 | The caller already holds `[server] max_concurrent` relayed requests whose bodies have not finished. | Wait for one of your own to finish, or raise `max_concurrent`. There is deliberately no `Retry-After`: a slot frees when an answer ends, and with no read timeout the relay cannot know when that will be. |
 | `lmrelay: upstream '<name>' speaks the <Dialect> API; '<path>' is an <Other>-dialect path. lmrelay forwards requests unchanged and does not translate between dialects.` | relay response, 400 | The path belongs to a dialect the chosen upstream does not serve. | Change the path prefix to an upstream of that dialect, or point the client at an endpoint the upstream has. |
 | `lmrelay: upstream '<name>' at <base_url> is unreachable: ConnectError` | relay response, 502 | The connection to the upstream was refused or timed out. `ConnectTimeout` appears in place of `ConnectError` when `connect_timeout` expired. | For `ollama`, usually Ollama itself is not running: start it. Otherwise check `base_url` and the network. |
 | `lmrelay: upstream '<name>' failed: <Type>` | relay response, 502 | Any other transport failure against the upstream, named by its httpx exception type. | Read `lmrelay.log`: the full message and traceback are there. |
@@ -275,7 +512,10 @@ Raised by the relay before it binds, and by every CLI command that loads the con
 | `lmrelay: cannot read <path>: <Type>: <detail>` | any command that loads the config | The file could not be opened, or TOML could not parse it. | Fix the syntax the detail names, or the permissions on the path. |
 | `lmrelay: config has no [upstream.*] sections in <config> and no providers in <state>. Run 'lmrelay provider add' or add an [upstream.*] table.` | any command that loads the config | The config parses but defines no upstream at all, and state has none either. | Add an `[upstream.*]` table, or run `lmrelay provider add`. |
 | `lmrelay: default_upstream '<name>' is not defined; known upstreams: <list>` | any command that loads the config | `[server] default_upstream` names an upstream that no source defines. | Set it to one of the names listed, or define the one it names. |
-| `lmrelay: [server] <port\|connect_timeout> must be a whole number, got <value>` | any command that loads the config | The key holds something `int()` cannot read, usually a quoted number or a typo. | Write it unquoted, as a number. Refused rather than coerced, so a reload discards it like any other unusable config instead of raising out of the signal handler. |
+| `lmrelay: [server] <port\|connect_timeout\|max_concurrent> must be a whole number, got <value>` | any command that loads the config | The key holds something `int()` cannot read, usually a quoted number or a typo. | Write it unquoted, as a number. Refused rather than coerced, so a reload discards it like any other unusable config instead of raising out of the signal handler. |
+| `lmrelay: [server] <rate_limit\|rate_burst> must be a number, got <value>` | any command that loads the config | The key holds something `float()` cannot read, usually a quoted number. | Write it unquoted. A fraction is allowed here, which is why these two are not read as whole numbers. |
+| `lmrelay: [server] <rate_limit\|rate_burst> cannot be negative, got <value>` | any command that loads the config | One of the two rate keys is below zero. | Use `0` to turn the limit off. A negative is refused rather than read as off, because it is a typo, and admitting it as another spelling of "off" would hide the mistake behind the behaviour it causes. |
+| `lmrelay: [server] max_concurrent cannot be less than 0, got <value>` | any command that loads the config | `max_concurrent` is negative. Worded as a minimum rather than as a sign because it is a whole number read through the same reader as `port`, which has no minimum at all. | Use `0` to turn the limit off. |
 | `lmrelay: [server] log_level '<value>' is not a logging level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL` | any command that loads the config | The level is not one `logging` knows. | Use one of the five. Refused rather than quietly read as `INFO`, which would leave a reload announcing a level the relay was not running at. |
 | `lmrelay: upstream '<name>' header '<header>' references ${VAR}, which is not set` | any command that loads the config | A header value in `lmrelay.toml` interpolates an environment variable that is absent. | Export the variable, or comment the upstream block out. This is why the shipped example has the hosted blocks commented. |
 | `lmrelay: upstream '<name>' header '<header>' has a malformed ${...} reference: <detail>` | any command that loads the config | A `$` in a header value is not a well-formed `${VAR}`. | Write `$$` for a literal `$`, or store the key with `lmrelay provider add`, which does not expand. |
@@ -361,14 +601,21 @@ Logged and then ignored. Nothing is refused and nothing stops.
   delivered, not acknowledged, and a relay that cannot parse what it re-reads keeps the
   config it had. The outcome is in `lmrelay.log`.
 - A 401 is written to the access log as `<client> <METHOD> <path> -> -: 401 (auth)`. No
-  upstream was chosen, which is what the `-` says.
+  upstream was chosen, which is what the `-` says. A refused rate limit takes the same shape
+  for the same reason, `429 (rate limit)`. A refused concurrency slot **names its upstream**,
+  `-> ollama: 429 (concurrency)`, because that check happens after the upstream is selected.
+- Both limits refuse with **429 and not 503**. The relay is not out of capacity; this caller
+  has used its share of it, and another caller's request at the same instant is served.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Run |
 |---|---|---|
 | Every request comes back 401 | Auth is on and the token presented is not one of the configured ones | `lmrelay token list`, then present one of them; `lmrelay auth false` reopens the relay |
+| Requests come back 429 | A per-caller limit is set below what this client sends | The message names which limit and what it is set to; raise `rate_limit`, `rate_burst` or `max_concurrent`, or set it to `0` |
+| A limit allows about twice what it says | Two relays are running and each counts its own callers | `lmrelay status` on each; a limit is per process, so put it in front of the pair or accept the doubling |
 | 502 naming `ollama` | Ollama is not running on 11434 | Start Ollama, then `lmrelay status` to confirm the upstream list |
+| An occasional request takes tens of seconds before its first token | Ollama evicted a resident model to load the one this request named | `curl 127.0.0.1:11434/api/ps` first: if only one model stays resident, VRAM binds and `OLLAMA_MAX_LOADED_MODELS` will not help, so cut `num_ctx` or the rotation instead. If several stay but fewer than you rotate through, raise it to cover them. No relay setting affects either |
 | 400 naming two dialects | The path belongs to a dialect the chosen upstream does not serve | Check the path prefix against the compatibility table in the README |
 | A token or provider change had no effect | The relay was signalled but discarded what it re-read, or nothing was running | Read `lmrelay.log`, then `lmrelay reload` |
 | A `host`, `port` or `connect_timeout` change had no effect | A reload cannot rebind a socket or re-time an open client | `lmrelay restart` |
@@ -416,4 +663,6 @@ proxy. A relay listening on `0.0.0.0` must not run it.
 
 No failover, retry or load balancing. No dialect translation. No model catalogue or
 aliasing. No token accounting, usage database or budgets. No admin API, dashboard or
-metrics. No caching or rate limiting. No TLS: put nginx in front.
+metrics. No caching. No TLS: put nginx in front. The per-caller limits above are the whole of
+that subject: they are counted in one process rather than shared between several, and nothing
+queues or schedules by model.

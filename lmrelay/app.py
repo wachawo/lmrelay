@@ -9,9 +9,10 @@ import signal
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
+from math import ceil
 
 import httpx
 from fastapi import FastAPI, Request, Response
@@ -23,10 +24,18 @@ from lmrelay.config import ConfigError, check_exposure, describe_upstreams, load
 from lmrelay.daemon import pid_file, read_pid, recorded_bind, remove_pid, write_pid
 from lmrelay.errors import LmrelayError
 from lmrelay.logging_setup import setup_logging
+from lmrelay.ratelimit import (
+    InflightCounter,
+    build_limiter,
+    effective_burst,
+    limiter_key,
+    release_once,
+)
 from lmrelay.upstream import (
     build_upstream_request,
     check_caller_token,
     check_dialect,
+    extract_caller_token,
     filter_response_headers,
     select_upstream,
 )
@@ -40,6 +49,39 @@ HEALTH_PATH    = "/healthz"
 # anonymous caller the default upstream with its credentials attached.
 HEALTH_METHODS = frozenset({"GET"})
 RELAY_METHODS  = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
+
+def describe_rate(config) -> str:
+    """The limit as the limiter will enforce it, for a log line or a refusal.
+
+    The burst is the effective one, not the configured one. They differ at the
+    default: `rate_burst = 0` is read as 1, and quoting the configured number
+    told a caller "burst 0" while the limiter was allowing one request through,
+    which reads as a relay that refuses everything.
+    """
+    if config.rate_limit <= 0:
+        return "off"
+    return f"{config.rate_limit:g}/s burst {effective_burst(config.rate_burst):g}"
+
+
+def describe_concurrency(config) -> str:
+    """The cap as an operator wrote it, for a log line."""
+    if config.max_concurrent <= 0:
+        return "off"
+    return f"{config.max_concurrent} in flight"
+
+
+def caller_key(request: Request, config) -> str:
+    """Who this request counts against, for the rate limit and the cap alike.
+
+    Both read it through the same function so that the two keys cannot drift
+    apart: an operator who has learnt what `rate_limit` counts has learnt what
+    `max_concurrent` counts. Read after authentication in both places, so a
+    guessed credential is never the key.
+    """
+    client = request.client.host if request.client else "-"
+    presented = extract_caller_token(request.headers) if config.auth_enabled else None
+    return limiter_key(presented, client)
 
 
 def reload_config(app: FastAPI) -> None:
@@ -99,6 +141,27 @@ def reload_config(app: FastAPI) -> None:
     # The httpx client is deliberately left alone: closing it would abort every
     # stream currently being relayed, and nothing a reload changes lives in it:
     # upstream URLs and headers are read from the config on every request.
+    if (config.rate_limit, config.rate_burst) != (current.rate_limit, current.rate_burst):
+        # Rebuilt only when the numbers move: a new limiter starts every caller
+        # full, so doing this on an unrelated reload would clear the allowance
+        # of whoever was being limited at that moment.
+        app.state.limiter = build_limiter(config.rate_limit, config.rate_burst)
+        logger.info(
+            f"lmrelay: rate limit {describe_rate(current)} -> {describe_rate(config)}"
+        )
+
+    if config.max_concurrent != current.max_concurrent:
+        # Nothing is rebuilt here, unlike the limiter above: the counter is
+        # asked for the limit at every acquire, so replacing app.state.config
+        # below is the whole of applying it. A fresh counter would forget the
+        # slots held by every answer still streaming, and each of them would
+        # release one that had never been taken.
+        logger.info(
+            f"lmrelay: concurrency {describe_concurrency(current)} -> "
+            f"{describe_concurrency(config)} (from the next request; answers in flight "
+            f"keep the slot they hold)"
+        )
+
     app.state.config = config
     logger.info(
         f"lmrelay reloaded <- {config.config_path} (upstreams: {describe_upstreams(config)}; "
@@ -140,6 +203,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # before its first token, and a read timeout would kill it in a way that
     # looks like a model fault. Failing fast on an unreachable host is the
     # useful half, so the connect timeout stays short.
+    app.state.limiter = build_limiter(config.rate_limit, config.rate_burst)
+    # Always built, even with the cap off, so that no reload has to replace it
+    # and no request has to ask whether it exists. An empty table costs nothing:
+    # with max_concurrent = 0 every acquire is allowed, and the release at the
+    # end of each answer takes the entry out again.
+    app.state.inflight = InflightCounter({})
     app.state.http = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=config.connect_timeout, read=None, write=None, pool=None),
     )
@@ -182,16 +251,46 @@ async def log_and_authenticate(request: Request, call_next):
         logger.warning(f"{client} {request.method} {request.url.path} -> -: 401 (auth)")
         return JSONResponse({"error": "lmrelay: missing or invalid credential"}, status_code=401)
 
+    limiter = request.app.state.limiter
+    if limiter is not None:
+        # After auth on purpose: a guessed credential must not spend the
+        # allowance of the caller whose token was being guessed at. Keyed on
+        # the token only when auth is on, since otherwise it proves nothing.
+        now = time.monotonic()
+        wait = limiter.take(caller_key(request, config), now)
+        limiter.sweep(now)
+        if wait > 0:
+            logger.warning(
+                f"{client} {request.method} {request.url.path} -> -: 429 (rate limit)"
+            )
+            return JSONResponse(
+                {"error": f"lmrelay: rate limit of {describe_rate(config)} exceeded"},
+                status_code=429,
+                # Whole seconds, rounded up: the header takes no fractions, and
+                # rounding down would invite a retry that is refused again.
+                headers={"Retry-After": str(max(1, ceil(wait)))},
+            )
+
     start_time = time.monotonic()
     response: Response = await call_next(request)
     # For a streamed response the handler returns once the upstream headers
     # arrive, so this is time to first byte, not the duration of the answer.
     ttfb = time.monotonic() - start_time
     upstream_name = getattr(request.state, "upstream", "-")
-    logger.info(
+    # A route that refused leaves the name of the limit it refused on: two of
+    # them answer 429 and only one carries a Retry-After, so the line has to say
+    # which. It stands in place of the elapsed time, which for a request that
+    # was never forwarded would only be the cost of refusing it, and it keeps
+    # the refusal to one line, at the level the other refusals are logged at.
+    refused = getattr(request.state, "refused", "")
+    line = (
         f"{client} {request.method} {request.url.path} -> {upstream_name}: "
-        f"{response.status_code} ({ttfb:.2f}s)"
+        f"{response.status_code} ({refused or f'{ttfb:.2f}s'})"
     )
+    if refused:
+        logger.warning(line)
+    else:
+        logger.info(line)
     return response
 
 
@@ -206,6 +305,30 @@ async def handle_exception(request: Request, exc: Exception) -> JSONResponse:
 async def healthz() -> dict[str, str]:
     """Relay-local liveness. Does not touch any upstream and needs no credential."""
     return {"status": "ok"}
+
+
+async def relay_body(
+    upstream_response: httpx.Response, release: Callable[[], None]
+) -> AsyncIterator[bytes]:
+    """Hand the upstream's bytes on, and give the caller's slot back at the end.
+
+    The slot cannot be released where the handler returns. For a streamed answer
+    the handler returns as soon as the upstream's headers arrive, before a byte
+    of body has been written, so a cap that freed the slot there would be
+    counting the time it takes to reach a model rather than the time a caller
+    spends occupying it, and would bound nothing.
+
+    Released from this `finally` rather than from the BackgroundTask alongside
+    it because this one runs on both ways out: the answer ending, and the caller
+    hanging up part way through it, which closes the generator here.
+    """
+    try:
+        # aiter_raw, not aiter_bytes: the latter decompresses, which would
+        # contradict the content-encoding header being forwarded alongside it.
+        async for chunk in upstream_response.aiter_raw():
+            yield chunk
+    finally:
+        release()
 
 
 @app.api_route("/{full_path:path}", methods=RELAY_METHODS)
@@ -223,12 +346,45 @@ async def relay_request(request: Request) -> Response:
 
     http = request.app.state.http
     upstream_request = build_upstream_request(http, request, upstream, forward_path)
+
+    # Taken here, with nothing between it and the send below that can raise:
+    # after the refusals that cost no upstream call, and after the request has
+    # been built, so that the slot is held for exactly as long as the relay is
+    # occupying the upstream with it.
+    inflight = request.app.state.inflight
+    key = caller_key(request, config)
+    if not inflight.acquire(key, config.max_concurrent):
+        # 429 rather than 503: nothing is wrong with the relay or with the
+        # upstream, and this same request from another caller would be served.
+        # A 503 would say the service is unavailable, which is both untrue and
+        # the status many clients retry hardest against.
+        #
+        # And no Retry-After, unlike the rate limiter's 429, which computes an
+        # honest one: a slot here frees when a model finishes answering someone
+        # else, and with no read timeout that can be minutes away. The relay
+        # does not know the number, so it does not name one.
+        message = (
+            f"lmrelay: too many simultaneous requests "
+            f"(limit {config.max_concurrent}); one of yours must finish first"
+        )
+        # Named rather than logged here: the middleware writes one access line
+        # per request, and a second line from this route would say the same
+        # thing again. It logs this one as a refusal, and names the limit.
+        request.state.refused = "concurrency"
+        return JSONResponse({"error": message}, status_code=429)
+
+    # Held from here until the answer ends. Idempotent because the ways out
+    # below are meant not to overlap and a leaked slot is unrecoverable: it
+    # would lock that caller out for the life of the process.
+    release = release_once(inflight, key)
+
     try:
         # stream=True returns as soon as the headers arrive and leaves the body
         # unread; the context-manager form would close the connection before the
         # caller had read a byte. BackgroundTask below releases it afterwards.
         upstream_response = await http.send(upstream_request, stream=True)
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        release()
         message = (
             f"lmrelay: upstream '{upstream.name}' at {upstream.base_url} "
             f"is unreachable: {type(exc).__name__}"
@@ -236,20 +392,42 @@ async def relay_request(request: Request) -> Response:
         logger.warning(message)
         return JSONResponse({"error": message}, status_code=502)
     except httpx.HTTPError as exc:
+        release()
         logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
         return JSONResponse(
             {"error": f"lmrelay: upstream '{upstream.name}' failed: {type(exc).__name__}"},
             status_code=502,
         )
+    except BaseException:
+        # BaseException, not Exception: a caller that hangs up while the model
+        # is still being reached cancels this task, and CancelledError is not an
+        # Exception. There is no body generator yet to release the slot, so it
+        # has to happen here or not at all.
+        release()
+        raise
 
-    return StreamingResponse(
-        # aiter_raw, not aiter_bytes: the latter decompresses, which would
-        # contradict the content-encoding header being forwarded alongside it.
-        upstream_response.aiter_raw(),
-        status_code=upstream_response.status_code,
-        headers=filter_response_headers(upstream_response.headers),
-        background=BackgroundTask(upstream_response.aclose),
-    )
+    try:
+        return StreamingResponse(
+            relay_body(upstream_response, release),
+            status_code=upstream_response.status_code,
+            headers=filter_response_headers(upstream_response.headers),
+            background=BackgroundTask(upstream_response.aclose),
+        )
+    except BaseException:
+        # Guarded because building the response can fail on the upstream's own
+        # headers, and the two things that would otherwise give the slot back
+        # are both parts of the object being built: the generator's `finally`
+        # never runs because nothing iterates it, and the BackgroundTask that
+        # closes the connection is never attached to anything that will.
+        #
+        # Starlette encodes header values as latin-1 while httpx decodes them
+        # as UTF-8, so one non-ASCII header from a provider raises here. Without
+        # this the slot was held for the life of the process, and the caller was
+        # locked out of its own cap after `max_concurrent` such answers, with
+        # nothing in the log naming the cap.
+        release()
+        await upstream_response.aclose()
+        raise
 
 
 def main():

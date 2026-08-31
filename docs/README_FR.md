@@ -270,9 +270,13 @@ par point :
   sert plus à rien : httpx écrit les identifiants de l'URL dans ce même en-tête et le bearer
   ne sort jamais. Chaque exemple de la documentation du fournisseur doit être réécrit.
 
-Là où nginx gagne : TLS, une vraie limitation de débit, et être déjà installé. lmrelay n'a
-aucun des trois, et n'en aura pas. Les deux se composent au lieu de se concurrencer. Mettez
-nginx devant pour TLS, et laissez ici les jetons et les fournisseurs.
+Là où nginx gagne : TLS, être déjà installé, et une limitation de débit qui tient hors d'un
+seul processus. Les deux premiers ne viendront pas. lmrelay a bien des
+[limites par appelant](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits), rattachées au jeton de l'appelant, ce que nginx ne sait pas
+faire sans détenir lui-même les jetons ; mais elles sont comptées dans ce seul processus et
+retombent sur l'adresse quand l'authentification est coupée. Les deux se composent au lieu de
+se concurrencer. Mettez nginx devant pour TLS, et laissez ici les jetons et les
+fournisseurs.
 ### Licence
 
 Licence MIT. Voir [LICENSE](../LICENSE).

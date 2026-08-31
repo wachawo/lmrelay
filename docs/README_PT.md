@@ -266,9 +266,12 @@ ponto:
   URL nesse mesmo cabeçalho e o bearer nunca sai. Cada exemplo da documentação do provedor
   precisa ser reescrito.
 
-Onde o nginx ganha: TLS, rate limiting de verdade, e já estar instalado. O lmrelay não tem
-nenhum dos três, e não vai ter. Os dois se compõem em vez de competir. Ponha o nginx na
-frente para TLS, e deixe os tokens e os provedores aqui.
+Onde o nginx ganha: TLS, já estar instalado, e um limite de taxa que se sustenta fora de um
+único processo. Os dois primeiros não vêm. O lmrelay tem, sim,
+[limites por chamador](https://github.com/wachawo/lmrelay/blob/main/docs/CONFIGURATION.md#per-caller-limits), presos ao token de quem chama, o que o nginx não consegue
+fazer sem guardar os tokens ele mesmo; mas são contados neste único processo e, com a
+autenticação desligada, recaem sobre o endereço. Os dois se compõem em vez de competir. Ponha
+o nginx na frente para TLS, e deixe os tokens e os provedores aqui.
 ### Licença
 
 Licença MIT. Veja [LICENSE](../LICENSE).

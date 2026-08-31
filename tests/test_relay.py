@@ -4,7 +4,14 @@
 
 import logging
 import os
+import re
+import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
+from typing import NamedTuple
 
+import anyio
 import httpx
 import pytest
 from starlette.testclient import TestClient
@@ -22,6 +29,25 @@ dialect  = "ollama"
 
 FIRST_CHUNK = b'{"response":"a"}\n'
 
+# A response header a provider can legally send and starlette cannot re-emit:
+# the UTF-8 encoding of U+2713, which httpx decodes to a str holding a codepoint
+# outside latin-1. Given as raw bytes because that is what arrives off a socket,
+# and because httpx itself refuses to build a response from a str header it
+# cannot encode, which would fail in the test rather than in the relay.
+UNENCODABLE_HEADER = (b"x-provider-note", b"\xe2\x9c\x93")
+
+# A second credential, so that two callers in one test are told apart by what
+# they present rather than by an address the test client cannot vary.
+OTHER_TOKEN = "another-callers-token"
+
+# What the in-process client's address resolves to, and therefore the key a
+# relay with auth off counts every request in this module against.
+TESTCLIENT_KEY = "addr:testclient"
+
+# Two chunks, because the hold in the recorder happens between them: an answer
+# that has produced the first and not the second is an answer under way.
+GATED_CHUNKS = [FIRST_CHUNK, b'{"done":true}\n']
+
 
 def fails_after_the_first_chunk():
     """An upstream body that starts an answer and then breaks.
@@ -33,6 +59,19 @@ def fails_after_the_first_chunk():
     raise httpx.ReadError("connection reset")
 
 
+def with_setting(body: str, name: str, value: str) -> str:
+    """Set one [server] key in a config body, replacing its line if it has one.
+
+    Takes the body rather than building it so that a test needing two keys, as
+    the rate limit does, can apply this twice instead of hard-coding a config.
+    """
+    setting = f"{name} = {value}"
+    for line in body.splitlines():
+        if line.startswith(f"{name} "):
+            return body.replace(line, setting)
+    return body.replace("[server]", f"[server]\n{setting}")
+
+
 def config_where(name: str, value: str) -> str:
     """The standard config with one [server] key set to something a test needs.
 
@@ -40,12 +79,105 @@ def config_where(name: str, value: str) -> str:
     hard-codes that spacing breaks on a change to a config it does not care
     about. A key the template omits, log_level, is added rather than replaced.
     """
-    body = CONFIG_TEMPLATE.format(token=TOKEN)
-    setting = f"{name} = {value}"
-    for line in body.splitlines():
-        if line.startswith(f"{name} "):
-            return body.replace(line, setting)
-    return body.replace("[server]", f"[server]\n{setting}")
+    return with_setting(CONFIG_TEMPLATE.format(token=TOKEN), name, value)
+
+
+def config_rate(rate: str, burst: str | None = None) -> str:
+    """The standard config with the rate limit set, and optionally its burst."""
+    body = config_where("rate_limit", rate)
+    return body if burst is None else with_setting(body, "rate_burst", burst)
+
+
+def wait_until(condition, what: str, timeout: float = 10.0) -> None:
+    """Block until `condition` holds, or fail saying what never happened."""
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert condition(), what
+
+
+class Held(NamedTuple):
+    """An answer part-way through, and the pool it and its rivals run in."""
+
+    answer: Future
+    pool: ThreadPoolExecutor
+
+
+@contextmanager
+def answer_in_flight(client, recorder, **kwargs):
+    """Hold one answer open part way through, for the length of the block.
+
+    The recorder stops before its second chunk, and reaching that point proves
+    the caller already has the headers: starlette writes the response start
+    before it pulls the first chunk from the body, so an upstream that has
+    produced anything is an answer that has begun arriving. Inside the block a
+    caller therefore holds part of an answer while the relay is still streaming
+    the rest, which is the only state a cap on simultaneous requests is about.
+
+    On its own thread because the in-process client settles a response before
+    handing it back: two requests can only overlap here if two threads make
+    them.
+    """
+    recorder.gate = threading.Event()
+    recorder.chunks = list(GATED_CHUNKS)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        held = pool.submit(client.post, "/api/generate", json={}, **kwargs)
+        wait_until(lambda: recorder.produced, "the upstream never began answering")
+        try:
+            yield Held(answer=held, pool=pool)
+        finally:
+            recorder.gate.set()
+
+
+@pytest.fixture
+def capped(tmp_path, monkeypatch, recorder):
+    """A relay that admits one answer at a time, with auth off.
+
+    Auth off so the cap keys on the address, which every request from the test
+    client shares: one caller, sending more than one thing at once.
+    """
+    monkeypatch.setenv("LMRELAY_CONFIG", write_config(
+        tmp_path, config_where("max_concurrent", "1")
+    ))
+    monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+    write_state(tmp_path, auth_enabled=False)
+    yield from build_relay(recorder)
+
+
+@pytest.fixture
+def limited(tmp_path, monkeypatch, recorder):
+    """A relay allowing 2/s with a burst of 3, auth off so the key is the address."""
+    monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, config_rate("2", "3")))
+    monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+    write_state(tmp_path, auth_enabled=False)
+    yield from build_relay(recorder)
+
+
+@pytest.fixture
+def limited_by_token(tmp_path, monkeypatch, recorder):
+    """The same limit with auth on and two credentials, so that two callers in
+    one test are told apart by what they present rather than by an address the
+    in-process client cannot vary."""
+    monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, config_rate("2", "3")))
+    monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+    write_state(tmp_path, auth_enabled=True, tokens=(TOKEN, OTHER_TOKEN))
+    yield from build_relay(recorder)
+
+
+@pytest.fixture
+def capped_by_token(tmp_path, monkeypatch, recorder):
+    """The same cap with auth on and two credentials configured, so that the
+    two callers in a test are told apart by what they present."""
+    monkeypatch.setenv("LMRELAY_CONFIG", write_config(
+        tmp_path, config_where("max_concurrent", "1")
+    ))
+    monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+    write_state(tmp_path, auth_enabled=True, tokens=(TOKEN, OTHER_TOKEN))
+    yield from build_relay(recorder)
+
+
+def bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 class TestTheDoor:
@@ -347,6 +479,333 @@ class TestWhenTheUpstreamIsNotThere:
         assert "ReadError: connection reset" in caplog.text
 
 
+class TestHowOftenOneCallerMayAsk:
+    """`rate_limit` and `rate_burst`, through the middleware that charges them."""
+
+    def test_the_burst_gets_through_and_the_next_one_does_not(self, limited):
+        codes = [limited.get("/api/tags").status_code for _ in range(4)]
+        assert codes == [200, 200, 200, 429]
+
+    def test_the_refusal_names_the_limit_it_broke(self, limited):
+        """Distinguishable from the other 429 the relay can answer, and from a
+        provider's own: an operator has to know which number to change."""
+        for _ in range(3):
+            limited.get("/api/tags")
+        error = limited.get("/api/tags").json()["error"]
+        assert error == "lmrelay: rate limit of 2/s burst 3 exceeded"
+
+    def test_and_it_quotes_the_burst_the_limiter_actually_holds(
+        self, tmp_path, monkeypatch, recorder
+    ):
+        """`rate_burst` defaults to 0, meaning unset, and the limiter reads that
+        as 1. Quoting the configured 0 told a caller no request was permitted
+        while one had just been served, which reads as a broken relay."""
+        monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, config_rate("1")))
+        monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
+        write_state(tmp_path, auth_enabled=False)
+        for client in build_relay(recorder):
+            assert client.get("/api/tags").status_code == 200
+            refusal = client.get("/api/tags")
+            assert refusal.status_code == 429
+            assert "burst 1 exceeded" in refusal.json()["error"]
+
+    def test_the_refusal_carries_a_retry_after_the_caller_can_act_on(self, limited):
+        """Unlike the concurrency 429, this one is computable: it is the time
+        until one token has refilled. Whole seconds, because the header takes no
+        fraction, and rounded up because rounding down invites a retry that is
+        refused again."""
+        for _ in range(3):
+            limited.get("/api/tags")
+        assert limited.get("/api/tags").headers["retry-after"] == "1"
+
+    def test_a_refused_request_reaches_no_upstream(self, limited, recorder):
+        """The limit exists to keep work off the upstream, so it is charged in
+        the middleware, before any upstream has been chosen."""
+        for _ in range(3):
+            limited.get("/api/tags")
+        assert limited.get("/api/tags").status_code == 429
+        assert len(recorder.requests) == 3
+
+    def test_health_is_exempt_as_it_is_from_auth(self, limited):
+        """It touches no upstream, and a liveness probe that trips the limit
+        would report the relay dead for being polled."""
+        for _ in range(3):
+            limited.get("/api/tags")
+        assert limited.get("/api/tags").status_code == 429
+        assert [limited.get("/healthz").status_code for _ in range(5)] == [200] * 5
+
+    def test_callers_do_not_share_an_allowance(self, limited_by_token):
+        """One caller spending its burst must not refuse everybody else."""
+        for _ in range(3):
+            limited_by_token.get("/api/tags", headers=bearer(TOKEN))
+        assert limited_by_token.get("/api/tags", headers=bearer(TOKEN)).status_code == 429
+        assert limited_by_token.get(
+            "/api/tags", headers=bearer(OTHER_TOKEN)
+        ).status_code == 200
+
+    def test_a_guessed_credential_does_not_spend_the_real_callers_allowance(
+        self, limited_by_token
+    ):
+        """The reason the limit is charged after the credential is checked.
+        Charged before, anyone could exhaust a token's allowance by guessing at
+        it, which turns a rate limit into a way to deny service to its owner."""
+        for _ in range(10):
+            assert limited_by_token.get(
+                "/api/tags", headers=bearer("not-a-token")
+            ).status_code == 401
+        codes = [
+            limited_by_token.get("/api/tags", headers=bearer(TOKEN)).status_code
+            for _ in range(4)
+        ]
+        assert codes == [200, 200, 200, 429]
+
+    def test_the_refusal_is_logged_as_one_line_naming_no_upstream(self, limited, caplog):
+        """`-` rather than a name, because the limit is charged before an
+        upstream is selected. Logged as a refusal, at the level the others are."""
+        for _ in range(3):
+            limited.get("/api/tags")
+        with caplog.at_level(logging.INFO):
+            limited.get("/api/tags")
+        assert "GET /api/tags -> -: 429 (rate limit)" in caplog.text
+
+    def test_a_relay_that_never_asked_for_a_limit_keeps_no_table_at_all(self, authed):
+        """The default. The middleware skips the whole block on None, so an
+        install predating this key carries none of its cost."""
+        from lmrelay.app import app
+
+        assert app.state.limiter is None
+        assert [authed.get("/api/tags").status_code for _ in range(20)] == [200] * 20
+
+
+class TestHowManyAnswersOneCallerMayHold:
+    """`max_concurrent`: how many relayed requests one caller may have open.
+
+    A different measure from the rate limit, which is why it is a second key: a
+    generation runs for as long as the model takes, so a rate an operator would
+    call generous still lets one caller occupy the machine for minutes.
+    """
+
+    def test_a_second_request_while_the_first_is_still_answering_is_refused(
+        self, capped, recorder
+    ):
+        with answer_in_flight(capped, recorder):
+            assert capped.post("/api/tags").status_code == 429
+
+    def test_the_refusal_says_who_refused_and_what_the_limit_was(self, capped, recorder):
+        """Distinguishable from a provider's own 429, and from the other limit
+        that answers 429 here: an operator has to know which number to change."""
+        with answer_in_flight(capped, recorder):
+            error = capped.post("/api/tags").json()["error"]
+        assert error.startswith("lmrelay:")
+        assert "limit 1" in error
+
+    def test_and_it_names_no_retry_after(self, capped, recorder):
+        """The rate limiter's 429 carries one because it can compute it from the
+        refill. A slot here frees when a model finishes answering somebody else,
+        and with no read timeout that may be minutes away: a guessed number
+        would be a lie, and a client obeying it would retry into the same
+        refusal."""
+        with answer_in_flight(capped, recorder):
+            assert "retry-after" not in capped.post("/api/tags").headers
+
+    def test_the_refused_request_costs_no_upstream_call(self, capped, recorder):
+        """The cap exists to keep work off the upstream. One that forwarded
+        first and refused afterwards would have spent what it was protecting."""
+        with answer_in_flight(capped, recorder):
+            capped.post("/api/tags")
+            assert len(recorder.requests) == 1
+
+    def test_the_answer_already_streaming_is_never_interrupted(self, capped, recorder):
+        """Admission is the only lever. Reclaiming a slot by cutting an answer
+        short would break the promise the whole relay is built around."""
+        with answer_in_flight(capped, recorder) as held:
+            capped.post("/api/tags")
+        assert held.answer.result(timeout=10).content == b"".join(GATED_CHUNKS)
+
+    def test_the_slot_is_still_held_once_the_caller_has_the_headers(self, capped, recorder):
+        """The regression this shape exists to prevent. For a streamed answer
+        the handler returns as soon as the upstream's headers arrive, before a
+        byte of body has been written; a release moved there would free the slot
+        while the answer was still running, and the cap would bound nothing."""
+        from lmrelay.app import app
+
+        with answer_in_flight(capped, recorder):
+            assert app.state.inflight.counts == {TESTCLIENT_KEY: 1}
+
+    def test_and_it_is_given_back_when_the_body_ends(self, capped, recorder):
+        """The entry disappears rather than staying at zero, which is what
+        saves the counter from needing a sweep of its own."""
+        from lmrelay.app import app
+
+        with answer_in_flight(capped, recorder):
+            pass
+        assert app.state.inflight.counts == {}
+
+    def test_so_the_next_request_is_served(self, capped, recorder):
+        with answer_in_flight(capped, recorder):
+            assert capped.post("/api/tags").status_code == 429
+        assert capped.post("/api/tags").status_code == 200
+
+    def test_another_caller_is_not_held_up_by_it(self, capped_by_token, recorder):
+        """The cap is per caller, keyed like the rate limit: on the credential
+        when auth is on. One caller filling theirs must not be an outage for
+        everybody else."""
+        with answer_in_flight(capped_by_token, recorder, headers=bearer(TOKEN)) as held:
+            other = held.pool.submit(
+                capped_by_token.post, "/api/tags", headers=bearer(OTHER_TOKEN)
+            )
+            wait_until(
+                lambda: len(recorder.requests) == 2,
+                "the second caller never reached the upstream",
+            )
+        assert other.result(timeout=10).status_code == 200
+
+    def test_the_log_line_says_which_limit_refused(self, capped, recorder, caplog):
+        """Two limits answer 429 and only one of them carries a Retry-After, so
+        a line saying only that a 429 went out leaves an operator sizing the
+        wrong number. One line, not two: the name stands where the elapsed time
+        would, which for a request that was never forwarded is only the cost of
+        refusing it."""
+        with caplog.at_level(logging.INFO), answer_in_flight(capped, recorder):
+            capped.post("/api/tags")
+        # The relay's own lines only: httpx logs the same exchange from the
+        # client side of the test, which is not the log an operator reads.
+        refusals = [
+            line for line in caplog.text.splitlines()
+            if "429" in line and "lmrelay.app" in line
+        ]
+        assert len(refusals) == 1, refusals
+        assert "-> ollama: 429 (concurrency)" in refusals[0]
+        assert "WARNING" in refusals[0], "a refusal is not an ordinary served request"
+
+    def test_and_a_served_request_still_says_how_long_it_took(self, capped, recorder, caplog):
+        """The other half of that substitution: it must not have taken the time
+        to first byte off the requests that were served."""
+        with caplog.at_level(logging.INFO):
+            capped.post("/api/tags")
+        assert re.search(r"-> ollama: 200 \(\d+\.\d\ds\)", caplog.text)
+
+    def test_a_relay_that_never_asked_for_a_cap_admits_them_all(self, authed, recorder):
+        """The default, and what every install that predates this key gets."""
+        from lmrelay.app import app
+
+        assert app.state.config.max_concurrent == 0
+        with answer_in_flight(authed, recorder) as held:
+            second = held.pool.submit(authed.post, "/api/tags")
+            wait_until(
+                lambda: len(recorder.requests) == 2, "the second request was not forwarded"
+            )
+        assert second.result(timeout=10).status_code == 200
+
+
+class TestGivingTheSlotBackWhenThereIsNoAnswer:
+    """Every way out that never reaches a body. A slot leaked on one of these
+    is not recovered by anything: it locks that caller out until the process
+    restarts, which is worse than the failure that leaked it."""
+
+    def test_a_dialect_refusal_costs_no_slot(self, capped, recorder):
+        """It is refused before the upstream is touched, so it never took one.
+        Counting it would let a mistyped path lock a caller out."""
+        from lmrelay.app import app
+
+        assert capped.post("/anthropic/api/chat", json={}).status_code == 400
+        assert app.state.inflight.counts == {}
+
+    def test_an_unreachable_upstream_gives_it_back(self, capped, recorder):
+        from lmrelay.app import app
+
+        recorder.raises = httpx.ConnectError("nothing listening")
+        assert capped.post("/api/chat", json={}).status_code == 502
+        assert app.state.inflight.counts == {}
+
+    def test_and_the_caller_is_not_locked_out_by_it(self, capped, recorder):
+        """The behaviour the assertion above stands for: an Ollama that was
+        down for one request must not leave the caller unable to send another
+        once it is up."""
+        recorder.raises = httpx.ConnectError("nothing listening")
+        assert capped.post("/api/chat", json={}).status_code == 502
+        recorder.raises = None
+        assert capped.post("/api/chat", json={}).status_code == 200
+
+    def test_any_other_transport_failure_gives_it_back_too(self, capped, recorder):
+        """The second 502 arm. Both of them return rather than raise, so
+        neither is covered by the generator that releases at the end of a body."""
+        from lmrelay.app import app
+
+        recorder.raises = httpx.ReadError("connection reset")
+        assert capped.post("/api/chat", json={}).status_code == 502
+        assert app.state.inflight.counts == {}
+
+    def test_a_stream_that_breaks_part_way_through_gives_it_back(self, capped, recorder):
+        """Here the body did start, so the release is the generator's `finally`
+        rather than an error arm: the exception leaves through it."""
+        from lmrelay.app import app
+
+        recorder.chunks = fails_after_the_first_chunk()
+        with pytest.raises(httpx.ReadError):
+            capped.post("/api/generate", json={"stream": True})
+        assert app.state.inflight.counts == {}
+
+    def test_a_response_the_relay_cannot_build_gives_it_back(self, capped, recorder):
+        """The one path out that is not an error arm and not the body generator.
+
+        httpx decodes a response header as UTF-8 and starlette re-encodes it as
+        latin-1, so a single non-ASCII header from a provider raises where the
+        StreamingResponse is constructed. That sits after the slot is taken and
+        after every `except` that releases it, and neither of the two things
+        that would otherwise give the slot back is reachable: nothing iterates
+        the generator whose `finally` releases, and the BackgroundTask that
+        closes the connection is part of the object that failed to be built.
+        """
+        from lmrelay.app import app
+
+        recorder.headers = [(b"content-type", b"application/json"), UNENCODABLE_HEADER]
+        with pytest.raises(UnicodeEncodeError):
+            capped.post("/api/generate", json={})
+        assert app.state.inflight.counts == {}
+
+    def test_and_that_caller_is_not_locked_out_of_its_own_cap(self, capped, recorder):
+        """What the assertion above stands for. Held, the slot is unrecoverable:
+        `max_concurrent` such answers and that caller is refused for the life of
+        the process, with nothing in the log naming the cap it is refused by."""
+        recorder.headers = [UNENCODABLE_HEADER]
+        with pytest.raises(UnicodeEncodeError):
+            capped.post("/api/generate", json={})
+        recorder.headers = {"content-type": "application/json"}
+        assert capped.post("/api/generate", json={}).status_code == 200
+
+    def test_a_caller_that_hangs_up_part_way_through_gives_it_back(self):
+        """Starlette closes the body generator when the connection goes, and the
+        `finally` is what makes that a release rather than a leak.
+
+        Driven directly because the in-process client cannot hang up: it settles
+        a response before handing it back. Measured over a real socket while
+        this was written, with the same result — the slot came back a moment
+        after the client closed, and the next request from that caller was
+        admitted.
+        """
+        from lmrelay.app import relay_body
+        from lmrelay.ratelimit import InflightCounter, release_once
+
+        async def produce():
+            yield FIRST_CHUNK
+            yield b'{"done":true}\n'
+
+        counter = InflightCounter({TESTCLIENT_KEY: 1})
+        body = relay_body(
+            httpx.Response(200, content=produce()), release_once(counter, TESTCLIENT_KEY)
+        )
+
+        async def hang_up_after_the_first_chunk():
+            assert await anext(body) == FIRST_CHUNK
+            # Still held: the caller has part of an answer and is reading it.
+            assert counter.counts == {TESTCLIENT_KEY: 1}
+            await body.aclose()
+
+        anyio.run(hang_up_after_the_first_chunk)
+        assert counter.counts == {}
+
+
 class TestStartup:
     """What the process does before it serves anything."""
 
@@ -509,6 +968,113 @@ class TestReloadingInPlace:
         with caplog.at_level(logging.WARNING):
             reload_config(app)
         assert "port" not in caplog.text
+
+    def test_a_rate_limit_can_be_turned_on_without_a_restart(self, authed, tmp_path):
+        from lmrelay.app import app, reload_config
+
+        assert app.state.limiter is None
+        write_config(tmp_path, config_rate("2", "3"))
+        reload_config(app)
+        assert (app.state.limiter.rate, app.state.limiter.burst) == (2.0, 3.0)
+
+    def test_and_off_again(self, authed, tmp_path):
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_rate("2", "3"))
+        reload_config(app)
+        write_config(tmp_path, config_rate("0"))
+        reload_config(app)
+        assert app.state.limiter is None
+
+    def test_an_unrelated_reload_leaves_the_limiter_alone(self, limited, tmp_path):
+        """A fresh limiter starts every caller with a full bucket, so rebuilding
+        it on a reload that changed something else would hand the allowance back
+        to whoever was being limited at that moment: editing an upstream URL
+        would be a way to clear the limit."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.limiter
+        for _ in range(3):
+            limited.get("/api/tags")
+        assert limited.get("/api/tags").status_code == 429
+
+        write_config(tmp_path, with_setting(config_rate("2", "3"), "log_level", '"INFO"'))
+        reload_config(app)
+        assert app.state.limiter is before
+        assert limited.get("/api/tags").status_code == 429
+
+    def test_but_a_changed_number_rebuilds_it(self, limited, tmp_path):
+        """The other half: the numbers cannot move without a new table, since a
+        bucket holds an allowance measured against the old burst."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.limiter
+        write_config(tmp_path, config_rate("5", "9"))
+        reload_config(app)
+        assert app.state.limiter is not before
+        assert (app.state.limiter.rate, app.state.limiter.burst) == (5.0, 9.0)
+
+    def test_the_reload_log_names_the_effective_burst(self, authed, tmp_path, caplog):
+        """Read back afterwards to check what took, so it has to name the number
+        the limiter holds rather than the one the file spells: `rate_burst = 0`
+        means unset, and the limiter reads it as 1."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_rate("2"))
+        with caplog.at_level(logging.INFO):
+            reload_config(app)
+        assert "rate limit off -> 2/s burst 1" in caplog.text
+
+    def test_a_changed_cap_is_in_force_without_a_restart(self, authed, tmp_path):
+        """Read from the config at every request, like the upstreams and the
+        tokens, so a reload is the whole of applying it."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_where("max_concurrent", "2"))
+        reload_config(app)
+        assert app.state.config.max_concurrent == 2
+
+    def test_and_it_is_not_named_as_needing_one(self, authed, tmp_path, caplog):
+        """Listing it beside host and port would send an operator to restart a
+        relay that had already done what they asked."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_where("max_concurrent", "2"))
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "max_concurrent" not in caplog.text
+
+    def test_the_counter_survives_the_reload_with_its_live_slots(
+        self, capped, recorder, tmp_path
+    ):
+        """Rebuilding it, as the rate limiter is rebuilt, would forget the slot
+        every streaming answer holds, and each of those would then release one
+        that was no longer recorded — leaving the caller a free slot per answer
+        that happened to be running when somebody edited the file."""
+        from lmrelay.app import app, reload_config
+
+        before = app.state.inflight
+        with answer_in_flight(capped, recorder):
+            write_config(tmp_path, config_where("max_concurrent", "4"))
+            reload_config(app)
+            assert app.state.inflight is before
+            assert app.state.inflight.counts == {TESTCLIENT_KEY: 1}
+        assert app.state.inflight.counts == {}
+
+    def test_and_the_new_number_governs_the_next_request(self, capped, recorder, tmp_path):
+        """The other half: the answer in flight keeps its slot under the old
+        number, and the raised cap admits the request that arrives after it."""
+        from lmrelay.app import app, reload_config
+
+        with answer_in_flight(capped, recorder) as held:
+            assert capped.post("/api/tags").status_code == 429
+            write_config(tmp_path, config_where("max_concurrent", "2"))
+            reload_config(app)
+            admitted = held.pool.submit(capped.post, "/api/tags")
+            wait_until(
+                lambda: len(recorder.requests) == 2, "the raised cap admitted nothing"
+            )
+        assert admitted.result(timeout=10).status_code == 200
 
     def test_a_changed_log_level_is_in_force_for_the_next_line(
         self, authed, tmp_path, logging_restored
