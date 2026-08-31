@@ -2,14 +2,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 188" width="640" height="188" role="img">
   <title>clients to lmrelay on port 11435, which forwards to Ollama on port 11434 and to OpenAI, Anthropic, DeepSeek and Grok</title>
 
-  <!-- Card: a mid-luminance panel, so neither a white nor a near-black README
-       page shows through and neither makes it glow. The border carries the
-       separation on the dark page, where the panel alone is only 2.83:1. -->
+  <!-- GitHub's dark canvas, so the card disappears into the page there and
+       stands as a deliberate dark panel everywhere else. The labels sit on the
+       box fill rather than on the page, which is what keeps them legible on a
+       white PyPI page too: the reader's background never reaches the text. -->
   <rect x="6" y="6" width="628" height="176" rx="14"
-        fill="#525D6B" stroke="#AEBAC7" stroke-width="1.5"/>
+        fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
 
-  <!-- Boxes -->
-  <g fill="#2B333D" stroke="#AEBAC7" stroke-width="1.25">
+  <!-- Boxes: GitHub's subtle surface. Its border token (#30363d) is meant to
+       sit on the canvas, not on this fill — there it measures 1.42:1 and
+       vanishes — so the outline uses the muted foreground instead, at 3.77:1
+       on the box and 4.12:1 on the panel. -->
+  <g fill="#161b22" stroke="#6e7681" stroke-width="1.25">
     <rect x="22" y="68" width="100" height="52" rx="8"/>
     <rect x="158" y="66" width="140" height="56" rx="8"/>
     <rect x="330" y="24" width="288" height="52" rx="8"/>
@@ -17,19 +21,19 @@
   </g>
 
   <!-- Arrows, left to right, forking to the two stacked boxes -->
-  <g stroke="#AEBAC7" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <g stroke="#8b949e" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path d="M126 94 H145"/>
     <path d="M302 94 H305 Q311 94 311 88 V56 Q311 50 317 50"/>
     <path d="M302 94 H305 Q311 94 311 100 V132 Q311 138 317 138"/>
   </g>
-  <g fill="#AEBAC7">
+  <g fill="#8b949e">
     <path d="M145 89 L154 94 L145 99 Z"/>
     <path d="M317 45 L326 50 L317 55 Z"/>
     <path d="M317 133 L326 138 L317 143 Z"/>
   </g>
 
   <!-- Labels: real text, selectable, in whatever sans the reader already has -->
-  <g fill="#F5F8FB" font-size="13" text-anchor="middle"
+  <g fill="#e6edf3" font-size="13" text-anchor="middle"
      font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
     <text x="72" y="98.5">clients</text>
     <text x="228" y="98.5">lmrelay :11435</text>
