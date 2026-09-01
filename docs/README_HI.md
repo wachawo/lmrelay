@@ -145,13 +145,13 @@ autostart    systemd: enabled, active
 | `lmrelay provider list [--show]` | हर upstream, file से और state से |
 | `lmrelay provider delete NAME` | state के अधिकार वाला provider हटाती है |
 | `lmrelay limits set SCOPE N [PERIOD]` | एक scope की सीमाएँ config फ़ाइल में लिखती है |
-| `lmrelay config export PATH` | इस relay को कहीं और दोबारा खड़ा करने भर सब कुछ लिखती है |
-| `lmrelay config import PATH` | config और state को एक bundle से बदल देती है |
+| `lmrelay export [PATH]` | इस relay को कहीं और दोबारा खड़ा करने भर सब कुछ लिखती है |
+| `lmrelay import [PATH]` | config और state को एक bundle से बदल देती है |
 
 `run`, `serve` और `restart` `--host` और `--port` लेती हैं। `provider add` `--base-url`,
 `--dialect` और दोहराया जा सकने वाला `--header K=V` लेती है; जाने-पहचाने नाम के साथ (`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) base URL, dialect और header का ढाँचा preset से आता
-है, इसलिए पूरी command बस `lmrelay provider add openai sk-...` है। `config export`
+है, इसलिए पूरी command बस `lmrelay provider add openai sk-...` है। `export`
 `--no-secrets` लेती है, और `config` की दोनों commands पहले से मौजूद फ़ाइल पर लिखने के लिए
 `--force` लेती हैं; दोनों में path की जगह `-` देने पर terminal इस्तेमाल होता है। `--config PATH` उन सभी
 commands में चलता है जो config या state पढ़ती हैं, यानी `init` और `disable` को छोड़कर हर command

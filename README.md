@@ -143,14 +143,14 @@ manager, `lmrelay serve` runs the relay detached.
 | `lmrelay provider list [--show]` | every upstream, from the file and from state |
 | `lmrelay provider delete NAME` | remove a provider that state owns |
 | `lmrelay limits set SCOPE N [PERIOD]` | set one scope's limits in the config file |
-| `lmrelay config export PATH` | write everything needed to reproduce this relay |
-| `lmrelay config import PATH` | replace the config and the state with a bundle |
+| `lmrelay export [PATH]` | write everything needed to reproduce this relay |
+| `lmrelay import [PATH]` | replace the config and the state with a bundle |
 
 `run`, `serve` and `restart` take `--host` and `--port`. `provider add` takes `--base-url`,
 `--dialect` and a repeatable `--header K=V`; with a known name (`openai`, `anthropic`,
 `deepseek`, `grok`, `ollama`) the base URL, dialect and header shape come from a preset,
-so `lmrelay provider add openai sk-...` is the whole command. `config export` takes
-`--no-secrets`, both `config` verbs take `--force` to write over what is already there, and
+so `lmrelay provider add openai sk-...` is the whole command. `export` takes
+`--no-secrets`, both verbs take `--force` to write over what is already there, and
 either accepts `-` in place of a path to use the terminal. `--config PATH` is accepted by
 every command that reads the config or the state, which is every command except `init`,
 which always writes `~/.lmrelay/lmrelay.toml`, and `disable`, which reads neither.

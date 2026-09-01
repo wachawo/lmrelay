@@ -147,14 +147,14 @@ relais en mode détaché.
 | `lmrelay provider list [--show]` | tous les upstreams, ceux du fichier et ceux de l'état |
 | `lmrelay provider delete NAME` | supprimer un fournisseur détenu par l'état |
 | `lmrelay limits set SCOPE N [PERIOD]` | écrire les limites d'une portée dans le fichier de configuration |
-| `lmrelay config export PATH` | écrire tout ce qu'il faut pour reproduire ce relais |
-| `lmrelay config import PATH` | remplacer la configuration et l'état par un paquet |
+| `lmrelay export [PATH]` | écrire tout ce qu'il faut pour reproduire ce relais |
+| `lmrelay import [PATH]` | remplacer la configuration et l'état par un paquet |
 
 `run`, `serve` et `restart` acceptent `--host` et `--port`. `provider add` accepte `--base-url`,
 `--dialect` et un `--header K=V` répétable ; avec un nom connu (`openai`, `anthropic`,
 `deepseek`, `grok`, `ollama`) l'URL de base, le dialecte et la forme des en-têtes viennent d'un
 préréglage, si bien que `lmrelay provider add openai sk-...` est la commande entière.
-`config export` accepte `--no-secrets`, les deux verbes `config` acceptent `--force` pour
+`export` accepte `--no-secrets`, les deux verbes acceptent `--force` pour
 écrire par-dessus ce qui est déjà là, et l'un comme l'autre acceptent `-` à la place d'un
 chemin, pour passer par le terminal.
 `--config PATH` est accepté par toute commande qui lit la configuration ou l'état, c'est-à-dire

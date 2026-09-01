@@ -146,13 +146,13 @@ plano.
 | `lmrelay provider list [--show]` | todos os upstreams, do arquivo e do estado |
 | `lmrelay provider delete NAME` | remove um provedor que pertence ao estado |
 | `lmrelay limits set SCOPE N [PERIOD]` | escreve os limites de um escopo no arquivo de configuração |
-| `lmrelay config export PATH` | escreve tudo o que é preciso para reproduzir este relay |
-| `lmrelay config import PATH` | substitui a configuração e o estado por um pacote |
+| `lmrelay export [PATH]` | escreve tudo o que é preciso para reproduzir este relay |
+| `lmrelay import [PATH]` | substitui a configuração e o estado por um pacote |
 
 `run`, `serve` e `restart` aceitam `--host` e `--port`. `provider add` aceita `--base-url`,
 `--dialect` e um `--header K=V` repetível; com um nome conhecido (`openai`, `anthropic`,
 `deepseek`, `grok`, `ollama`) a URL base, o dialeto e o formato do header vêm de um preset,
-então `lmrelay provider add openai sk-...` é o comando inteiro. `config export` aceita
+então `lmrelay provider add openai sk-...` é o comando inteiro. `export` aceita
 `--no-secrets`, ambos os verbos `config` aceitam `--force` para escrever sobre o que já está
 lá, e ambos aceitam `-` no lugar de um caminho para usar o terminal. `--config PATH` é aceito por
 todo comando que lê a configuração ou o estado, ou seja, todos menos `init`, que sempre

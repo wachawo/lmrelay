@@ -138,13 +138,13 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 | `lmrelay provider list [--show]` | 全部上游，来自配置文件和 state |
 | `lmrelay provider delete NAME` | 删除由 state 拥有的服务商 |
 | `lmrelay limits set SCOPE N [PERIOD]` | 把某个作用域的上限写入配置文件 |
-| `lmrelay config export PATH` | 写出在别处重建这个中继所需的一切 |
-| `lmrelay config import PATH` | 用一个打包文件替换配置和 state |
+| `lmrelay export [PATH]` | 写出在别处重建这个中继所需的一切 |
+| `lmrelay import [PATH]` | 用一个打包文件替换配置和 state |
 
 `run`、`serve` 和 `restart` 接受 `--host` 和 `--port`。`provider add` 接受
 `--base-url`、`--dialect` 以及可重复的 `--header K=V`；如果名称是已知的那几个（
 `openai`、`anthropic`、`deepseek`、`grok`、`ollama`），base URL、方言和请求头形态都来自
-预设，所以 `lmrelay provider add openai sk-...` 就是完整的命令。`config export` 接受
+预设，所以 `lmrelay provider add openai sk-...` 就是完整的命令。`export` 接受
 `--no-secrets`，两个 `config` 子命令都接受 `--force` 以覆盖已经存在的文件；两者都接受用 `-`
 代替路径，以便走终端。
 凡是读取配置或 state

@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """The transfer bundle: what an export carries, and everything an import refuses."""
 
+import io
 import json
 import logging
+import tomllib
 
 import pytest
 
@@ -99,7 +101,7 @@ def source(tmp_path, monkeypatch):
 @pytest.fixture
 def bundle_path(tmp_path):
     """Where an export is written."""
-    return tmp_path / "relay.json"
+    return tmp_path / "relay.toml"
 
 
 @pytest.fixture
@@ -112,8 +114,8 @@ def target(tmp_path):
 
 def export(source_path, bundle_path, *flags) -> dict:
     """Export from a config and hand back what landed on disk."""
-    run_command(["config", "export", str(bundle_path), "--config", str(source_path), *flags])
-    return json.loads(bundle_path.read_text(encoding="utf-8"))
+    run_command(["export", str(bundle_path), "--config", str(source_path), *flags])
+    return tomllib.loads(bundle_path.read_text(encoding="utf-8"))
 
 
 def leave_the_source_machine(monkeypatch) -> None:
@@ -137,18 +139,61 @@ def effective(config: RelayConfig) -> dict:
         "limits": config.limits,
         "auth_enabled": config.auth_enabled,
         "auth_tokens": tuple(sorted(config.auth_tokens)),
-        "upstreams": {
+        "upstream": {
             name: (upstream.base_url, upstream.dialect, upstream.headers)
             for name, upstream in sorted(config.upstreams.items())
         },
     }
 
 
+def as_toml(data: dict, prefix: str = "") -> str:
+    """Render any dict as TOML, including things the real writer would refuse.
+
+    Deliberately not `bundle.render_bundle`: these tests hand an import the
+    values a hand edit produces, an unknown table, a `nan`, a port spelled as a
+    word, and a writer that refused them could not write the test.
+    """
+    scalars, tables = {}, {}
+    for key, value in data.items():
+        (tables if isinstance(value, dict) else scalars)[key] = value
+
+    lines = []
+    for key, value in scalars.items():
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+            continue
+        lines.append(f"{json.dumps(key)} = {toml_scalar(value)}")
+    for key, value in tables.items():
+        title = f"{prefix}{json.dumps(key)}"
+        if all(isinstance(inner, dict) for inner in value.values()) and value:
+            lines.append(as_toml(value, prefix=f"{title}."))
+        else:
+            lines.append(f"[{title}]\n" + as_toml(value, prefix=f"{title}."))
+    for key, value in data.items():
+        if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+            for item in value:
+                lines.append(f"[[{prefix}{json.dumps(key)}]]\n" + as_toml(item))
+    return "\n".join(line for line in lines if line) + "\n"
+
+
+def toml_scalar(value) -> str:
+    """One value as TOML, nan and inf included."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_scalar(item) for item in value) + "]"
+    if isinstance(value, dict):
+        pairs = ", ".join(f"{json.dumps(k)} = {toml_scalar(v)}" for k, v in value.items())
+        return f"{{ {pairs} }}"
+    return json.dumps(value)
+
+
 def edited(bundle_path, **changes):
     """Rewrite a bundle on disk, for the hand-edit an import has to refuse."""
-    data = json.loads(bundle_path.read_text(encoding="utf-8"))
+    data = tomllib.loads(bundle_path.read_text(encoding="utf-8"))
     data.update(changes)
-    bundle_path.write_text(json.dumps(data), encoding="utf-8")
+    bundle_path.write_text(as_toml(data), encoding="utf-8")
     return bundle_path
 
 
@@ -164,7 +209,7 @@ class TestTheRoundTrip:
         export(source, bundle_path)
         before = effective(load_config(source))
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         assert effective(load_config(target)) == before
 
     def test_a_header_read_from_the_environment_survives_the_move(
@@ -176,7 +221,7 @@ class TestTheRoundTrip:
         the same environment, which is the one thing guaranteed to differ."""
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         headers = load_config(target).upstreams["anthropic"].headers
         assert headers["x-api-key"] == ANTHROPIC_KEY
 
@@ -189,7 +234,7 @@ class TestTheRoundTrip:
         monkeypatch.setenv("dollar", "SOMETHING-ELSE")
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         assert "$dollar" in load_config(target).upstreams["anthropic"].headers["x-api-key"]
 
     def test_a_credential_from_the_file_still_works_after_the_move(
@@ -199,7 +244,7 @@ class TestTheRoundTrip:
         relay that refuses a caller the exported one served."""
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         tokens = load_config(target).auth_tokens
         assert FILE_TOKEN in tokens
 
@@ -210,7 +255,7 @@ class TestTheRoundTrip:
         before = {token.id: token.token for token in load_state(state_path_for(source)).tokens}
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         after = {token.id: token.token for token in load_state(state_path_for(target)).tokens}
         assert before.items() <= after.items()
 
@@ -220,7 +265,7 @@ class TestTheRoundTrip:
         """An id printed by `token list` must never come to name a second token."""
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         state = load_state(state_path_for(target))
         assert state.next_token_id > max(token.id for token in state.tokens)
 
@@ -231,7 +276,7 @@ class TestTheRoundTrip:
         the exporting operator's lmrelay.toml are theirs."""
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         assert "A comment of the operator's own" not in target.read_text(encoding="utf-8")
 
     def test_a_bundle_can_be_piped_from_one_relay_into_another(
@@ -239,11 +284,11 @@ class TestTheRoundTrip:
     ):
         """'-' on both verbs, so moving a relay is one line and never has to
         leave a file full of keys lying about."""
-        run_command(["config", "export", STDIO_PATH, "--config", str(source)])
+        run_command(["export", STDIO_PATH, "--config", str(source)])
         bundle_path.write_text(capsys.readouterr().out, encoding="utf-8")
         leave_the_source_machine(monkeypatch)
         monkeypatch.setattr("sys.stdin", bundle_path.open(encoding="utf-8"))
-        run_command(["config", "import", STDIO_PATH, "--config", str(target)])
+        run_command(["import", STDIO_PATH, "--config", str(target)])
         assert load_config(target).port == 11500
 
 
@@ -257,14 +302,14 @@ class TestExportWritesNowhereItWouldRuin:
         readable to load_state, which found nothing in it and turned auth off
         without a word, on a relay that was still running."""
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "export", str(state_path_for(source)),
+            run_command(["export", str(state_path_for(source)),
                          "--config", str(source)])
         assert "state file" in str(raised.value)
         assert load_state(state_path_for(source)).tokens
 
     def test_nor_over_the_config_file(self, source):
         with pytest.raises(BundleError, match="config file"):
-            run_command(["config", "export", str(source), "--config", str(source)])
+            run_command(["export", str(source), "--config", str(source)])
         assert "[upstream.ollama]" in source.read_text(encoding="utf-8")
 
     def test_and_a_relative_spelling_of_them_is_the_same_file(
@@ -274,7 +319,7 @@ class TestExportWritesNowhereItWouldRuin:
         file as the absolute path does, and the check has to know that."""
         monkeypatch.chdir(source.parent)
         with pytest.raises(BundleError, match="state file"):
-            run_command(["config", "export", "state.json", "--config", str(source)])
+            run_command(["export", "state.json", "--config", str(source)])
 
     def test_any_other_file_that_exists_is_refused_until_asked_twice(
         self, source, bundle_path
@@ -283,19 +328,69 @@ class TestExportWritesNowhereItWouldRuin:
         overwrite what is already there."""
         bundle_path.write_text("not mine to lose\n", encoding="utf-8")
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "export", str(bundle_path), "--config", str(source)])
+            run_command(["export", str(bundle_path), "--config", str(source)])
         assert "--force" in str(raised.value)
         assert bundle_path.read_text(encoding="utf-8") == "not mine to lose\n"
 
     def test_and_force_then_replaces_it(self, source, bundle_path):
         bundle_path.write_text("stale\n", encoding="utf-8")
         export(source, bundle_path, "--force")
-        assert json.loads(bundle_path.read_text(encoding="utf-8"))["bundle_version"]
+        assert tomllib.loads(bundle_path.read_text(encoding="utf-8"))["bundle_version"]
 
     def test_stdout_is_not_a_path_and_needs_no_permission(self, source, capsys):
         """'-' has nothing to overwrite, so the guard has nothing to say."""
-        run_command(["config", "export", STDIO_PATH, "--config", str(source)])
-        assert json.loads(capsys.readouterr().out)["bundle_version"] == BUNDLE_VERSION
+        run_command(["export", STDIO_PATH, "--config", str(source)])
+        assert tomllib.loads(capsys.readouterr().out)["bundle_version"] == BUNDLE_VERSION
+
+
+class TestTheTerminalIsWhatNoPathMeans:
+    """`lmrelay export | ssh there lmrelay import` is the whole of moving a relay."""
+
+    def test_export_with_no_path_writes_the_bundle_to_stdout(self, source, capsys):
+        run_command(["export", "--config", str(source)])
+        assert tomllib.loads(capsys.readouterr().out)["bundle_version"] == BUNDLE_VERSION
+
+    def test_and_every_word_about_it_to_stderr(self, source, capsys, caplog):
+        """Otherwise the pipe carries the bundle and a sentence about the
+        bundle, and what comes out the far end is not a bundle."""
+        with caplog.at_level(logging.INFO):
+            run_command(["export", "--config", str(source)])
+        printed = capsys.readouterr()
+        assert "Wrote standard output" not in printed.out
+        assert "Wrote standard output" in caplog.text
+
+    def test_secrets_on_a_terminal_are_said_louder(self, source, capsys, caplog):
+        """A file at 0600 is one thing; the same bytes in a scrollback, and in
+        any screenshot of it, is another. --no-secrets is named rather than
+        described, so the fix is one thing to copy."""
+        with caplog.at_level(logging.WARNING):
+            run_command(["export", "--config", str(source)])
+        assert "on your terminal" in caplog.text
+        assert "--no-secrets" in caplog.text
+
+    def test_and_not_when_it_went_to_a_file(self, source, bundle_path, caplog):
+        with caplog.at_level(logging.WARNING):
+            run_command(["export", str(bundle_path), "--config", str(source)])
+        assert "on your terminal" not in caplog.text
+
+    def test_import_with_no_path_reads_stdin(self, source, bundle_path, target, monkeypatch):
+        export(source, bundle_path)
+        leave_the_source_machine(monkeypatch)
+        monkeypatch.setattr(
+            "sys.stdin", io.StringIO(bundle_path.read_text(encoding="utf-8"))
+        )
+        run_command(["import", "--config", str(target)])
+        assert sorted(load_config(target).upstreams) == ["anthropic", "ollama", "openai"]
+
+    def test_but_refuses_rather_than_waiting_when_nothing_is_piped_in(self, target, monkeypatch):
+        """Reading a terminal is a command that hangs with no output, which
+        reads as a relay that has locked up rather than as a missing argument."""
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+        with pytest.raises(BundleError) as raised:
+            run_command(["import", "--config", str(target)])
+        assert "no bundle to read" in str(raised.value)
+        assert not target.exists()
 
 
 class TestWhatTheBundleHolds:
@@ -320,7 +415,7 @@ class TestWhatTheBundleHolds:
     ):
         """A bundle without the CLI-added providers reproduces a relay with no
         providers, and one without the file's reproduces half of one."""
-        upstreams = export(source, bundle_path)["upstreams"]
+        upstreams = export(source, bundle_path)["upstream"]
         assert set(upstreams) == {"anthropic", "ollama", "openai"}
         assert upstreams["openai"]["headers"]["Authorization"] == f"Bearer {PROVIDER_KEY}"
 
@@ -356,7 +451,7 @@ class TestLeavingTheSecretsOut:
         """It has to remain a config, or the flag is just a delete."""
         data = export(source, bundle_path, "--no-secrets")
         assert data["server"]["port"] == 11500
-        assert data["upstreams"]["openai"]["base_url"] == "https://api.openai.com"
+        assert data["upstream"]["openai"]["base_url"] == "https://api.openai.com"
         assert data["auth"]["tokens"][0]["label"] == "laptop"
 
     def test_importing_one_takes_everything_else(self, source, bundle_path, target, monkeypatch):
@@ -364,7 +459,7 @@ class TestLeavingTheSecretsOut:
         worth having, and the keys are two commands away."""
         export(source, bundle_path, "--no-secrets")
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         assert load_config(target).port == 11500
 
     def test_and_a_masked_key_is_dropped_rather_than_sent_to_the_provider(
@@ -374,7 +469,7 @@ class TestLeavingTheSecretsOut:
         rather than as a bundle that was exported without one."""
         export(source, bundle_path, "--no-secrets")
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(target)])
+        run_command(["import", str(bundle_path), "--config", str(target)])
         assert load_config(target).upstreams["openai"].headers == {}
 
     def test_the_import_names_what_it_could_not_restore(
@@ -385,7 +480,7 @@ class TestLeavingTheSecretsOut:
         export(source, bundle_path, "--no-secrets")
         leave_the_source_machine(monkeypatch)
         with caplog.at_level(logging.INFO):
-            run_command(["config", "import", str(bundle_path), "--config", str(target)])
+            run_command(["import", str(bundle_path), "--config", str(target)])
         assert "caller token 1 (laptop)" in caplog.text
         assert "upstream openai header Authorization" in caplog.text
         assert "token gen" in caplog.text and "provider add" in caplog.text
@@ -398,7 +493,7 @@ class TestLeavingTheSecretsOut:
         export(source, bundle_path, "--no-secrets")
         leave_the_source_machine(monkeypatch)
         with caplog.at_level(logging.INFO):
-            run_command(["config", "import", str(bundle_path), "--config", str(target)])
+            run_command(["import", str(bundle_path), "--config", str(target)])
         assert "every request will now be refused" in caplog.text
 
 
@@ -412,21 +507,21 @@ class TestImportReplacesRatherThanMerges:
         export(source, bundle_path)
         occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "import", str(bundle_path), "--config", str(occupied)])
+            run_command(["import", str(bundle_path), "--config", str(occupied)])
         assert "--force" in str(raised.value)
 
     def test_and_is_left_exactly_as_it_was(self, source, bundle_path, tmp_path):
         occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
         export(source, bundle_path)
         with pytest.raises(BundleError):
-            run_command(["config", "import", str(bundle_path), "--config", str(occupied)])
+            run_command(["import", str(bundle_path), "--config", str(occupied)])
         assert occupied.read_text(encoding="utf-8") == MINIMAL_CONFIG
 
     def test_force_moves_the_old_pair_aside_first(self, source, bundle_path, tmp_path):
         occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
         run_command(["token", "add", "lmr_was_here", "--config", str(occupied)])
         export(source, bundle_path)
-        run_command(["config", "import", str(bundle_path), "--config", str(occupied), "--force"])
+        run_command(["import", str(bundle_path), "--config", str(occupied), "--force"])
         backup = occupied.with_name(occupied.name + ".bak")
         assert backup.read_text(encoding="utf-8") == MINIMAL_CONFIG
         assert state_path_for(occupied).with_name("state.json.bak").exists()
@@ -440,7 +535,7 @@ class TestImportReplacesRatherThanMerges:
         run_command(["token", "add", "lmr_was_here", "--config", str(occupied)])
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
-        run_command(["config", "import", str(bundle_path), "--config", str(occupied), "--force"])
+        run_command(["import", str(bundle_path), "--config", str(occupied), "--force"])
         assert "lmr_was_here" not in load_config(occupied).auth_tokens
 
     def test_a_backup_that_already_exists_is_never_written_over(
@@ -451,9 +546,9 @@ class TestImportReplacesRatherThanMerges:
         secrets lying about."""
         occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
         export(source, bundle_path)
-        run_command(["config", "import", str(bundle_path), "--config", str(occupied), "--force"])
+        run_command(["import", str(bundle_path), "--config", str(occupied), "--force"])
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "import", str(bundle_path), "--config", str(occupied),
+            run_command(["import", str(bundle_path), "--config", str(occupied),
                          "--force"])
         assert ".bak" in str(raised.value)
 
@@ -465,7 +560,7 @@ class TestImportReplacesRatherThanMerges:
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
         with caplog.at_level(logging.INFO):
-            run_command(["config", "import", str(bundle_path), "--config", str(target)])
+            run_command(["import", str(bundle_path), "--config", str(target)])
         assert "lmrelay restart" in caplog.text
         # The same words every other mutating command uses.
         assert "applies at the next start" in caplog.text
@@ -480,27 +575,39 @@ class TestRefusingABundleItCannotApply:
         relay that looks configured and is not."""
         export(source, bundle_path)
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "import",
+            run_command(["import",
                          str(edited(bundle_path, bundle_version=BUNDLE_VERSION + 1)),
                          "--config", str(target)])
         assert "newer lmrelay" in str(raised.value)
 
     def test_one_that_does_not_say_what_it_is(self, tmp_path, target):
-        """A JSON file is not a bundle, and bundle_version is what says it is."""
-        stray = tmp_path / "notes.json"
-        stray.write_text('{"server": {"port": 1}}', encoding="utf-8")
+        """A TOML file is not a bundle, and bundle_version is what says it is:
+        an lmrelay.toml handed to `import` by mistake parses perfectly."""
+        stray = tmp_path / "notes.toml"
+        stray.write_text('[server]\nport = 1\n', encoding="utf-8")
         with pytest.raises(BundleError, match="bundle_version"):
-            run_command(["config", "import", str(stray), "--config", str(target)])
+            run_command(["import", str(stray), "--config", str(target)])
 
-    def test_a_file_that_is_not_json_at_all(self, tmp_path, target):
-        stray = tmp_path / "notes.json"
-        stray.write_text("not json", encoding="utf-8")
-        with pytest.raises(BundleError, match="not JSON"):
-            run_command(["config", "import", str(stray), "--config", str(target)])
+    def test_one_written_by_a_build_that_wrote_json(self, tmp_path, target):
+        """Named rather than reported as a syntax error. A TOML parser meets `{`
+        and complains about line 1 column 1, which reads as a corrupt file
+        rather than as one written in the format before this."""
+        stray = tmp_path / "relay.json"
+        stray.write_text('{"bundle_version": 1, "server": {"port": 11435}}', encoding="utf-8")
+        with pytest.raises(BundleError) as raised:
+            run_command(["import", str(stray), "--config", str(target)])
+        assert "is JSON, and a bundle is TOML" in str(raised.value)
+        assert not target.exists()
+
+    def test_a_file_that_is_not_toml_at_all(self, tmp_path, target):
+        stray = tmp_path / "notes.toml"
+        stray.write_text("not toml", encoding="utf-8")
+        with pytest.raises(BundleError, match="not TOML"):
+            run_command(["import", str(stray), "--config", str(target)])
 
     def test_a_file_that_is_not_there(self, tmp_path, target):
         with pytest.raises(BundleError, match="cannot read"):
-            run_command(["config", "import", str(tmp_path / "absent.json"),
+            run_command(["import", str(tmp_path / "absent.json"),
                          "--config", str(target)])
 
     def test_an_unknown_key_at_a_known_version(self, source, bundle_path, target):
@@ -509,7 +616,7 @@ class TestRefusingABundleItCannotApply:
         bundle_version is for, and it is one line we control at both ends."""
         export(source, bundle_path)
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "import", str(edited(bundle_path, limitz={})),
+            run_command(["import", str(edited(bundle_path, limitz={})),
                          "--config", str(target)])
         assert "limitz" in str(raised.value)
 
@@ -517,14 +624,14 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["server"]["rate_limit"] = 20
         with pytest.raises(BundleError, match="rate_limit"):
-            run_command(["config", "import", str(edited(bundle_path, server=data["server"])),
+            run_command(["import", str(edited(bundle_path, server=data["server"])),
                          "--config", str(target)])
 
     def test_an_unknown_limit_scope(self, source, bundle_path, target):
         data = export(source, bundle_path)
         data["limits"]["per_model"] = {"requests": 1}
         with pytest.raises(BundleError, match="per_model"):
-            run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
+            run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
     def test_a_value_the_config_could_not_load(self, source, bundle_path, target):
@@ -535,7 +642,7 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["server"]["port"] = "eleven"
         with pytest.raises(BundleError, match="not a whole number"):
-            run_command(["config", "import", str(edited(bundle_path, server=data["server"])),
+            run_command(["import", str(edited(bundle_path, server=data["server"])),
                          "--config", str(target)])
 
     def test_a_whole_number_key_holding_a_fraction(self, source, bundle_path, target):
@@ -543,7 +650,7 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["limits"]["total"]["requests"] = 2.5
         with pytest.raises(BundleError, match="not a whole number"):
-            run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
+            run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
     @pytest.mark.parametrize("value", [float("nan"), float("inf"), 30, "1d", "1.5m", ""])
@@ -558,7 +665,7 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["limits"]["total"]["period"] = value
         with pytest.raises(BundleError):
-            run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
+            run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
     def test_a_log_level_that_is_a_string_and_still_not_a_level(
@@ -570,7 +677,7 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["server"]["log_level"] = "VERBOSE"
         with pytest.raises(BundleError, match="not a logging level"):
-            run_command(["config", "import", str(edited(bundle_path, server=data["server"])),
+            run_command(["import", str(edited(bundle_path, server=data["server"])),
                          "--config", str(target)])
 
     def test_a_default_upstream_it_only_defaults_to(self, source, bundle_path, target):
@@ -581,9 +688,9 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         del data["server"]["default_upstream"]
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "import",
+            run_command(["import",
                          str(edited(bundle_path, server=data["server"],
-                                    upstreams={"openai": data["upstreams"]["openai"]})),
+                                    upstream={"openai": data["upstream"]["openai"]})),
                          "--config", str(target)])
         assert "ollama" in str(raised.value) and "openai" in str(raised.value)
 
@@ -593,7 +700,7 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["limits"]["total"]["requests"] = -1
         with pytest.raises(BundleError, match="negative"):
-            run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
+            run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
     def test_a_default_upstream_it_does_not_define(self, source, bundle_path, target):
@@ -602,14 +709,14 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["server"]["default_upstream"] = "typo"
         with pytest.raises(BundleError) as raised:
-            run_command(["config", "import", str(edited(bundle_path, server=data["server"])),
+            run_command(["import", str(edited(bundle_path, server=data["server"])),
                          "--config", str(target)])
         assert "typo" in str(raised.value) and "ollama" in str(raised.value)
 
     def test_no_upstreams_at_all(self, source, bundle_path, target):
         export(source, bundle_path)
         with pytest.raises(BundleError, match="no upstreams"):
-            run_command(["config", "import", str(edited(bundle_path, upstreams={})),
+            run_command(["import", str(edited(bundle_path, upstream={})),
                          "--config", str(target)])
 
     def test_an_upstream_that_would_shadow_the_path_root(self, source, bundle_path, target):
@@ -618,9 +725,9 @@ class TestRefusingABundleItCannotApply:
         that parser's ConfigError rather than a BundleError, which is the point:
         there is one validator, not a second one that could disagree with it."""
         data = export(source, bundle_path)
-        data["upstreams"]["v1"] = {"base_url": "http://x", "dialect": "openai"}
+        data["upstream"]["v1"] = {"base_url": "http://x", "dialect": "openai"}
         with pytest.raises(LmrelayError, match="reserved"):
-            run_command(["config", "import", str(edited(bundle_path, upstreams=data["upstreams"])),
+            run_command(["import", str(edited(bundle_path, upstream=data["upstream"])),
                          "--config", str(target)])
 
     def test_two_tokens_with_one_id(self, source, bundle_path, target):
@@ -628,27 +735,27 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["auth"]["tokens"][1]["id"] = data["auth"]["tokens"][0]["id"]
         with pytest.raises(BundleError, match="two tokens"):
-            run_command(["config", "import", str(edited(bundle_path, auth=data["auth"])),
+            run_command(["import", str(edited(bundle_path, auth=data["auth"])),
                          "--config", str(target)])
 
     def test_a_token_entry_with_no_token_in_it(self, source, bundle_path, target):
         data = export(source, bundle_path)
         data["auth"]["tokens"] = [{"id": 1, "label": "empty"}]
         with pytest.raises(BundleError, match="no token"):
-            run_command(["config", "import", str(edited(bundle_path, auth=data["auth"])),
+            run_command(["import", str(edited(bundle_path, auth=data["auth"])),
                          "--config", str(target)])
 
     def test_an_auth_switch_that_is_not_a_switch(self, source, bundle_path, target):
         data = export(source, bundle_path)
         data["auth"]["enabled"] = "yes"
         with pytest.raises(BundleError, match="true or false"):
-            run_command(["config", "import", str(edited(bundle_path, auth=data["auth"])),
+            run_command(["import", str(edited(bundle_path, auth=data["auth"])),
                          "--config", str(target)])
 
     @pytest.mark.parametrize("change", [
         {"bundle_version": BUNDLE_VERSION + 1},
         {"limitz": {}},
-        {"upstreams": {}},
+        {"upstream": {}},
         {"server": {"log_level": "VERBOSE"}},
         {"limits": {"total": {"period": "1d"}}},
     ])
@@ -659,7 +766,7 @@ class TestRefusingABundleItCannotApply:
         neither the bundle nor what was there before."""
         export(source, bundle_path)
         with pytest.raises(BundleError):
-            run_command(["config", "import", str(edited(bundle_path, **change)),
+            run_command(["import", str(edited(bundle_path, **change)),
                          "--config", str(target)])
         assert not target.exists() and not state_path_for(target).exists()
 

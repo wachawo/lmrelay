@@ -140,13 +140,13 @@ autostart    systemd: enabled, active
 | `lmrelay provider list [--show]` | ファイルと state の両方から、すべてのアップストリーム |
 | `lmrelay provider delete NAME` | state が所有するプロバイダを削除する |
 | `lmrelay limits set SCOPE N [PERIOD]` | あるスコープの上限を設定ファイルに書き込む |
-| `lmrelay config export PATH` | このリレーを再現するのに要るものを全部書き出す |
-| `lmrelay config import PATH` | 設定と state をバンドルで置き換える |
+| `lmrelay export [PATH]` | このリレーを再現するのに要るものを全部書き出す |
+| `lmrelay import [PATH]` | 設定と state をバンドルで置き換える |
 
 `run`、`serve`、`restart` は `--host` と `--port` を取る。`provider add` は `--base-url`、
 `--dialect`、および繰り返し指定できる `--header K=V` を取る。名前が既知のもの（`openai`、
 `anthropic`、`deepseek`、`grok`、`ollama`）なら、ベース URL、方言、ヘッダの形はプリセットから
-来るので、`lmrelay provider add openai sk-...` だけでコマンドは終わる。`config export` は
+来るので、`lmrelay provider add openai sk-...` だけでコマンドは終わる。`export` は
 `--no-secrets` を取り、`config` の二つの動詞はどちらも、すでにあるものへ書くための `--force`
 を取る。どちらもパスの代わりに `-` を渡せば端末を使う。`--config PATH` は設定
 または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。

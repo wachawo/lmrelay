@@ -47,8 +47,20 @@ section is the point of this file: a decision that is not written down gets made
       `state.json`: an override there would be invisible in the file, which is the defect
       the environment layer was removed for.
 
-- [ ] **`config export` and `config import`.** One file that reproduces a relay elsewhere,
+- [ ] **`lmrelay export` and `lmrelay import`.** One file that reproduces a relay elsewhere,
       written 0600 because it carries tokens and provider keys.
+
+      The bundle is **TOML**, and it is an `lmrelay.toml` with the machine-owned half written
+      into it: the same `[server]`, `[limits.*]` and `[upstream.*]`, plus `[auth]` and three
+      metadata keys. JSON first, and that was the wrong pick. The reasoning for it, that a
+      bundle is machine written and machine read and comments buy nothing there, was
+      contradicted by the format's own documented uses: hand-editing one to provision a
+      machine, and reading one six months later to find out what a relay was.
+
+      No path means the terminal, so moving a relay is one pipe: `lmrelay export | ssh there
+      lmrelay import`. An import with nothing piped in is refused rather than left reading
+      the terminal, and an export to a terminal warns that the tokens and keys in it are now
+      in the scrollback.
 
 - [ ] **`GET /metrics`, in Prometheus text format.** Aggregate only, and built: requests by
       upstream and status, time to first byte as a histogram per upstream, requests in flight,

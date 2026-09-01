@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""The transfer bundle: one JSON file that reproduces this relay on another machine."""
+"""The transfer bundle: one TOML file that reproduces this relay on another machine."""
 
 import json
 import math
 import sys
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -55,9 +56,11 @@ LIMIT_TYPES: dict[str, type] = {
 # a different mistake than the one they had made.
 TYPE_NAMES: dict[type, str] = {str: "a string", int: "a whole number", float: "a number"}
 
-TOP_LEVEL_KEYS = (
-    "bundle_version", "written_by", "exported_at", "server", "limits", "auth", "upstreams",
-)
+# The three metadata keys, which are the whole of what a bundle carries that a
+# config file does not. Written before the first table, because TOML reads a
+# bare key as belonging to whatever table it last saw.
+META_KEYS = ("bundle_version", "written_by", "exported_at")
+TOP_LEVEL_KEYS = (*META_KEYS, "server", "limits", "auth", "upstream")
 AUTH_KEYS      = ("enabled", "tokens")
 TOKEN_KEYS     = ("id", "token", "label", "created_at")
 UPSTREAM_KEYS  = ("base_url", "dialect", "headers")
@@ -67,7 +70,7 @@ UPSTREAM_KEYS  = ("base_url", "dialect", "headers")
 FILE_TOKEN_LABEL = "from [auth] token"
 
 CONFIG_HEADER = """\
-# Written by 'lmrelay config import' from {source}.
+# Written by 'lmrelay import' from {source}.
 #
 # A bundle carries settings, not comments: the notes in the lmrelay.toml this
 # came from belong to the operator who wrote them and are not part of the
@@ -83,6 +86,18 @@ LIMITS_HEADER = """\
 # have in flight; with a 'period' it is also how many they may start in that
 # long. A request must pass every scope you set. If you set one, set
 # [limits.total]: that is the one that protects the upstream.
+"""
+
+BUNDLE_HEADER = """\
+# lmrelay bundle, written by {written_by} at {exported_at}.
+#
+# This is an lmrelay.toml with the machine-owned half beside it. [auth] and
+# [upstream.*] headers live in state.json on a running relay; they are here so
+# that one file reproduces one relay. Read it, edit it, hand it to
+# 'lmrelay import'.
+#
+# It carries settings, not comments: the notes in the lmrelay.toml this came
+# from belong to the operator who wrote them and are not part of the transfer.
 """
 
 
@@ -175,20 +190,20 @@ def build_bundle(config: RelayConfig, state: RelayState, keep_secrets: bool = Tr
             "enabled": config.auth_enabled,
             "tokens": bundle_tokens(config, state, keep_secrets),
         },
-        "upstreams": bundle_upstreams(config, keep_secrets),
+        "upstream": bundle_upstreams(config, keep_secrets),
     }
 
 
 def count_secrets(bundle: dict) -> tuple[int, int]:
     """How many caller tokens and provider credentials the bundle carries."""
     tokens = len(bundle["auth"]["tokens"])
-    keyed = sum(1 for upstream in bundle["upstreams"].values() if upstream["headers"])
+    keyed = sum(1 for upstream in bundle["upstream"].values() if upstream["headers"])
     return tokens, keyed
 
 
 def write_bundle(bundle: dict, destination: str) -> None:
-    """Write the bundle to a file at 0600, or to stdout when asked for by name."""
-    text = json.dumps(bundle, indent=2) + "\n"
+    """Write the bundle to a file at 0600, or to stdout when no path was given."""
+    text = render_bundle(bundle)
     if destination == STDIO_PATH:
         sys.stdout.write(text)
         return
@@ -209,13 +224,19 @@ def read_bundle(source: str) -> dict:
         raise BundleError(
             f"lmrelay: cannot read {describe_source(source)}: {type(exc).__name__}: {exc}"
         )
+    if text.lstrip().startswith("{"):
+        # A bundle from a build that wrote JSON. Named, because a TOML parser
+        # meets `{` and reports a syntax error at line 1, which reads as a
+        # corrupt file rather than as one written in the format before this.
+        raise BundleError(
+            f"lmrelay: {describe_source(source)} is JSON, and a bundle is TOML. It was "
+            f"written by a build from before the format changed: export again from that "
+            f"machine with a matching lmrelay."
+        )
     try:
-        data = json.loads(text)
-    except ValueError as exc:
-        raise BundleError(f"lmrelay: {describe_source(source)} is not JSON: {exc}")
-    if not isinstance(data, dict):
-        raise BundleError(f"lmrelay: {describe_source(source)} is not a JSON object")
-    return data
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise BundleError(f"lmrelay: {describe_source(source)} is not TOML: {exc}")
 
 
 def check_keys(present, allowed, what: str, source: str) -> None:
@@ -242,7 +263,7 @@ def check_version(data: dict, source: str) -> int:
     if version is None:
         raise BundleError(
             f"lmrelay: {source} has no bundle_version, so it is not an lmrelay export. "
-            f"'lmrelay config export' writes one."
+            f"'lmrelay export' writes one."
         )
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
         raise BundleError(
@@ -400,9 +421,9 @@ def parse_auth(data: dict, source: str) -> tuple[bool, tuple[CallerToken, ...], 
 
 def parse_bundle_upstreams(data: dict, source: str) -> tuple[dict[str, dict], list[str]]:
     """Validate every upstream through the parser a hand-written table goes through."""
-    section = data.get("upstreams") or {}
+    section = data.get("upstream") or {}
     if not isinstance(section, dict):
-        raise BundleError(f"lmrelay: {source} has an upstreams section that is not an object")
+        raise BundleError(f"lmrelay: {source} has an upstream section that is not a table")
 
     providers: dict[str, dict] = {}
     missing: list[str] = []
@@ -502,13 +523,75 @@ def toml_value(value) -> str:
     return json.dumps(value)
 
 
-def render_table(title: str, table: dict, order) -> list[str]:
-    """One TOML table, its values aligned on the widest key it carries."""
+def render_assignments(table: dict, order) -> list[str]:
+    """The `key = value` lines of one table, aligned on the widest key it carries."""
     names = [name for name in order if name in table]
     if not names:
         return []
     width = max(len(name) for name in names)
-    return [f"[{title}]", *(f"{name.ljust(width)} = {toml_value(table[name])}" for name in names)]
+    return [f"{name.ljust(width)} = {toml_value(table[name])}" for name in names]
+
+
+def render_table(title: str, table: dict, order) -> list[str]:
+    """One TOML table, its values aligned on the widest key it carries."""
+    lines = render_assignments(table, order)
+    return [f"[{title}]", *lines] if lines else []
+
+
+def render_inline_table(table: dict) -> str:
+    """A one-line TOML table, for an upstream's headers.
+
+    Every key is quoted, whether or not it needs to be. `x-api-key` is a legal
+    bare key and `Authorization` is too, and writing one of them bare and the
+    other quoted would read as a distinction that is not there.
+    """
+    pairs = ", ".join(f"{json.dumps(key)} = {toml_value(value)}" for key, value in table.items())
+    return f"{{ {pairs} }}" if pairs else "{}"
+
+
+def render_upstream(name: str, upstream: dict) -> list[str]:
+    """One [upstream.<name>] table, in the shape lmrelay.toml writes it."""
+    return [
+        f"[upstream.{name}]",
+        f"base_url = {toml_value(upstream['base_url'])}",
+        f"dialect  = {toml_value(upstream['dialect'])}",
+        f"headers  = {render_inline_table(upstream.get('headers') or {})}",
+    ]
+
+
+def render_bundle(bundle: dict) -> str:
+    """The whole bundle as TOML: an lmrelay.toml with the machine-owned half in it.
+
+    The same language as the config on purpose. An operator asked to read a
+    bundle, hand-edit one to provision a machine, or diff two of them is reading
+    the file they already know, with three metadata keys at the top and the
+    tokens and headers that a running relay keeps in state.json.
+
+    Every scope is written even when it is off, and so is an empty `headers`,
+    because this file is also documentation of what the exported relay was: a
+    setting absent from it is one the reader has to know the default of.
+    """
+    blocks = [
+        BUNDLE_HEADER.format(
+            written_by=bundle["written_by"], exported_at=bundle["exported_at"]
+        ).rstrip("\n"),
+        "\n".join(render_assignments(bundle, META_KEYS)),
+        "\n".join(render_table("server", bundle["server"], SERVER_KEYS)),
+        LIMITS_HEADER.rstrip("\n"),
+    ]
+    for scope in SCOPES:
+        blocks.append("\n".join(render_table(f"limits.{scope}", bundle["limits"][scope], LIMIT_KEYS)))
+
+    auth = bundle["auth"]
+    blocks.append(f"[auth]\nenabled = {toml_value(auth['enabled'])}")
+    for token in auth["tokens"]:
+        # An array of tables, because the ids and labels are the operator's and
+        # a bundle they can read is one they can edit.
+        blocks.append("\n".join(["[[auth.tokens]]", *render_assignments(token, TOKEN_KEYS)]))
+
+    for name in sorted(bundle["upstream"]):
+        blocks.append("\n".join(render_upstream(name, bundle["upstream"][name])))
+    return "\n\n".join(block for block in blocks if block) + "\n"
 
 
 def render_config(bundle: Bundle, source: str, state_path: Path) -> str:

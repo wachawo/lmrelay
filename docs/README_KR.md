@@ -140,13 +140,13 @@ autostart    systemd: enabled, active
 | `lmrelay provider list [--show]` | 파일과 상태에 있는 모든 업스트림 |
 | `lmrelay provider delete NAME` | 상태가 소유한 제공자를 제거합니다 |
 | `lmrelay limits set SCOPE N [PERIOD]` | 한 범위의 상한을 설정 파일에 씁니다 |
-| `lmrelay config export PATH` | 이 릴레이를 그대로 재현하는 데 필요한 것을 모두 씁니다 |
-| `lmrelay config import PATH` | 설정과 상태를 번들로 교체합니다 |
+| `lmrelay export [PATH]` | 이 릴레이를 그대로 재현하는 데 필요한 것을 모두 씁니다 |
+| `lmrelay import [PATH]` | 설정과 상태를 번들로 교체합니다 |
 
 `run`, `serve`, `restart`는 `--host`와 `--port`를 받습니다. `provider add`는 `--base-url`,
 `--dialect`, 그리고 여러 번 쓸 수 있는 `--header K=V`를 받습니다. 이름이 알려진 경우(`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) 기본 URL과 dialect, 헤더 형태를 프리셋에서 가져오므로
-`lmrelay provider add openai sk-...` 한 줄이면 끝입니다. `config export`는 `--no-secrets`를 받고,
+`lmrelay provider add openai sk-...` 한 줄이면 끝입니다. `export`는 `--no-secrets`를 받고,
 `config`의 두 하위 명령 모두 이미 있는 파일 위에 쓰려면 `--force`를 받습니다. 둘 다 경로 대신
 `-`를 주면 터미널을 씁니다.
 `--config PATH`는 설정이나 상태를 읽는 모든

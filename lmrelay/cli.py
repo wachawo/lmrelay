@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import subprocess
+import sys
 from dataclasses import replace
 from importlib import resources
 from pathlib import Path
@@ -547,7 +548,7 @@ def check_export_destination(destination: str, config: RelayConfig, force: bool)
     overwrites. No flag makes that the thing anybody meant.
 
     Anything else that exists is refused until it is asked for twice, which is
-    what `init` and `config import` already do with the files they write. Export
+    what `init` and `import` already do with the files they write. Export
     used to be the one verb in the set that overwrote in silence.
     """
     if destination == STDIO_PATH:
@@ -571,23 +572,32 @@ def config_export(args: argparse.Namespace) -> None:
     apply_config_env(args)
     config = load_config()
     state = load_state(config.state_path)
-    check_export_destination(args.path, config, args.force)
+    # No path means the terminal, so `lmrelay export | ssh ...` is the whole of
+    # moving a relay. The bundle goes to stdout and every word about it to
+    # stderr, so the pipe carries the file and nothing else.
+    destination = args.path or STDIO_PATH
+    check_export_destination(destination, config, args.force)
     keep_secrets = not args.no_secrets
     # The configuration in effect, not the two files verbatim: an upstream whose
     # header is written ${OPENAI_API_KEY} is exported expanded, because a bundle
     # reproduces the relay rather than the machine it ran on.
     bundle = build_bundle(config, state, keep_secrets=keep_secrets)
-    write_bundle(bundle, args.path)
+    write_bundle(bundle, destination)
 
     tokens, keyed = count_secrets(bundle)
-    where = "standard output" if args.path == STDIO_PATH else f"{args.path} (0600)"
+    to_terminal = destination == STDIO_PATH
+    where = "standard output" if to_terminal else f"{destination} (0600)"
     logger.info(f"Wrote {where}.")
     if keep_secrets:
-        # Said out loud because this is a file people attach to an issue.
-        logger.info(
-            f"It contains {plural(tokens, 'caller token')} and "
-            f"{plural(keyed, 'provider key')} in clear."
-        )
+        # Said out loud because this is a file people attach to an issue, and
+        # louder still when it went to a terminal, where it is now in the
+        # scrollback and in any screenshot of it. --no-secrets is named rather
+        # than described, so the fix is one thing to copy.
+        count = f"{plural(tokens, 'caller token')} and {plural(keyed, 'provider key')}"
+        if to_terminal and (tokens or keyed):
+            logger.warning(f"That was {count} in clear, on your terminal. --no-secrets masks them.")
+        else:
+            logger.info(f"It contains {count} in clear.")
     else:
         logger.info(
             "Token values and header values are masked, so it carries no secrets and the "
@@ -647,7 +657,16 @@ def config_import(args: argparse.Namespace) -> None:
     """Replace the config and the state with a bundle, backing up what was there."""
     config_path = config_path_from(args)
     state_path = state_path_for(config_path)
-    source = describe_source(args.path)
+    origin = args.path or STDIO_PATH
+    if origin == STDIO_PATH and sys.stdin.isatty():
+        # Refused rather than left waiting: with nothing piped in, reading
+        # stdin is a command that hangs with no output, which reads as a relay
+        # that has locked up rather than as a missing argument.
+        raise BundleError(
+            "lmrelay: no bundle to read. Give a path, or pipe one in: "
+            "'lmrelay import relay.toml', or 'cat relay.toml | lmrelay import'."
+        )
+    source = describe_source(origin)
 
     # Both halves are validated, and the backups are planned, before anything is
     # touched, so a bundle this relay will not accept leaves the existing pair
@@ -656,7 +675,7 @@ def config_import(args: argparse.Namespace) -> None:
     # filesystem operations below, which cannot be made one: if the disk fails
     # between them, what the operator has is what the .bak names say they have,
     # which is why the moves are announced one at a time as they happen.
-    bundle = parse_bundle(read_bundle(args.path), source)
+    bundle = parse_bundle(read_bundle(origin), source)
     moves = plan_replacement((config_path, state_path), args.force)
 
     for existing, target in moves:
@@ -777,17 +796,19 @@ def add_limits_commands(subparsers: argparse._SubParsersAction) -> None:
     set_parser.set_defaults(handler=limits_set)
 
 
-def add_config_commands(subparsers: argparse._SubParsersAction) -> None:
-    """Attach `lmrelay config <verb>`."""
-    config_parser = subparsers.add_parser("config", help="move a whole configuration about")
-    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
-
-    export_parser = config_subparsers.add_parser(
+def add_transfer_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Attach `lmrelay export` and `lmrelay import`."""
+    export_parser = subparsers.add_parser(
         "export", help="write everything needed to reproduce this relay"
     )
-    # An explicit '-' rather than a default, so a bundle full of keys never
-    # reaches a terminal because a path was left off.
-    export_parser.add_argument("path", help=f"file to write, or '{STDIO_PATH}' for stdout")
+    # Optional, and the terminal is what no path means, so moving a relay is one
+    # pipe. '-' is still accepted, because a script that spells it out should
+    # keep working and because it reads as deliberate where a bare command does
+    # not.
+    export_parser.add_argument(
+        "path", nargs="?", default=None,
+        help=f"file to write. Left off, or '{STDIO_PATH}', it goes to standard output",
+    )
     export_parser.add_argument(
         "--no-secrets", action="store_true", help="mask token and header values"
     )
@@ -797,10 +818,13 @@ def add_config_commands(subparsers: argparse._SubParsersAction) -> None:
     add_config_option(export_parser)
     export_parser.set_defaults(handler=config_export)
 
-    import_parser = config_subparsers.add_parser(
+    import_parser = subparsers.add_parser(
         "import", help="replace the config and the state with a bundle"
     )
-    import_parser.add_argument("path", help=f"bundle to read, or '{STDIO_PATH}' for stdin")
+    import_parser.add_argument(
+        "path", nargs="?", default=None,
+        help=f"bundle to read. Left off, or '{STDIO_PATH}', it is read from standard input",
+    )
     import_parser.add_argument(
         "--force", action="store_true", help="replace an existing config, backing it up first"
     )
@@ -862,7 +886,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_token_commands(subparsers)
     add_provider_commands(subparsers)
     add_limits_commands(subparsers)
-    add_config_commands(subparsers)
+    add_transfer_commands(subparsers)
     return parser
 
 

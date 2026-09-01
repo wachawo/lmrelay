@@ -56,13 +56,13 @@ DOCUMENTED = [
     ["limits", "set", "total", "6"],
     ["limits", "set", "total", "1", "60s"],
     ["limits", "set", "per_address", "10", "30m"],
-    ["config", "export", "relay.json"],
-    ["config", "export", "relay.json", "--no-secrets"],
-    ["config", "export", "relay.json", "--force"],
-    ["config", "export", "-"],
-    ["config", "import", "relay.json"],
-    ["config", "import", "relay.json", "--force"],
-    ["config", "import", "-"],
+    ["export", "relay.toml"],
+    ["export", "relay.toml", "--no-secrets"],
+    ["export", "relay.toml", "--force"],
+    ["export", "-"],
+    ["import", "relay.toml"],
+    ["import", "relay.toml", "--force"],
+    ["import", "-"],
 ]
 
 # The ones that touch the config or the state, and so have to accept --config.
@@ -71,7 +71,7 @@ CONFIGURABLE = [
     ["auth", "true"], ["token", "gen"], ["token", "add", "lmr_pasted"], ["token", "list"],
     ["token", "delete", "3"], ["provider", "add", "openai", "sk-test"], ["provider", "list"],
     ["provider", "delete", "openai"], ["limits", "set", "total", "6"],
-    ["config", "export", "relay.json"], ["config", "import", "relay.json"],
+    ["export", "relay.toml"], ["import", "relay.toml"],
 ]
 
 

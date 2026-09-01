@@ -145,13 +145,13 @@ autostart    systemd: enabled, active
 | `lmrelay provider list [--show]` | все апстримы, из файла и из состояния |
 | `lmrelay provider delete NAME` | удалить провайдера, которым владеет состояние |
 | `lmrelay limits set SCOPE N [PERIOD]` | записать лимиты одной области в конфиг |
-| `lmrelay config export PATH` | записать всё, что нужно, чтобы воспроизвести этот релей |
-| `lmrelay config import PATH` | заменить конфиг и состояние пакетом |
+| `lmrelay export [PATH]` | записать всё, что нужно, чтобы воспроизвести этот релей |
+| `lmrelay import [PATH]` | заменить конфиг и состояние пакетом |
 
 `run`, `serve` и `restart` принимают `--host` и `--port`. `provider add` принимает
 `--base-url`, `--dialect` и повторяемый `--header K=V`; для известного имени (`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) базовый URL, диалект и форма заголовка берутся из
-пресета, так что `lmrelay provider add openai sk-...` это вся команда целиком. `config export`
+пресета, так что `lmrelay provider add openai sk-...` это вся команда целиком. `export`
 принимает `--no-secrets`, обе команды `config` принимают `--force`, чтобы записать поверх
 того, что уже есть; обе принимают `-` вместо пути, чтобы работать через терминал. `--config PATH`
 принимает каждая команда, которая читает конфиг или состояние, то есть все команды, кроме

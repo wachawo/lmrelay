@@ -148,14 +148,14 @@ können, wem der Prozess gehört. Auf einem POSIX-System ohne beide Manager star
 | `lmrelay provider list [--show]` | alle Upstreams, aus der Datei und aus dem State |
 | `lmrelay provider delete NAME` | einen Anbieter entfernen, der dem State gehört |
 | `lmrelay limits set SCOPE N [PERIOD]` | die Limits eines Scopes in die Konfigurationsdatei schreiben |
-| `lmrelay config export PATH` | alles schreiben, was dieses Relay anderswo reproduziert |
-| `lmrelay config import PATH` | Konfiguration und State durch ein Bundle ersetzen |
+| `lmrelay export [PATH]` | alles schreiben, was dieses Relay anderswo reproduziert |
+| `lmrelay import [PATH]` | Konfiguration und State durch ein Bundle ersetzen |
 
 `run`, `serve` und `restart` nehmen `--host` und `--port`. `provider add` nimmt `--base-url`,
 `--dialect` und ein wiederholbares `--header K=V`; bei einem bekannten Namen (`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) stammen Basis-URL, Dialekt und Header-Form aus
 einem Preset, sodass `lmrelay provider add openai sk-...` der ganze Befehl ist.
-`config export` nimmt `--no-secrets`, beide `config`-Verben nehmen `--force`, um über
+`export` nimmt `--no-secrets`, beide `export`/`import` nehmen `--force`, um über
 Vorhandenes zu schreiben, und beide nehmen `-` statt eines Pfades, um das Terminal zu
 benutzen.
 `--config PATH` nimmt jeder Befehl an, der die Konfiguration oder den State liest, also

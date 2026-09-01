@@ -31,12 +31,12 @@ is machine-owned, and because `tomllib` reads but cannot write.
 
 Two commands write `lmrelay.toml`, and neither of them rewrites it. `lmrelay limits set`
 replaces the value on one assignment and leaves every other byte of the file alone,
-comments and all. `lmrelay config import` replaces the whole file, and moves the existing
+comments and all. `lmrelay import` replaces the whole file, and moves the existing
 pair to `lmrelay.toml.bak` and `state.json.bak` before it does. Everything else the CLI
 writes goes to `state.json`.
 
 `lmrelay init` writes `lmrelay.toml` with mode 0600, because the file is meant to hold
-provider keys. So do `config import` and `config export`.
+provider keys. So do `import` and `export`.
 
 ## Where the config is looked for
 
@@ -501,7 +501,7 @@ limits       per_address 4 per 60s, 4 at once; total 6 at once
 A relay with nothing set says `limits       off` once, rather than three lines saying off
 about scopes nobody configured. It is the same question either way: is anything limited here,
 and by how much. Before this line the only way to read the effective numbers was
-`lmrelay config export -`, which is the whole configuration and a file full of credentials.
+`lmrelay export -`, which is the whole configuration and a file full of credentials.
 
 ### The keys that used to be here
 
@@ -647,20 +647,36 @@ instead.
 ## Export and import
 
 ```bash
-lmrelay config export PATH|- [--no-secrets] [--force]
-lmrelay config import PATH|- [--force]
+lmrelay export [PATH] [--no-secrets] [--force]
+lmrelay import [PATH] [--force]
 ```
 
-Grouped as `config <verb>`, matching `token <verb>` and `provider <verb>`. `config export`
-writes a bundle, `config import` replaces both files the relay reads, and `--config PATH`
-works on both, as everywhere else. A path of `-` means the terminal: stdout for the export
-and stdin for the import, and it has to be written out, so a bundle full of provider keys
-never reaches a terminal because a path was left off.
+`export` writes a bundle, `import` replaces both files the relay reads, and `--config PATH`
+works on both, as everywhere else.
+
+**No path means the terminal**, so moving a relay is one pipe:
+
+```bash
+lmrelay export | ssh other-host lmrelay import
+lmrelay export relay.toml            # or to a file, written 0600
+cat relay.toml | lmrelay import      # or from one
+```
+
+The bundle goes to stdout and every word about it to stderr, so what the pipe carries is the
+file and nothing else. `-` is still accepted in place of a path, and reads as deliberate
+where a bare command does not.
+
+An `import` with nothing piped in and no path is **refused** rather than left reading the
+terminal: a command that hangs with no output reads as a relay that has locked up rather
+than as a missing argument.
+
+An `export` to a terminal carries every caller token and provider key in clear, into the
+scrollback and into any screenshot of it, so it says so as a warning and names `--no-secrets`.
 
 What is in effect right now, as opposed to what is in the file, is `lmrelay status` for the
 bind, the upstreams and the limits, `lmrelay provider list` for the upstreams in full,
-`lmrelay token list` for the credentials, and `lmrelay config export -` for all of it at once,
-in the shape the relay resolved it to.
+`lmrelay token list` for the credentials, and `lmrelay export` for all of it at once, in the
+shape the relay resolved it to.
 
 ### The bundle holds config and state, and holds effective values
 
@@ -684,42 +700,73 @@ happened in silence:
   `token gen` overwrites. Relative and absolute spellings of those paths are the same file to
   this check.
 - **Anything else that already exists is refused until `--force`**, which is what `init` and
-  `config import` already do with the files they write.
+  `import` already do with the files they write.
 
 If you want a copy of the file, you already have the file, and `cp` is that tool.
 
 ```text
 lmrelay: /home/u/.lmrelay/state.json is this relay's own state file, and a bundle is not one.
 Export to another path; nothing has been written.
-lmrelay: relay.json is already there, and an export would overwrite it. Pass --force to
+lmrelay: relay.toml is already there, and an export would overwrite it. Pass --force to
 replace it, or choose another path.
 ```
 
-### JSON, one object, versioned
+### TOML, versioned, and readable as the config it is
 
-The config is TOML and the state is JSON, so a bundle has to pick one. It is JSON: the bundle
-is machine written and machine read, TOML's comments buy nothing in a file nobody hand-edits,
-and `state.json` already establishes the versioning convention this needs.
+The config is TOML and the state is JSON, so a bundle has to pick one. **It is TOML**, and it
+is an `lmrelay.toml` with the machine-owned half written into it: the same `[server]`, the
+same `[limits.*]`, the same `[upstream.*]`, plus the `[auth]` block and the three metadata
+keys at the top. An operator reading a bundle, hand-editing one to provision a machine, or
+diffing two of them is reading the file they already know.
 
-```json
-{
-  "bundle_version": 1,
-  "written_by": "lmrelay 0.0.5",
-  "exported_at": "2026-08-31T18:04:11Z",
-  "server":    { "host": "127.0.0.1", "port": 11435, "default_upstream": "ollama",
-                 "connect_timeout": 10, "log_level": "INFO" },
-  "limits":    { "per_token":   { "requests": 2, "period": "120s" },
-                 "per_address": { "requests": 4, "period": "60s" },
-                 "total":       { "requests": 6, "period": "0s" } },
-  "auth":      { "enabled": true,
-                 "tokens": [ { "id": 1, "token": "lmr_...", "label": "laptop",
-                               "created_at": "2026-08-14T09:12:03Z" } ] },
-  "upstreams": { "ollama": { "base_url": "http://127.0.0.1:11434", "dialect": "ollama",
-                             "headers": {} },
-                 "openai": { "base_url": "https://api.openai.com", "dialect": "openai",
-                             "headers": { "Authorization": "Bearer sk-..." } } }
-}
+```toml
+# lmrelay bundle, written by lmrelay 0.0.5 at 2026-08-31T18:04:11Z.
+
+bundle_version = 1
+written_by     = "lmrelay 0.0.5"
+exported_at    = "2026-08-31T18:04:11Z"
+
+[server]
+host             = "127.0.0.1"
+port             = 11435
+default_upstream = "ollama"
+connect_timeout  = 10
+log_level        = "INFO"
+
+[limits.per_token]
+requests = 2
+period   = "120s"
+
+[limits.per_address]
+requests = 4
+period   = "60s"
+
+[limits.total]
+requests = 6
+period   = "0s"
+
+[auth]
+enabled = true
+
+[[auth.tokens]]
+id         = 1
+token      = "lmr_..."
+label      = "laptop"
+created_at = "2026-08-14T09:12:03Z"
+
+[upstream.ollama]
+base_url = "http://127.0.0.1:11434"
+dialect  = "ollama"
+headers  = {}
+
+[upstream.openai]
+base_url = "https://api.openai.com"
+dialect  = "openai"
+headers  = { "Authorization" = "Bearer sk-..." }
 ```
+
+The extension is not inspected: `relay.toml`, `relay.ini` or no extension at all are the
+same file to both verbs. `.toml` is what the examples use because that is what is in it.
 
 Two version fields, doing two jobs. `bundle_version` is load bearing and is what an import
 checks. `written_by` is for the human reading a bundle six months later.
@@ -727,8 +774,12 @@ checks. `written_by` is for the human reading a bundle six months later.
 `period` travels as a string, in the spelling the file carried, so a bundle read by eye says
 `"30m"` where the config it came from said `"30m"`. An import refuses one that is not a
 whole number and a unit, for the same reason it refuses a `log_level` of `"VERBOSE"`: both
-are the right JSON type, and both write a pair of files the relay then refuses to start
-from, on a machine whose working config the import has already moved aside.
+are the right type, and both write a pair of files the relay then refuses to start from, on
+a machine whose working config the import has already moved aside.
+
+A bundle written by a build from before the format changed is **named as JSON** rather than
+reported as a syntax error: a TOML parser meets `{` and complains about line 1 column 1,
+which reads as a corrupt file rather than as one in the previous format.
 
 A bundle is a transfer format, not a replacement for your `lmrelay.toml`. **The comments in
 your file are yours and are not carried**, which is the surprise, so the export command says
@@ -743,7 +794,7 @@ the same temporary-file-then-rename path `save_state` uses, so it is `0600` from
 never briefly world readable, and the command says what it wrote:
 
 ```text
-Wrote relay.json (0600).
+Wrote relay.toml (0600).
 It contains 2 caller tokens and 3 provider keys in clear.
 It carries settings, not comments: the notes in your lmrelay.toml stay here.
 ```
@@ -753,7 +804,7 @@ keys is a file people attach to an issue without thinking, and the flag is the d
 between a shareable config and a leaked key. It says so in place of the line above:
 
 ```text
-Wrote relay.json (0600).
+Wrote relay.toml (0600).
 Token values and header values are masked, so it carries no secrets and the relay it imports
 will need 'lmrelay token gen' and 'lmrelay provider add'.
 It carries settings, not comments: the notes in your lmrelay.toml stay here.
@@ -799,7 +850,7 @@ not accept leaves the existing pair exactly as it was. What it then writes, it n
 ```text
 Moved /home/u/.lmrelay/lmrelay.toml to /home/u/.lmrelay/lmrelay.toml.bak.
 Moved /home/u/.lmrelay/state.json to /home/u/.lmrelay/state.json.bak.
-Imported relay.json, written by lmrelay 0.0.5 at 2026-08-31T18:04:11Z.
+Imported relay.toml, written by lmrelay 0.0.5 at 2026-08-31T18:04:11Z.
 Wrote /home/u/.lmrelay/lmrelay.toml and /home/u/.lmrelay/state.json (0600): 3 upstreams,
 2 caller tokens, auth on.
 ```
@@ -823,7 +874,7 @@ the thing likely to carry a different bind.
 ### A bundle from a newer lmrelay is refused
 
 ```text
-lmrelay: relay.json has bundle version 2; this lmrelay understands 1. It was written by a
+lmrelay: relay.toml has bundle version 2; this lmrelay understands 1. It was written by a
 newer lmrelay: upgrade, or export again from that machine with a matching version.
 ```
 
@@ -842,9 +893,9 @@ An **older** bundle version is read, and the keys it does not carry take their d
 ### The round trip
 
 ```bash
-lmrelay config export relay.json
-scp relay.json other-host:
-ssh other-host 'lmrelay config import relay.json'
+lmrelay export relay.toml
+scp relay.toml other-host:
+ssh other-host 'lmrelay import relay.toml'
 ```
 
 Export, import into an empty config directory, and the relay is identical in behaviour: same
@@ -866,7 +917,7 @@ so the two cannot disagree about who owns the process; each command says which p
 `lmrelay reload` sends the running relay a SIGHUP, and it re-reads both sources in place:
 `lmrelay.toml` and `state.json`. Nothing in flight is disturbed: connections stay open and a
 stream already being relayed runs to its end. Every command that writes a change, whether
-`token gen`, `auth true`, `provider add`, `config import` or the rest, signals the relay for
+`token gen`, `auth true`, `provider add`, `import` or the rest, signals the relay for
 you, so an explicit reload is what you run after editing `lmrelay.toml` by hand.
 
 A `${VAR}` in a header value is read when the relay reads the file, so a key exported in your
@@ -1319,37 +1370,38 @@ another version.
 
 | Message | Where | Means | Do |
 |---|---|---|---|
-| `lmrelay: <path> is this relay's own <config\|state> file, and a bundle is not one. Export to another path; nothing has been written.` | `lmrelay config export` | The destination is `lmrelay.toml` or `state.json`, however it was spelled. | Export somewhere else. No flag permits this one: written over `state.json` a bundle is still readable, so the relay would keep running with no tokens and auth off, and the credentials would be in a file the next `token gen` overwrites. |
-| `lmrelay: <path> is already there, and an export would overwrite it. Pass --force to replace it, or choose another path.` | `lmrelay config export` | Something already exists at the destination. | Choose another path, or pass `--force`. Symmetric with `init` and `config import`, which refuse to overwrite too. |
-| `lmrelay: cannot read <source>: <Type>: <detail>` | `lmrelay config import` | The bundle could not be opened. | Check the path and the permissions. |
-| `lmrelay: <source> is not JSON: <detail>` | `lmrelay config import` | The file is not JSON at all. | Point it at a file `lmrelay config export` wrote. |
-| `lmrelay: <source> is not a JSON object` | `lmrelay config import` | The top level is an array or a scalar. | As above. |
-| `lmrelay: <source> has no bundle_version, so it is not an lmrelay export. 'lmrelay config export' writes one.` | `lmrelay config import` | Valid JSON, but not a bundle. | Export one, or add the field if you are writing a bundle by hand to provision a machine. |
-| `lmrelay: <source> has bundle_version <value>, which is not a version number` | `lmrelay config import` | The field is not a positive whole number. | Write `1`. |
-| `lmrelay: <source> has bundle version <N>; this lmrelay understands 1. It was written by a newer lmrelay: upgrade, or export again from that machine with a matching version.` | `lmrelay config import` | The bundle came from a newer lmrelay. | Upgrade, or re-export from the other machine. Refused rather than partially read: a newer bundle may carry a setting this version does not enforce, and importing it would produce a relay that looks configured and is not. |
-| `lmrelay: <source> has <what> this lmrelay does not know: <names>. At bundle version 1 both ends agree on the keys, so this is a hand edit or a bundle_version that is not the one it was written at.` | `lmrelay config import` | An unknown key at the top level, in `server`, in `auth`, in a token record or in an upstream. | Remove the key, or set `bundle_version` to what the bundle was actually written at. Forward compatibility is what that field is for. |
-| `lmrelay: <source> has a <server\|limits> section that is not an object` | `lmrelay config import` | The settings half or the limits half is the wrong shape. | Repair it, or export again. |
-| `lmrelay: <source> has an <auth\|upstreams> section that is not an object` | `lmrelay config import` | The credential half or the upstream half is the wrong shape. | As above. Two rows rather than one, because the article changes with the word and this table is quoted verbatim. |
-| `lmrelay: <source> has <server\|limits <scope>> <name> = <value>, which is not <a string\|a number\|a whole number>` | `lmrelay config import` | A value would have written an `lmrelay.toml` that parses and then refuses to start. `nan` and `Infinity` are counted here too: JSON reads both, and neither is a limit. | Correct the type. The three wordings are the config file's own for those keys, so `requests = 2.5` is refused as not a whole number in both places rather than as two different mistakes. Checked here rather than at the next start, so an import never half applies. |
-| `lmrelay: <source> has server log_level = <value>, which is not a logging level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL` | `lmrelay config import` | `log_level` is a string and still not a level. | Write one of the five. A type check cannot reach this one, and the pair of files written with it in them is a relay that refuses to start on every command afterwards, on a machine whose own config the import has already moved aside. |
-| `lmrelay: <source> has a limits <scope> that is not an object` | `lmrelay config import` | A scope under `limits` is not a table of the two keys. | Write it as `{"requests": 0, "period": "0s"}`, or leave the scope out to get those defaults. |
-| `lmrelay: <source> has limits <scope> period = <value>, which is not a whole number and a unit` | `lmrelay config import` | The period would have written a config the relay refuses to start from. | Write `"30s"`, `"5m"`, `"2h"` or `"0s"`. Checked here for the reason `log_level` is: both are the right JSON type, and both half apply. |
-| `lmrelay: <source> has limits <scope> <name> = <value>, and a limit cannot be negative` | `lmrelay config import` | A limit below zero. | Use `0`, which is off. A negative is refused here for the same reason the config file refuses one. |
-| `lmrelay: <source> has auth enabled = <value>, which is not true or false` | `lmrelay config import` | The auth switch is not a JSON boolean. | Write `true` or `false`. |
-| `lmrelay: <source> has an auth tokens list that is not a list` | `lmrelay config import` | `auth.tokens` is not an array. | Write it as an array of token objects. |
-| `lmrelay: <source> has a token entry that is not an object` | `lmrelay config import` | A member of `auth.tokens` is a bare string or a number. | Write each token as `{"token": "..."}`, with `id`, `label` and `created_at` optional. |
-| `lmrelay: <source> has a token entry with no token in it` | `lmrelay config import` | A token record carries no value. | Give it one, or remove the record. The id, the label and the time may be left out; the token itself names the credential and may not. |
-| `lmrelay: <source> has a token with id <value>, which is not an id` | `lmrelay config import` | An `id` that is not a whole number. | Write a whole number, or leave `id` out and let the import mint one. |
-| `lmrelay: <source> has two tokens with id <N>` | `lmrelay config import` | Two records share an id. | Renumber one. An id printed by `token list` must never come to name a second token. |
-| `lmrelay: <source> has the same token twice` | `lmrelay config import` | Two records carry the same credential. | Remove one. |
-| `lmrelay: <source> has an upstream '<name>' that is not an object` | `lmrelay config import` | An entry under `upstreams` is not a table. | Write it with `base_url`, `dialect` and `headers`. |
-| `lmrelay: <source> has upstream '<name>' headers that are not an object` | `lmrelay config import` | `headers` is not a table of strings. | Write it as an object, or `{}` for an upstream that needs no credential. |
-| `lmrelay: <source> defines no upstreams, and a relay with none answers every request with a 404` | `lmrelay config import` | The bundle carries an empty or absent `upstreams`. | Export from a relay that has one, or add the upstream by hand. |
-| `lmrelay: <source> names default_upstream '<name>', which it does not define; it has: <list>` | `lmrelay config import` | The default names an upstream the bundle does not carry. | Name one it has. Refused here rather than at the next start, so the import does not write a pair of files that cannot be loaded. |
-| `lmrelay: <source> sets no default_upstream, so it would fall back to 'ollama', which it does not define; it has: <list>. Name one of them as default_upstream.` | `lmrelay config import` | The bundle leaves the key out and defines no `ollama`. | Add `default_upstream` to its `server` section. The check covers the defaulted case as well as the spelled-out one: a hand-written bundle carrying a single upstream under any other name would otherwise import cleanly and refuse to start. |
-| `lmrelay: <paths> <is\|are> already there, and an import replaces the whole configuration rather than merging into it. Pass --force to move it aside first.` | `lmrelay config import` | A config or a state file already exists. | Read what is there first, then pass `--force`, which moves both aside before writing. Symmetric with `lmrelay init`, which refuses to overwrite too. |
-| `lmrelay: <path>.bak is already there, and this import would overwrite it. Move or delete it first; nothing has been changed.` | `lmrelay config import --force` | A previous import already left a backup. | Move or delete it. Nothing accumulates timestamped copies of files full of keys, and nothing silently replaces the one file you would reach for. |
-| An upstream, dialect, base URL or reserved-name error naming the bundle's upstream | `lmrelay config import` | An upstream in the bundle fails the same check a hand-written `[upstream.*]` table fails. | See the upstream rows in the startup and config table above; the messages are the same ones, because the bundle goes through the same parser. |
+| `lmrelay: <path> is this relay's own <config\|state> file, and a bundle is not one. Export to another path; nothing has been written.` | `lmrelay export` | The destination is `lmrelay.toml` or `state.json`, however it was spelled. | Export somewhere else. No flag permits this one: written over `state.json` a bundle is still readable, so the relay would keep running with no tokens and auth off, and the credentials would be in a file the next `token gen` overwrites. |
+| `lmrelay: <path> is already there, and an export would overwrite it. Pass --force to replace it, or choose another path.` | `lmrelay export` | Something already exists at the destination. | Choose another path, or pass `--force`. Symmetric with `init` and `import`, which refuse to overwrite too. |
+| `lmrelay: cannot read <source>: <Type>: <detail>` | `lmrelay import` | The bundle could not be opened. | Check the path and the permissions. |
+| `lmrelay: <source> is not TOML: <detail>` | `lmrelay import` | The file is not TOML at all. | Point it at a file `lmrelay export` wrote. |
+| `lmrelay: <source> is JSON, and a bundle is TOML.` | `lmrelay import` | A bundle from a build before the format changed. | Export again from that machine with a matching lmrelay. |
+| `lmrelay: no bundle to read. Give a path, or pipe one in` | `lmrelay import` | No path, and stdin is a terminal. | `lmrelay import relay.toml`, or pipe a bundle in. Refused rather than left waiting, because a command that hangs with no output reads as a relay that has locked up. |
+| `lmrelay: <source> has no bundle_version, so it is not an lmrelay export. 'lmrelay export' writes one.` | `lmrelay import` | Valid TOML, but not a bundle. An `lmrelay.toml` handed to `import` by mistake lands here. | Export one, or add the field if you are writing a bundle by hand to provision a machine. |
+| `lmrelay: <source> has bundle_version <value>, which is not a version number` | `lmrelay import` | The field is not a positive whole number. | Write `1`. |
+| `lmrelay: <source> has bundle version <N>; this lmrelay understands 1. It was written by a newer lmrelay: upgrade, or export again from that machine with a matching version.` | `lmrelay import` | The bundle came from a newer lmrelay. | Upgrade, or re-export from the other machine. Refused rather than partially read: a newer bundle may carry a setting this version does not enforce, and importing it would produce a relay that looks configured and is not. |
+| `lmrelay: <source> has <what> this lmrelay does not know: <names>. At bundle version 1 both ends agree on the keys, so this is a hand edit or a bundle_version that is not the one it was written at.` | `lmrelay import` | An unknown key at the top level, in `server`, in `auth`, in a token record or in an upstream. | Remove the key, or set `bundle_version` to what the bundle was actually written at. Forward compatibility is what that field is for. |
+| `lmrelay: <source> has a <server\|limits> section that is not an object` | `lmrelay import` | The settings half or the limits half is the wrong shape. | Repair it, or export again. |
+| `lmrelay: <source> has an <auth\|upstreams> section that is not an object` | `lmrelay import` | The credential half or the upstream half is the wrong shape. | As above. Two rows rather than one, because the article changes with the word and this table is quoted verbatim. |
+| `lmrelay: <source> has <server\|limits <scope>> <name> = <value>, which is not <a string\|a number\|a whole number>` | `lmrelay import` | A value would have written an `lmrelay.toml` that parses and then refuses to start. `nan` and `inf` are counted here too: TOML spells both, and neither is a limit. | Correct the type. The three wordings are the config file's own for those keys, so `requests = 2.5` is refused as not a whole number in both places rather than as two different mistakes. Checked here rather than at the next start, so an import never half applies. |
+| `lmrelay: <source> has server log_level = <value>, which is not a logging level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL` | `lmrelay import` | `log_level` is a string and still not a level. | Write one of the five. A type check cannot reach this one, and the pair of files written with it in them is a relay that refuses to start on every command afterwards, on a machine whose own config the import has already moved aside. |
+| `lmrelay: <source> has a limits <scope> that is not an object` | `lmrelay import` | A scope under `limits` is not a table of the two keys. | Write it as `{"requests": 0, "period": "0s"}`, or leave the scope out to get those defaults. |
+| `lmrelay: <source> has limits <scope> period = <value>, which is not a whole number and a unit` | `lmrelay import` | The period would have written a config the relay refuses to start from. | Write `"30s"`, `"5m"`, `"2h"` or `"0s"`. Checked here for the reason `log_level` is: both are the right type, and both half apply. |
+| `lmrelay: <source> has limits <scope> <name> = <value>, and a limit cannot be negative` | `lmrelay import` | A limit below zero. | Use `0`, which is off. A negative is refused here for the same reason the config file refuses one. |
+| `lmrelay: <source> has auth enabled = <value>, which is not true or false` | `lmrelay import` | The auth switch is not a boolean. | Write `true` or `false`. |
+| `lmrelay: <source> has an auth tokens list that is not a list` | `lmrelay import` | `auth.tokens` is not an array. | Write it as an array of token objects. |
+| `lmrelay: <source> has a token entry that is not an object` | `lmrelay import` | A member of `auth.tokens` is a bare string or a number. | Write each token as `{"token": "..."}`, with `id`, `label` and `created_at` optional. |
+| `lmrelay: <source> has a token entry with no token in it` | `lmrelay import` | A token record carries no value. | Give it one, or remove the record. The id, the label and the time may be left out; the token itself names the credential and may not. |
+| `lmrelay: <source> has a token with id <value>, which is not an id` | `lmrelay import` | An `id` that is not a whole number. | Write a whole number, or leave `id` out and let the import mint one. |
+| `lmrelay: <source> has two tokens with id <N>` | `lmrelay import` | Two records share an id. | Renumber one. An id printed by `token list` must never come to name a second token. |
+| `lmrelay: <source> has the same token twice` | `lmrelay import` | Two records carry the same credential. | Remove one. |
+| `lmrelay: <source> has an upstream '<name>' that is not an object` | `lmrelay import` | An entry under `upstreams` is not a table. | Write it with `base_url`, `dialect` and `headers`. |
+| `lmrelay: <source> has upstream '<name>' headers that are not an object` | `lmrelay import` | `headers` is not a table of strings. | Write it as an object, or `{}` for an upstream that needs no credential. |
+| `lmrelay: <source> defines no upstreams, and a relay with none answers every request with a 404` | `lmrelay import` | The bundle carries an empty or absent `upstreams`. | Export from a relay that has one, or add the upstream by hand. |
+| `lmrelay: <source> names default_upstream '<name>', which it does not define; it has: <list>` | `lmrelay import` | The default names an upstream the bundle does not carry. | Name one it has. Refused here rather than at the next start, so the import does not write a pair of files that cannot be loaded. |
+| `lmrelay: <source> sets no default_upstream, so it would fall back to 'ollama', which it does not define; it has: <list>. Name one of them as default_upstream.` | `lmrelay import` | The bundle leaves the key out and defines no `ollama`. | Add `default_upstream` to its `server` section. The check covers the defaulted case as well as the spelled-out one: a hand-written bundle carrying a single upstream under any other name would otherwise import cleanly and refuse to start. |
+| `lmrelay: <paths> <is\|are> already there, and an import replaces the whole configuration rather than merging into it. Pass --force to move it aside first.` | `lmrelay import` | A config or a state file already exists. | Read what is there first, then pass `--force`, which moves both aside before writing. Symmetric with `lmrelay init`, which refuses to overwrite too. |
+| `lmrelay: <path>.bak is already there, and this import would overwrite it. Move or delete it first; nothing has been changed.` | `lmrelay import --force` | A previous import already left a backup. | Move or delete it. Nothing accumulates timestamped copies of files full of keys, and nothing silently replaces the one file you would reach for. |
+| An upstream, dialect, base URL or reserved-name error naming the bundle's upstream | `lmrelay import` | An upstream in the bundle fails the same check a hand-written `[upstream.*]` table fails. | See the upstream rows in the startup and config table above; the messages are the same ones, because the bundle goes through the same parser. |
 
 ### Process control errors
 
@@ -1408,8 +1460,8 @@ Logged and then ignored. Nothing is refused and nothing stops.
 | `lmrelay: pid <N> ignored SIGTERM for 10s; forcing it with SIGKILL` | `lmrelay stop`, `restart` | The relay did not exit on SIGTERM inside the stop timeout. | Nothing: the stop continues. A relay that needs SIGKILL every time is worth reading the log about. |
 | `lmrelay: pid <N> is still there after SIGKILL` | `lmrelay stop`, `restart` | The process survived SIGKILL and the kernel has not finished tearing it down. | Check the process by hand before starting another relay on the same port. |
 | `That was the last token and auth is on, so every request will now be refused. Add a token, or run 'lmrelay auth false'.` | `lmrelay token delete` | The token set is now empty while auth stays on. | Add a token, or run `lmrelay auth false`. |
-| `Secrets were masked in it, so nothing was restored for: <names>.` | `lmrelay config import` | The bundle was written with `--no-secrets`, so those caller tokens and provider headers arrived masked and were left out rather than restored as `***`. | Run `lmrelay token gen` and `lmrelay provider add <name> <key>`, which the next line names for you. A mask restored as a header would be sent to the provider and read as a wrong key. |
-| `Auth is on and the bundle carried no usable token, so every request will now be refused. Run 'lmrelay token gen', or 'lmrelay auth false'.` | `lmrelay config import` | The bundle turned auth on and carried no unmasked credential, usually a `--no-secrets` export. | Mint a token, or reopen the relay. |
+| `Secrets were masked in it, so nothing was restored for: <names>.` | `lmrelay import` | The bundle was written with `--no-secrets`, so those caller tokens and provider headers arrived masked and were left out rather than restored as `***`. | Run `lmrelay token gen` and `lmrelay provider add <name> <key>`, which the next line names for you. A mask restored as a header would be sent to the provider and read as a wrong key. |
+| `Auth is on and the bundle carried no usable token, so every request will now be refused. Run 'lmrelay token gen', or 'lmrelay auth false'.` | `lmrelay import` | The bundle turned auth on and carried no unmasked credential, usually a `--no-secrets` export. | Mint a token, or reopen the relay. |
 
 ### Notes
 
@@ -1547,5 +1599,5 @@ out:
   make the CLI a second client of that endpoint, with a credential to find and a running
   relay to require, for a number `curl` already prints.
 - **`lmrelay limits set`.** Limits are settings, settings live in the file, and the CLI does
-  not edit `lmrelay.toml`. `lmrelay config import` replaces it wholesale, after a backup, and
+  not edit `lmrelay.toml`. `lmrelay import` replaces it wholesale, after a backup, and
   says so.

@@ -5,7 +5,7 @@
 #
 # This file belongs to you. The CLI never rewrites it, so the comments below
 # survive every command. Caller tokens and CLI-added providers go to
-# state.json beside it, which is machine-owned. 'lmrelay config import'
+# state.json beside it, which is machine-owned. 'lmrelay import'
 # is the one exception, and it backs this file up before replacing it.
 #
 # Settings are here and in state.json, and nowhere else. There is no
