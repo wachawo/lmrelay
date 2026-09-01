@@ -48,6 +48,9 @@ section is the point of this file: a decision that is not written down gets made
       `state.json`: an override there would be invisible in the file, which is the defect
       the environment layer was removed for.
 
+      One number was one too few, and the entry under In progress says why. This one stays
+      as written because it is what 0.0.5 shipped, not because it is still the position.
+
   - [x] **`lmrelay export` and `lmrelay import`.** One file that reproduces a relay elsewhere,
       written 0600 because it carries tokens and provider keys.
 
@@ -110,6 +113,25 @@ section is the point of this file: a decision that is not written down gets made
       pidfile grew a third line for `connect_timeout` beside the address on the second, and
       the comparison and the sentence are one function each, shared with the relay's own
       warning.
+
+## In progress
+
+- [ ] **Two numbers per scope: `concurrent` and `rate`.** 0.0.5 shipped one, where a period
+      turned `requests` into a how-often as well and the cap was forced to equal the count.
+      That cannot say "ten every half hour, two at a time", and on a machine holding one
+      model in memory that is the shape an operator wants: the rate apportions the day, the
+      cap keeps the machine from being asked for ten generations at once.
+
+      The rate is one token, `count/period`, so `limits set per_address 2 10/30m` reads as
+      the two numbers it is. A rate on its own carries a cap of its own count, because "one
+      a minute" said with nothing about at-once means one at a time; in the file the two
+      keys are independent, since somebody who wrote only a rate there wrote only that.
+
+      A cap above what the rate can ever start is legal and flagged: the bucket holds the
+      rate's count, so `total 10 2/60s` is a number that will refuse nobody.
+
+      `requests` and `period` are refused by name, which makes the refusal the upgrade note
+      for the one release they existed in.
 
 ## Next
 

@@ -321,13 +321,13 @@ class TestReporting:
         startup log. The only way to read the numbers in effect was to export
         the whole configuration and read the bundle."""
         config_path.write_text(
-            CONFIG_BODY + '\n[limits.per_address]\nrequests = 4\nperiod = "1s"\n'
-            '\n[limits.total]\nrequests = 6\n',
+            CONFIG_BODY + '\n[limits.per_address]\nconcurrent = 4\nrate = "4/1s"\n'
+            '\n[limits.total]\nconcurrent = 6\n',
             encoding="utf-8",
         )
         run_command(["status", "--config", str(config_path)])
         printed = capsys.readouterr()
-        assert "per_address 4 per 1s, 4 at once; total 6 at once" in printed.err
+        assert "per_address 4/1s, 4 at once; total 6 at once" in printed.err
 
     def test_and_says_off_once_when_none_is(self, config_path, capsys):
         """One line answering the question that was asked, rather than three

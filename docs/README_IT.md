@@ -114,7 +114,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -127,14 +127,16 @@ priva di entrambi i gestori, `lmrelay serve` esegue il relay in background.
 
 ```bash
 lmrelay limits set total 1              # una richiesta alla volta
-lmrelay limits set total 1 60s          # una al minuto, e sempre una alla volta
-lmrelay limits set per_address 10 30m   # dieci ogni mezz'ora
+lmrelay limits set total 1/60s          # una al minuto, e sempre una alla volta
+lmrelay limits set per_address 2 10/30m # dieci ogni mezz'ora, due alla volta
 lmrelay limits set per_token 0          # spento
 ```
 
-Tre ambiti, un numero ciascuno. `requests` è quante richieste un chiamante può avere in
-volo alla volta; aggiungete un periodo e lo stesso numero è anche quante può avviarne in quel
-tempo. Una richiesta deve passare ogni ambito che impostate.
+Tre ambiti, due numeri ciascuno. `concurrent` è quante richieste un chiamante può avere in
+volo alla volta, `rate` è ogni quanto può avviarne una, scritto `numero/periodo`, e una
+richiesta deve passare ogni ambito che impostate. Una frequenza da sola porta con sé il
+proprio tetto: "una al minuto", senza dire nulla sul contemporaneo, vuol dire una alla
+volta.
 
 **Se impostate un solo numero, impostate `total`.** È quello che protegge la macchina: dieci
 chiamanti, ciascuno dentro il proprio limite, arrivano comunque insieme, e un tetto per
@@ -145,7 +147,7 @@ Un chiamante rifiutato riceve un 429 che nomina l'ambito, e un `Retry-After` qua
 riesce a calcolarlo onestamente:
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 Il comando scrive in `lmrelay.toml` e lascia intatto il resto del file, commenti compresi,
@@ -172,7 +174,7 @@ poi segnala a un relay in esecuzione.
 | `lmrelay provider add NAME TOKEN` | aggiunge o ruota un upstream |
 | `lmrelay provider list [--show]` | tutti gli upstream, dal file e dallo stato |
 | `lmrelay provider delete NAME` | rimuove un provider di proprietà dello stato |
-| `lmrelay limits set SCOPE N [PERIOD]` | scrive i limiti di un ambito nel file di configurazione |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | scrive i limiti di un ambito nel file di configurazione |
 | `lmrelay export [PATH]` | scrive tutto ciò che serve a riprodurre questo relay |
 | `lmrelay import [PATH]` | sostituisce configurazione e stato con un pacchetto |
 

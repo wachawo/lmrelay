@@ -26,8 +26,8 @@ dialect  = "ollama"
 
 LIMITS = """
 [limits.total]
-requests = 10
-period   = "30m"
+concurrent = 2
+rate       = "10/30m"
 """
 
 OLLAMA_PROVIDER = {"base_url": "http://127.0.0.1:11434", "dialect": "ollama", "headers": {}}
@@ -319,7 +319,7 @@ class TestTheThreeScopes:
     def test_a_scope_is_read_as_written(self, tmp_path):
         target = write(tmp_path, LIMITS + MINIMAL)
         assert load_config(target).limits["total"] == ScopeLimits(
-            requests=10, period="30m"
+            concurrent=2, rate="10/30m"
         )
 
     def test_and_the_scopes_it_does_not_name_stay_off(self, tmp_path):
@@ -328,77 +328,88 @@ class TestTheThreeScopes:
         assert loaded.limits["per_token"] == ScopeLimits()
         assert loaded.limits["per_address"] == ScopeLimits()
 
-    def test_a_count_with_no_period_is_only_a_cap(self, tmp_path):
-        target = write(tmp_path, "[limits.total]\nrequests = 4\n" + MINIMAL)
+    def test_a_count_with_no_rate_is_only_a_cap(self, tmp_path):
+        target = write(tmp_path, "[limits.total]\nconcurrent = 4\n" + MINIMAL)
         limits = load_config(target).limits["total"]
-        assert (limits.requests, limits.rate()) == (4, 0.0)
+        assert (limits.concurrent, limits.per_second()) == (4, 0.0)
+
+    def test_and_a_rate_with_no_cap_limits_only_how_often(self, tmp_path):
+        """Legal in the file, unlike on the command line, where a bare rate
+        carries a cap of its own count. Somebody who wrote only this in the TOML
+        wrote only this."""
+        target = write(tmp_path, '[limits.total]\nrate = "10/30m"\n' + MINIMAL)
+        limits = load_config(target).limits["total"]
+        assert (limits.concurrent, limits.rate) == (0, "10/30m")
 
     def test_a_negative_count_is_refused_rather_than_read_as_off(self, tmp_path):
         """0 already means off, so a negative one is a mistake. Admitting it as
         a second spelling would hide the mistake behind the behaviour the
         operator was trying to change."""
-        target = write(tmp_path, "[limits.total]\nrequests = -1\n" + MINIMAL)
-        with pytest.raises(ConfigError, match="requests"):
+        target = write(tmp_path, "[limits.total]\nconcurrent = -1\n" + MINIMAL)
+        with pytest.raises(ConfigError, match="concurrent"):
             load_config(target)
 
     def test_and_so_is_one_that_is_not_a_number(self, tmp_path):
         """int() raises ValueError, which a reload's `except LmrelayError` does
         not catch: it would leave the signal handler as a traceback."""
-        target = write(tmp_path, '[limits.total]\nrequests = "lots"\n' + MINIMAL)
+        target = write(tmp_path, '[limits.total]\nconcurrent = "lots"\n' + MINIMAL)
         with pytest.raises(ConfigError, match="whole number"):
             load_config(target)
 
-    def test_a_period_without_a_unit_is_refused(self, tmp_path):
-        """`period = 30` is half an hour to whoever wrote it about as often as
-        it is half a minute, and the unit costs one character."""
-        target = write(tmp_path, "[limits.total]\nrequests = 1\nperiod = 30\n" + MINIMAL)
-        with pytest.raises(ConfigError, match="whole number and a unit"):
+    def test_a_rate_with_no_period_is_refused(self, tmp_path):
+        """A count on its own is not a rate, and reading it as one per second
+        would be a limit nobody wrote."""
+        target = write(tmp_path, '[limits.total]\nrate = "30"\n' + MINIMAL)
+        with pytest.raises(ConfigError, match="a count, a slash and a period"):
             load_config(target)
 
-    @pytest.mark.parametrize("spelling", ["nan", "inf", "-inf", "1.5m", "1d", "-5m"])
-    def test_and_so_is_every_other_thing_that_is_not_a_duration(self, tmp_path, spelling):
-        """nan is the one that mattered while a period was a number: it is not
-        negative, so it walked past the only guard there was, and then compared
-        false against every threshold. A limiter was built for it and swept for
-        the life of the process, and it refused nobody, while `status` and the
-        reload log both printed the scope as off."""
-        target = write(
-            tmp_path, f'[limits.total]\nrequests = 1\nperiod = "{spelling}"\n' + MINIMAL
-        )
-        with pytest.raises(ConfigError, match="whole number and a unit"):
+    @pytest.mark.parametrize(
+        "spelling", ["10/30", "nan", "inf", "10/1.5m", "10/1d", "10/-5m", "-10/30m", "10/0s"],
+    )
+    def test_and_so_is_every_other_thing_that_is_not_a_rate(self, tmp_path, spelling):
+        """`10/30` names no unit, which is half an hour to whoever wrote it
+        about as often as it is half a minute. nan is the one that mattered
+        while a period was a number: it is not negative, so it walked past the
+        only guard there was, and then compared false against every threshold. A
+        limiter was built for it and swept for the life of the process, and it
+        refused nobody, while `status` printed the scope as off. `10/0s` is the
+        newest: it has the shape, and dividing by it is a limit of infinity,
+        which "off" already spells as an empty rate."""
+        target = write(tmp_path, f'[limits.total]\nrate = "{spelling}"\n' + MINIMAL)
+        with pytest.raises(ConfigError, match="a count, a slash and a period"):
             load_config(target)
 
     def test_the_error_names_the_table_it_read(self, tmp_path):
         """One reader serves [server] and three [limits.*] tables now, and an
         error naming the wrong one sends an operator to edit a key that is not
         there."""
-        target = write(tmp_path, '[limits.per_address]\nrequests = "fast"\n' + MINIMAL)
+        target = write(tmp_path, '[limits.per_address]\nconcurrent = "fast"\n' + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
-        assert "[limits.per_address] requests" in str(raised.value)
+        assert "[limits.per_address] concurrent" in str(raised.value)
 
     def test_a_misspelt_scope_is_refused_by_name(self, tmp_path):
         """Ignored, it would leave an operator believing a limit is on when it
         is off, which is the whole failure this table is shaped against."""
-        target = write(tmp_path, "[limits.per_toke]\nrequests = 2\n" + MINIMAL)
+        target = write(tmp_path, "[limits.per_toke]\nconcurrent = 2\n" + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         assert "per_toke" in str(raised.value) and "per_token" in str(raised.value)
 
     def test_and_so_is_a_misspelt_key(self, tmp_path):
-        target = write(tmp_path, "[limits.total]\nrequets = 6\n" + MINIMAL)
+        target = write(tmp_path, "[limits.total]\nconcurent = 6\n" + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
-        assert "requets" in str(raised.value) and "requests" in str(raised.value)
+        assert "concurent" in str(raised.value) and "concurrent" in str(raised.value)
 
-    @pytest.mark.parametrize("key", ["rate", "burst", "concurrent"])
-    def test_and_the_three_keys_one_number_replaced(self, tmp_path, key):
+    @pytest.mark.parametrize("key", ["burst", "requests", "period"])
+    def test_and_the_keys_these_two_replaced(self, tmp_path, key):
         """Reported as unrecognised, an operator would read it as a typo in a
         key that still exists. These are named, with what to write instead."""
         target = write(tmp_path, f"[limits.total]\n{key} = 6\n" + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
-        assert key in str(raised.value) and "requests and period" in str(raised.value)
+        assert key in str(raised.value) and "concurrent and rate" in str(raised.value)
 
     def test_a_port_is_still_read_without_a_floor(self, tmp_path):
         """The floor is passed by one key. Ports and timeouts were not given
@@ -412,15 +423,15 @@ class TestTheThreeScopes:
         """Legal, because turning auth on later makes it live, but nothing is
         keyed by a token until then and a limit that quietly does nothing is the
         failure this redesign exists to remove."""
-        target = write(tmp_path, "[limits.per_token]\nrequests = 2\n" + MINIMAL)
+        target = write(tmp_path, "[limits.per_token]\nconcurrent = 2\n" + MINIMAL)
         with caplog.at_level(logging.WARNING):
             load_config(target)
         assert "[limits.per_token] is configured but auth is off" in caplog.text
 
     def test_and_nothing_is_said_when_auth_is_on(self, tmp_path):
-        target = write(tmp_path, "[limits.per_token]\nrequests = 2\n" + MINIMAL)
+        target = write(tmp_path, "[limits.per_token]\nconcurrent = 2\n" + MINIMAL)
         write_state(tmp_path, auth_enabled=True, tokens=("a-token",))
-        assert load_config(target).limits["per_token"].requests == 2
+        assert load_config(target).limits["per_token"].concurrent == 2
 
 
 class TestTheKeysThatWereReplaced:
@@ -495,7 +506,7 @@ class TestTheEnvironmentIsNotASource:
 
     def test_nor_is_a_limit(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_REQUESTS", "6")
-        assert load_config(write(tmp_path, MINIMAL)).limits["total"].requests == 0
+        assert load_config(write(tmp_path, MINIMAL)).limits["total"].concurrent == 0
 
     def test_nor_the_auth_switch(self, tmp_path, monkeypatch):
         """The switch is state.json's, and `lmrelay auth true` is what moves it.

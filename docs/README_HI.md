@@ -114,7 +114,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -127,14 +127,16 @@ autostart    systemd: enabled, active
 
 ```bash
 lmrelay limits set total 1              # एक बार में एक request
-lmrelay limits set total 1 60s          # एक प्रति मिनट, और तब भी एक बार में एक
-lmrelay limits set per_address 10 30m   # हर आधे घंटे में दस
+lmrelay limits set total 1/60s          # एक प्रति मिनट, और तब भी एक बार में एक
+lmrelay limits set per_address 2 10/30m # हर आधे घंटे में दस, एक बार में दो
 lmrelay limits set per_token 0          # बंद
 ```
 
-तीन scope, हर एक में एक संख्या। `requests` का मतलब है कि एक caller एक साथ कितनी requests
-खुली रख सकता है; साथ में एक period दे दीजिए तो वही संख्या यह भी हो जाती है कि उतने समय में वह
-कितनी शुरू कर सकता है। हर request को आपके सेट किए हर scope से गुज़रना होता है।
+तीन scope, हर एक में दो संख्याएँ। `concurrent` का मतलब है कि एक caller एक साथ कितनी requests
+खुली रख सकता है, `rate` का मतलब है कि वह कितनी बार एक शुरू कर सकता है, जो `गिनती/अवधि` की तरह
+लिखा जाता है, और हर request को आपके सेट किए हर scope से गुज़रना होता है। अकेली rate अपने साथ
+अपनी सीमा भी लाती है: "एक प्रति मिनट", एक साथ के बारे में कुछ कहे बिना, का मतलब है एक बार में
+एक।
 
 **अगर सिर्फ़ एक संख्या सेट करनी हो तो `total` सेट कीजिए।** मशीन को यही बचाता है: दस caller,
 हर एक अपनी सीमा के भीतर, फिर भी एक साथ आते हैं, और per-caller सीमा यह देख ही नहीं सकती।
@@ -144,7 +146,7 @@ lmrelay limits set per_token 0          # बंद
 उसे ईमानदारी से निकाल सकता है:
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 command `lmrelay.toml` में लिखती है और बाकी फ़ाइल को वैसा ही छोड़ देती है, comments समेत,
@@ -171,7 +173,7 @@ command `lmrelay.toml` में लिखती है और बाकी फ�
 | `lmrelay provider add NAME TOKEN` | upstream जोड़ती है या rotate करती है |
 | `lmrelay provider list [--show]` | हर upstream, file से और state से |
 | `lmrelay provider delete NAME` | state के अधिकार वाला provider हटाती है |
-| `lmrelay limits set SCOPE N [PERIOD]` | एक scope की सीमाएँ config फ़ाइल में लिखती है |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | एक scope की सीमाएँ config फ़ाइल में लिखती है |
 | `lmrelay export [PATH]` | इस relay को कहीं और दोबारा खड़ा करने भर सब कुछ लिखती है |
 | `lmrelay import [PATH]` | config और state को एक bundle से बदल देती है |
 

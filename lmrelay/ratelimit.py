@@ -14,24 +14,26 @@ from dataclasses import dataclass
 # the reason is the wrong answer even though it is true.
 SCOPES = ("per_token", "per_address", "total")
 
-# The two keys every scope has, so one sentence covers the whole table: three
-# scopes, one number each, and a request must pass every scope you set.
+# The two keys every scope has: how many at once, and how often. Two, because
+# they answer two questions that have different answers. "Ten every half hour"
+# says nothing about whether those ten may run together, and for a machine
+# holding one model in memory the answer is usually no. `concurrent = 2` beside
+# `rate = "10/30m"` is what an operator actually means.
 #
-# One number rather than three. "Ten at a time" and "ten a minute" are the same
-# operator saying how much of this machine one caller gets, and the table that
-# spelled them separately, with a burst beside them, was three numbers that
-# could disagree with each other and one of them, the burst, whose only job was
-# to be wrong. `requests` is how many a caller may have in flight; give it a
-# `period` and it is also how many they may start in that long.
-LIMIT_KEYS = ("requests", "period")
+# There is still no burst. The bucket holds the rate's own count, which is what
+# "ten every half hour" means to the person who wrote it, and the third number
+# that used to sit here had no job but to be wrong.
+LIMIT_KEYS = ("concurrent", "rate")
 
-# How a period is spelled, on the command line and in the file alike, so that
-# the `30m` an operator typed is the `30m` they find written down. A bare number
-# is refused rather than read as seconds: "period = 30" is half an hour to
+# How a rate is spelled, on the command line and in the file alike, so that the
+# `10/30m` an operator typed is the `10/30m` they find written down: a count,
+# a slash, and a period. The period is a whole number and a unit; a bare number
+# is refused rather than read as seconds, because `30` is half an hour to
 # whoever wrote it about as often as it is half a minute.
 PERIOD_UNITS   = {"s": 1, "m": 60, "h": 3600}
 PERIOD_PATTERN = re.compile(r"^(\d+)([smh])$")
-NO_PERIOD      = "0s"
+RATE_PATTERN   = re.compile(r"^(\d+)/(\d+[smh])$")
+NO_RATE        = ""
 
 # Buckets are dropped once they have been full and untouched for this long.
 # Full means the caller owes nothing, so forgetting them changes no decision;
@@ -51,46 +53,56 @@ def parse_period(value: str) -> float | None:
     return float(match.group(1)) * PERIOD_UNITS[match.group(2)]
 
 
+def parse_rate(value: str) -> tuple[int, float] | None:
+    """A count and its period in seconds for `10/30m`, or None when it is not one.
+
+    Empty is not a rate and is not an error either: it is how a scope says it
+    limits how many at once and nothing else.
+    """
+    match = RATE_PATTERN.match(value.strip())
+    if match is None:
+        return None
+    seconds = parse_period(match.group(2))
+    if not seconds:
+        # `5/0s` parses as a shape and is not a rate: dividing by it would be a
+        # limit of infinity, which is what "off" already spells as an empty rate.
+        return None
+    return int(match.group(1)), seconds
+
+
 @dataclass(frozen=True)
 class ScopeLimits:
-    """What one scope allows: how many at once, and optionally how often.
+    """What one scope allows: how many at once, and how often.
 
     Both off by default, which is the whole table: a relay in front of one
     operator's own Ollama has nobody to limit, and a limit nobody chose is a
     refusal nobody expects.
 
-    `period` is kept as the operator spelled it rather than as a count of
-    seconds, and `"0s"` means only the how-many-at-once cap applies. It is their
-    file: a command whose point is that it does not rewrite what you wrote must
-    not answer `60s` with `1m`, and every line that quotes a period back, the
-    refusal a caller sees included, then quotes the one they set.
-
-    There is no burst. The bucket holds `requests`, which is what "ten a minute"
-    means to the person who wrote it.
+    `rate` is kept as the operator spelled it rather than as a number of
+    requests and a number of seconds. It is their file: a command whose point is
+    that it does not rewrite what they wrote must not answer `10/60s` with
+    `10/1m`, and every line that quotes a rate back, the refusal a caller sees
+    included, then quotes the one they set.
     """
 
-    requests: int = 0
-    period: str = NO_PERIOD
+    concurrent: int = 0
+    rate: str = NO_RATE
 
     def configured(self) -> bool:
         """Whether this scope asks for anything at all."""
-        return self.requests > 0
+        return self.concurrent > 0 or self.per_second() > 0
 
-    def seconds(self) -> float:
-        """The period as a number. 0 for `0s`, and for anything unparseable.
+    def allowance(self) -> tuple[int, float] | None:
+        """The rate as a count and a period in seconds, or None when it is off."""
+        return parse_rate(self.rate) if self.rate else None
 
-        Unparseable cannot happen through the config, which refuses it by name
-        before a ScopeLimits is built. The floor is here for the one that is
-        constructed in a test or by hand.
-        """
-        return parse_period(self.period) or 0.0
-
-    def rate(self) -> float:
+    def per_second(self) -> float:
         """Requests per second, or 0 when only the concurrency cap applies."""
-        seconds = self.seconds()
-        if self.requests <= 0 or seconds <= 0:
+        allowance = self.allowance()
+        if allowance is None:
             return 0.0
-        return self.requests / seconds
+        count, seconds = allowance
+        return count / seconds if count > 0 and seconds > 0 else 0.0
 
 
 def default_limits() -> dict[str, ScopeLimits]:
@@ -202,16 +214,18 @@ class RateLimiter:
 def build_limiter(limits: ScopeLimits) -> RateLimiter | None:
     """A limiter for a scope that has a period, or None when it has not.
 
-    The bucket holds `requests`, so "ten a minute" is ten that may arrive
-    together and then a minute's wait, which is what an operator who wrote it
-    expects and what the separate burst setting used to get wrong in both
-    directions.
+    The bucket holds the rate's own count, so `10/30m` is ten that may arrive
+    together and then a wait, which is what an operator who wrote it expects and
+    what the separate burst setting used to get wrong in both directions. How
+    many of those ten run at the same time is `concurrent`, which the counter
+    enforces and this knows nothing about.
     """
-    rate = limits.rate()
-    if rate <= 0:
+    allowance = limits.allowance()
+    per_second = limits.per_second()
+    if allowance is None or per_second <= 0:
         return None
     return RateLimiter(
-        rate=rate, burst=float(limits.requests), buckets={}, swept=time.monotonic()
+        rate=per_second, burst=float(allowance[0]), buckets={}, swept=time.monotonic()
     )
 
 
@@ -340,7 +354,7 @@ def take_slots(
     """Take every configured scope's slot, giving them all back if one refuses."""
     taken: list[str] = []
     for scope in SCOPES:
-        key, cap = keys[scope], limits[scope].requests
+        key, cap = keys[scope], limits[scope].concurrent
         if key is None or cap <= 0:
             continue
         if not counter.acquire(key, cap):
@@ -392,29 +406,32 @@ def admit(
 
 
 def describe_rate(limits: ScopeLimits) -> str:
-    """How often, for the refusal that is about how often."""
-    if limits.rate() <= 0:
-        return "off"
-    return f"{limits.requests} per {limits.period}"
+    """How often, for the refusal that is about how often.
+
+    The spelling the operator wrote, `10/30m` and not `10 per 1800 seconds`.
+    A refusal is the one place a caller ever sees a limit at all, and quoting it
+    back in words nobody used sends them asking about a setting that is not
+    there.
+    """
+    return limits.rate if limits.per_second() > 0 else "off"
 
 
 def describe_slots(limits: ScopeLimits) -> str:
     """How many at once, for the refusal that is about how many at once."""
-    return f"{limits.requests} at once" if limits.requests > 0 else "off"
+    return f"{limits.concurrent} at once" if limits.concurrent > 0 else "off"
 
 
 def describe_scope(limits: ScopeLimits) -> str:
     """One scope in full, as `status`, the reload log and the docs all print it.
 
-    Both halves are named when a period is set, even though they carry the same
-    number. It is the same number doing two jobs, and a line that mentioned only
-    one of them would leave the other to be discovered by being refused by it.
+    Both halves whenever both are set, because they are two different limits and
+    a line naming one would leave the other to be discovered by being refused by
+    it.
     """
-    if not limits.configured():
-        return "off"
-    if limits.rate() <= 0:
-        return describe_slots(limits)
-    return f"{describe_rate(limits)}, {describe_slots(limits)}"
+    parts = [
+        part for part in (describe_rate(limits), describe_slots(limits)) if part != "off"
+    ]
+    return ", ".join(parts) or "off"
 
 
 def describe_limits(limits: dict[str, ScopeLimits]) -> str:

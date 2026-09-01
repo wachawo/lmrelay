@@ -109,7 +109,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -122,19 +122,19 @@ autostart    systemd: enabled, active
 
 ```bash
 lmrelay limits set total 1              # 한 번에 요청 하나
-lmrelay limits set total 1 60s          # 분당 하나, 그리고 여전히 한 번에 하나
-lmrelay limits set per_address 10 30m   # 30분마다 열 개
+lmrelay limits set total 1/60s          # 분당 하나, 그리고 여전히 한 번에 하나
+lmrelay limits set per_address 2 10/30m # 30분마다 열 개, 한 번에 둘
 lmrelay limits set per_token 0          # 끄기
 ```
 
-범위는 셋, 각각 숫자 하나. `requests`는 호출자가 동시에 띄워 둘 수 있는 요청 수이고, 기간을 덧붙이면 같은 숫자가 그동안 시작할 수 있는 수이기도 합니다. 요청은 설정한 모든 범위를 통과해야 합니다.
+범위는 셋, 각각 숫자 둘. `concurrent`는 호출자가 동시에 띄워 둘 수 있는 요청 수이고, `rate`는 얼마나 자주 하나를 시작할 수 있는지로 `횟수/기간`으로 씁니다. 요청은 설정한 모든 범위를 통과해야 합니다. 비율만 주면 같은 횟수의 동시 상한이 함께 붙습니다. 동시성에 대해 아무 말 없이 "분당 하나"라고 하면 그것은 한 번에 하나라는 뜻이기 때문입니다.
 
 **숫자를 하나만 설정한다면 `total`을 설정하세요.** 기계를 지키는 것은 이쪽입니다. 호출자 열이 각자 자기 한도 안에 있어도 함께 도착하며, 호출자별 상한은 그것을 보지 못합니다. 옆에 두는 `per_token`은 스레드 쉰 개를 쓰는 클라이언트 하나가 전부를 차지하지 못하게 하는 것입니다.
 
 거절당한 호출자는 범위를 밝힌 429를 받고, 릴레이가 정직하게 계산할 수 있을 때는 `Retry-After`도 받습니다:
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 이 명령은 `lmrelay.toml`에 쓰고 파일의 나머지는 주석까지 그대로 둔 다음, 실행 중인 릴레이에 신호를 보냅니다.
@@ -160,7 +160,7 @@ lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
 | `lmrelay provider add NAME TOKEN` | 업스트림을 추가하거나 교체합니다 |
 | `lmrelay provider list [--show]` | 파일과 상태에 있는 모든 업스트림 |
 | `lmrelay provider delete NAME` | 상태가 소유한 제공자를 제거합니다 |
-| `lmrelay limits set SCOPE N [PERIOD]` | 한 범위의 상한을 설정 파일에 씁니다 |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | 한 범위의 상한을 설정 파일에 씁니다 |
 | `lmrelay export [PATH]` | 이 릴레이를 그대로 재현하는 데 필요한 것을 모두 씁니다 |
 | `lmrelay import [PATH]` | 설정과 상태를 번들로 교체합니다 |
 

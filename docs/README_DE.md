@@ -116,7 +116,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -130,14 +130,16 @@ können, wem der Prozess gehört. Auf einem POSIX-System ohne beide Manager star
 
 ```bash
 lmrelay limits set total 1              # eine Anfrage gleichzeitig
-lmrelay limits set total 1 60s          # eine pro Minute, und weiterhin eine gleichzeitig
-lmrelay limits set per_address 10 30m   # zehn pro halbe Stunde
+lmrelay limits set total 1/60s          # eine pro Minute, und weiterhin eine gleichzeitig
+lmrelay limits set per_address 2 10/30m # zehn pro halbe Stunde, zwei gleichzeitig
 lmrelay limits set per_token 0          # aus
 ```
 
-Drei Geltungsbereiche, je eine Zahl. `requests` ist, wie viele Anfragen ein Aufrufer
-gleichzeitig offen haben darf; kommt eine Periode dazu, ist dieselbe Zahl auch, wie viele er
-in dieser Zeit starten darf. Eine Anfrage muss jeden gesetzten Bereich passieren.
+Drei Geltungsbereiche, je zwei Zahlen. `concurrent` ist, wie viele Anfragen ein Aufrufer
+gleichzeitig offen haben darf, `rate` ist, wie oft er eine starten darf, geschrieben als
+`Anzahl/Periode`, und eine Anfrage muss jeden gesetzten Bereich passieren. Eine Rate allein
+bringt ihre eigene Obergrenze mit: "eine pro Minute" heißt, ohne weitere Angabe, eine
+gleichzeitig.
 
 **Wenn Sie eine einzige Zahl setzen, setzen Sie `total`.** Sie schützt die Maschine: zehn
 Aufrufer, jeder innerhalb seines eigenen Limits, treffen trotzdem gemeinsam ein, und eine
@@ -148,7 +150,7 @@ Ein abgewiesener Aufrufer bekommt ein 429, das den Bereich nennt, und ein `Retry
 sobald das Relay ehrlich eines berechnen kann:
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 Der Befehl schreibt in `lmrelay.toml` und lässt den Rest der Datei unangetastet,
@@ -175,7 +177,7 @@ Kommentare eingeschlossen, und signalisiert danach ein laufendes Relay.
 | `lmrelay provider add NAME TOKEN` | einen Upstream hinzufügen oder rotieren |
 | `lmrelay provider list [--show]` | alle Upstreams, aus der Datei und aus dem State |
 | `lmrelay provider delete NAME` | einen Anbieter entfernen, der dem State gehört |
-| `lmrelay limits set SCOPE N [PERIOD]` | die Limits eines Scopes in die Konfigurationsdatei schreiben |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | die Limits eines Scopes in die Konfigurationsdatei schreiben |
 | `lmrelay export [PATH]` | alles schreiben, was dieses Relay anderswo reproduziert |
 | `lmrelay import [PATH]` | Konfiguration und State durch ein Bundle ersetzen |
 

@@ -108,7 +108,7 @@ def refusal_message(refusal: Refusal, limits: ScopeLimits) -> str:
     """What the caller is told: which scope refused, and the number it enforced."""
     if refusal.kind == "rate":
         return RATE_REFUSALS[refusal.scope].format(limit=describe_rate(limits))
-    return SLOT_REFUSALS[refusal.scope].format(count=limits.requests)
+    return SLOT_REFUSALS[refusal.scope].format(count=limits.concurrent)
 
 
 def log_extra(request: Request) -> dict[str, str]:

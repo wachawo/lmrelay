@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **`[limits.*]` takes `concurrent` and `rate`, and they are two independent numbers.**
+  `concurrent = 2` beside `rate = "10/30m"` is ten every half hour, of which two may run
+  together. The one number `requests` and `period` shared could not say that: it forced the
+  cap to equal the rate's count, so "ten every half hour" also meant "ten at once", which on
+  a machine holding one model in memory is not what anybody means.
+
+  The rate is one token, `count/period`, on the command line and in the file:
+
+  ```bash
+  lmrelay limits set total 1                # one at a time
+  lmrelay limits set total 1/60s            # one a minute, and still one at a time
+  lmrelay limits set per_address 2 10/30m   # ten every half hour, two at a time
+  ```
+
+  A rate on its own still carries a cap of its own count, because "one a minute" said with
+  nothing about at-once means one at a time. In the file the two keys are independent, and a
+  `rate` with no `concurrent` beside it limits only how often.
+
+  There is still no burst. The bucket holds the rate's own count.
+
+  **To upgrade:** `requests = N` with `period = "P"` becomes `concurrent = N` and
+  `rate = "N/P"`, and then set the cap to what you actually want, which is usually lower. A
+  config still carrying `requests` or `period` is refused by name at startup rather than
+  read as off.
 
 ## [0.0.5] - 2026-09-01
 

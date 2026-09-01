@@ -114,7 +114,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -127,14 +127,16 @@ autostart    systemd: enabled, active
 
 ```bash
 lmrelay limits set total 1              # один запрос за раз
-lmrelay limits set total 1 60s          # один в минуту, и по-прежнему один за раз
-lmrelay limits set per_address 10 30m   # десять за полчаса
+lmrelay limits set total 1/60s          # один в минуту, и по-прежнему один за раз
+lmrelay limits set per_address 2 10/30m # десять за полчаса, два одновременно
 lmrelay limits set per_token 0          # выключить
 ```
 
-Три области, по одному числу в каждой. `requests` это сколько запросов вызывающий может
-держать одновременно; добавьте период, и то же число становится ещё и «сколько он может
-запустить за это время». Запрос должен пройти каждую заданную область.
+Три области, по два числа в каждой. `concurrent` это сколько запросов вызывающий может
+держать одновременно, `rate` это как часто он может запустить очередной, написанное как
+`количество/период`, и запрос должен пройти каждую заданную область. Частота сама по себе
+несёт и предел одновременности: «один в минуту», сказанное без уточнения, значит один за
+раз.
 
 **Если задаёте одно число, задайте `total`.** Именно оно защищает машину: десять вызывающих,
 каждый внутри своего лимита, всё равно приходят одновременно, а ограничение на одного этого
@@ -144,7 +146,7 @@ lmrelay limits set per_token 0          # выключить
 посчитать его честно:
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 Команда пишет в `lmrelay.toml` и оставляет остальной файл нетронутым, комментарии
@@ -171,7 +173,7 @@ lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
 | `lmrelay provider add NAME TOKEN` | добавить апстрим или сменить его токен |
 | `lmrelay provider list [--show]` | все апстримы, из файла и из состояния |
 | `lmrelay provider delete NAME` | удалить провайдера, которым владеет состояние |
-| `lmrelay limits set SCOPE N [PERIOD]` | записать лимиты одной области в конфиг |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | записать лимиты одной области в конфиг |
 | `lmrelay export [PATH]` | записать всё, что нужно, чтобы воспроизвести этот релей |
 | `lmrelay import [PATH]` | заменить конфиг и состояние пакетом |
 

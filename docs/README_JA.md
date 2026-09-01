@@ -109,7 +109,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -122,19 +122,19 @@ autostart    systemd: enabled, active
 
 ```bash
 lmrelay limits set total 1              # 同時に 1 リクエスト
-lmrelay limits set total 1 60s          # 毎分 1 件、しかも同時には 1 件のまま
-lmrelay limits set per_address 10 30m   # 30 分あたり 10 件
+lmrelay limits set total 1/60s          # 毎分 1 件、しかも同時には 1 件のまま
+lmrelay limits set per_address 2 10/30m # 30 分あたり 10 件、同時には 2 件
 lmrelay limits set per_token 0          # オフ
 ```
 
-スコープは 3 つ、それぞれに数字がひとつ。`requests` は呼び出し側が同時に抱えられるリクエスト数で、期間を添えると同じ数字がその間に開始できる件数にもなる。リクエストは設定したすべてのスコープを通らなければならない。
+スコープは 3 つ、それぞれに数字がふたつ。`concurrent` は呼び出し側が同時に抱えられるリクエスト数、`rate` はどれくらいの頻度で 1 件開始できるかで、`件数/期間` と書く。リクエストは設定したすべてのスコープを通らなければならない。レートだけを渡すと同じ件数の同時上限も付いてくる。同時実行について何も言わずに「毎分 1 件」と言えば、それは同時に 1 件という意味だからだ。
 
 **ひとつだけ設定するなら `total` を設定する。** マシンを守るのはこれで、10 人の呼び出し側がそれぞれ自分の上限の内側にいても同時に到着することはあり、呼び出し側ごとの上限にはそれが見えない。隣に置く `per_token` は、スレッドを 50 本張る 1 クライアントに全部を占有させないためのもの。
 
 拒否された呼び出し側にはスコープ名の入った 429 が返り、リレーが正直に算出できるときは `Retry-After` も付く:
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 このコマンドは `lmrelay.toml` に書き込み、ファイルの残りはコメントごとそのまま残したうえで、動作中のリレーにシグナルを送る。
@@ -160,7 +160,7 @@ lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
 | `lmrelay provider add NAME TOKEN` | アップストリームを追加、またはローテーションする |
 | `lmrelay provider list [--show]` | ファイルと state の両方から、すべてのアップストリーム |
 | `lmrelay provider delete NAME` | state が所有するプロバイダを削除する |
-| `lmrelay limits set SCOPE N [PERIOD]` | あるスコープの上限を設定ファイルに書き込む |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | あるスコープの上限を設定ファイルに書き込む |
 | `lmrelay export [PATH]` | このリレーを再現するのに要るものを全部書き出す |
 | `lmrelay import [PATH]` | 設定と state をバンドルで置き換える |
 

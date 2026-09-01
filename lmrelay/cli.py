@@ -37,7 +37,7 @@ from lmrelay.config import (
     find_config_path,
     load_config,
     read_int,
-    read_period,
+    read_rate,
     set_scope_limits,
 )
 from lmrelay.daemon import (
@@ -54,7 +54,7 @@ from lmrelay.daemon import (
 )
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.logging_setup import setup_logging
-from lmrelay.ratelimit import NO_PERIOD, ScopeLimits, describe_limits, describe_scope
+from lmrelay.ratelimit import ScopeLimits, describe_limits, describe_scope, parse_rate
 from lmrelay.service import (
     LAUNCHD_PLIST_PATH,
     SYSTEMD_UNIT_NAME,
@@ -513,14 +513,52 @@ def provider_delete(args: argparse.Namespace) -> None:
 def scope_limits_from(args: argparse.Namespace) -> ScopeLimits:
     """The scope this invocation asks for, validated the way the file validates it.
 
-    Through the config's own readers rather than argparse's `type=`, so a number
-    typed on the command line is refused in the words the same number in the
-    TOML is refused in.
+    Three forms, and the shape of the argument says which:
+
+        limits set total 1              one at a time
+        limits set total 1/60s          one a minute, and one at a time
+        limits set per_address 2 10/30m ten every half hour, two at a time
+
+    A rate on its own carries a cap, because "one a minute" said with nothing
+    about at-once means one at a time, and leaving the cap off would let ten
+    arrive together on the minute they are allowed.
+
+    Everything goes through the config's own readers rather than argparse's
+    `type=`, so a value typed on the command line is refused in the words the
+    same value in the TOML is refused in.
     """
     section = f"limits.{args.scope}"
+    if args.rate is not None and "/" in args.concurrent:
+        raise LmrelayError(
+            f"lmrelay: '{args.concurrent} {args.rate}' is the wrong way round; the count at "
+            f"once comes first: 'lmrelay limits set {args.scope} 2 10/30m'"
+        )
+
+    if args.rate is None and "/" in args.concurrent:
+        spelled = read_rate({"rate": args.concurrent}, section, "rate")
+        allowance = parse_rate(spelled)
+        return ScopeLimits(concurrent=allowance[0], rate=spelled)
+
     return ScopeLimits(
-        requests=read_int({"requests": args.requests}, section, "requests", 0, minimum=0),
-        period=read_period({"period": args.period or NO_PERIOD}, section, "period"),
+        concurrent=read_int({"concurrent": args.concurrent}, section, "concurrent", 0, minimum=0),
+        rate=read_rate({"rate": args.rate or ""}, section, "rate"),
+    )
+
+
+def warn_about_a_cap_the_rate_cannot_reach(scope: str, limits: ScopeLimits) -> None:
+    """Say when the how-many-at-once is above what the how-often can ever start.
+
+    The bucket holds the rate's own count, so at most that many requests can
+    start in quick succession, and a cap above it is a number that will never
+    refuse anybody. Legal, and worth one line: it is almost always a slip, and
+    the two numbers sitting beside each other look like they agree.
+    """
+    allowance = limits.allowance()
+    if allowance is None or limits.concurrent <= allowance[0]:
+        return
+    logger.warning(
+        f"lmrelay: [limits.{scope}] allows {limits.concurrent} at once but {limits.rate} "
+        f"lets only {allowance[0]} start together, so the cap will never refuse anybody."
     )
 
 
@@ -562,6 +600,7 @@ def limits_set(args: argparse.Namespace) -> None:
         f"in {config_path}."
     )
     warn_about_a_scope_nothing_keys(args.scope, config_path, after)
+    warn_about_a_cap_the_rate_cannot_reach(args.scope, after)
     reload_running_relay(config_path)
 
 
@@ -820,10 +859,13 @@ def add_limits_commands(subparsers: argparse._SubParsersAction) -> None:
     # Left as strings, and read by the config's own readers in the handler: a
     # number argparse refused would be refused in argparse's words rather than
     # in the ones the same number in the file is refused in.
-    set_parser.add_argument("requests", help="how many at once, and per period; 0 turns it off")
     set_parser.add_argument(
-        "period", nargs="?", default=None,
-        help="30s, 5m, 2h. Without it, only the how-many-at-once cap applies",
+        "concurrent", metavar="N|N/PERIOD",
+        help="how many at once, or a rate on its own, which also caps at once; 0 turns it off",
+    )
+    set_parser.add_argument(
+        "rate", nargs="?", default=None, metavar="N/PERIOD",
+        help="how often: 10/30m, 2/1h, 1/60s. Left off, only the at-once cap applies",
     )
     add_config_option(set_parser)
     set_parser.set_defaults(handler=limits_set)

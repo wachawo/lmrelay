@@ -19,7 +19,7 @@ from lmrelay.config import (
     parse_upstream,
 )
 from lmrelay.errors import BundleError
-from lmrelay.ratelimit import LIMIT_KEYS, NO_PERIOD, PERIOD_UNITS, SCOPES, parse_period
+from lmrelay.ratelimit import LIMIT_KEYS, SCOPES, parse_rate
 from lmrelay.state import MASKED_TOKEN, CallerToken, RelayState, utc_now, write_private
 
 BUNDLE_VERSION = 1
@@ -46,8 +46,8 @@ SERVER_TYPES: dict[str, type] = {
     "log_level":        str,
 }
 LIMIT_TYPES: dict[str, type] = {
-    "requests": int,
-    "period":   str,
+    "concurrent": int,
+    "rate":       str,
 }
 
 # What a refused value is told it should have been, in the words the config's
@@ -82,9 +82,9 @@ CONFIG_HEADER = """\
 """
 
 LIMITS_HEADER = """\
-# Three scopes, one number each, off at 0. 'requests' is how many a caller may
-# have in flight; with a 'period' it is also how many they may start in that
-# long. A request must pass every scope you set. If you set one, set
+# Three scopes, two numbers each, off at 0 and "". 'concurrent' is how many a
+# caller may have in flight and 'rate' is how often it may start one, written
+# count/period. A request must pass every scope you set. If you set one, set
 # [limits.total]: that is the one that protects the upstream.
 """
 
@@ -341,21 +341,21 @@ def parse_limits(data: dict, source: str) -> dict:
         check_types(table, LIMIT_TYPES, f"limits {scope}", source)
         # 0 is off, so a negative is a mistake rather than another spelling of
         # it, and config.py refuses one for the same reason.
-        if table.get("requests", 0) < 0:
+        if table.get("concurrent", 0) < 0:
             raise BundleError(
-                f"lmrelay: {source} has limits {scope} requests = {table['requests']!r}, "
+                f"lmrelay: {source} has limits {scope} concurrent = {table['concurrent']!r}, "
                 f"and a limit cannot be negative"
             )
         # The second value validator, and it exists for the reason log_level's
         # does: "1d" is a string, and the pair of files an import writes with it
         # in them is a relay that refuses to start on every command afterwards,
         # on a machine whose working config the import has already moved aside.
-        period = table.get("period")
-        if period is not None and parse_period(str(period)) is None:
+        rate = table.get("rate")
+        if rate and parse_rate(str(rate)) is None:
             raise BundleError(
-                f"lmrelay: {source} has limits {scope} period = {period!r}, which is not a "
-                f"whole number and a unit, one of {', '.join(PERIOD_UNITS)}: "
-                f'"30s", "5m", "2h", or "{NO_PERIOD}" for no limit on how often'
+                f"lmrelay: {source} has limits {scope} rate = {rate!r}, which is not a count, "
+                f'a slash and a period: "10/30m", "2/1h", "1/60s", or "" for no limit on how '
+                f"often"
             )
     return limits
 

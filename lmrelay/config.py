@@ -15,12 +15,11 @@ from string import Template
 from lmrelay.errors import ConfigError
 from lmrelay.ratelimit import (
     LIMIT_KEYS,
-    NO_PERIOD,
-    PERIOD_UNITS,
+    NO_RATE,
     SCOPES,
     ScopeLimits,
     describe_scope,
-    parse_period,
+    parse_rate,
 )
 from lmrelay.state import (
     DIALECTS,
@@ -82,10 +81,13 @@ RETIRED_SERVER_KEYS = {
     "max_concurrent": "requests",
 }
 
-# The three keys the two below replaced, refused by name rather than reported as
-# unrecognised. A scope whose numbers are all in keys nobody reads is a scope
-# that is off, and an operator who wrote them believes it is on.
-RETIRED_LIMIT_KEYS = ("rate", "burst", "concurrent")
+# The keys `concurrent` and `rate` replaced, refused by name rather than
+# reported as unrecognised. A scope whose numbers are all in keys nobody reads
+# is a scope that is off, and an operator who wrote them believes it is on.
+#
+# `requests` and `period` shipped in 0.0.5, so this refusal is the upgrade note
+# for anyone who set a limit there. `burst` never shipped at all.
+RETIRED_LIMIT_KEYS = ("burst", "requests", "period")
 
 # For `lmrelay limits set`, which edits one number in place rather than
 # rewriting the file. A table header of its own, and anything else that opens a
@@ -290,27 +292,30 @@ def read_int(
     return number
 
 
-def read_period(table: dict, section: str, name: str) -> str:
-    """Read a period as seconds, refusing anything that is not a count and a unit.
+def read_rate(table: dict, section: str, name: str) -> str:
+    """Read a rate as `count/period`, refusing anything that is not one.
 
-    A bare number is refused rather than read as seconds. `period = 30` is half
-    an hour to whoever wrote it about as often as it is half a minute, and the
-    unit costs one character. It is also what keeps one spelling everywhere:
-    the `30m` typed into `lmrelay limits set` is the `30m` written to the file.
+    Empty is how a scope says it limits how many at once and nothing else, so it
+    is the default and not an error.
+
+    A bare number is refused on both halves. `rate = 30` names no period, and
+    `30/30` names no unit, which is half an hour to whoever wrote it about as
+    often as it is half a minute. It is also what keeps one spelling everywhere:
+    the `10/30m` typed into `lmrelay limits set` is the `10/30m` in the file.
 
     This is where `inf` and `nan` stop too. Both are spellable in TOML and in
-    JSON, and neither is a period: a limiter built on nan compares false against
+    JSON, and neither is a rate: a limiter built on nan compares false against
     every threshold, so it would be swept for the life of the process and refuse
     nobody, while printing as though it were on.
     """
-    value = table.get(name, NO_PERIOD)
-    if not isinstance(value, str) or parse_period(value) is None:
+    value = table.get(name, NO_RATE)
+    if not isinstance(value, str) or (value and parse_rate(value) is None):
         raise ConfigError(
-            f"lmrelay: [{section}] {name} must be a whole number and a unit, one of "
-            f"{', '.join(PERIOD_UNITS)}: \"30s\", \"5m\", \"2h\", or \"{NO_PERIOD}\" for no "
-            f"limit on how often. Got {value!r}"
+            f"lmrelay: [{section}] {name} must be a count, a slash and a period, the period "
+            f"a whole number and one of s, m, h: \"10/30m\", \"2/1h\", \"1/60s\", or \"\" for "
+            f"no limit on how often. Got {value!r}"
         )
-    # The spelling, not the seconds: see ScopeLimits.
+    # The spelling, not the numbers: see ScopeLimits.
     return value
 
 
@@ -359,9 +364,10 @@ def check_retired_limit_keys(table: dict, scope: str) -> None:
     if found:
         raise ConfigError(
             f"lmrelay: [limits.{scope}] {', '.join(found)} "
-            f"{'were' if len(found) > 1 else 'was'} replaced by requests and period. "
-            f"'requests' is how many at once, and with a 'period' it is also how many "
-            f"in that long: requests = 10, period = \"30m\". See docs/CONFIGURATION.md."
+            f"{'were' if len(found) > 1 else 'was'} replaced by concurrent and rate. "
+            f"'concurrent' is how many at once and 'rate' is how often, and they are two "
+            f"numbers because they are two questions: concurrent = 2, rate = \"10/30m\". "
+            f"See docs/CONFIGURATION.md."
         )
 
 
@@ -396,8 +402,8 @@ def parse_limits(data: dict) -> dict[str, ScopeLimits]:
             )
         label = f"limits.{scope}"
         limits[scope] = ScopeLimits(
-            requests=read_int(table, label, "requests", 0, minimum=0),
-            period=read_period(table, label, "period"),
+            concurrent=read_int(table, label, "concurrent", 0, minimum=0),
+            rate=read_rate(table, label, "rate"),
         )
     return limits
 
@@ -533,7 +539,7 @@ def set_scope_limits(
         text += "\n"
     before = parse_limits(parse_config_text(text, target))[scope]
 
-    values = {"requests": wanted.requests, "period": wanted.period}
+    values = {"concurrent": wanted.concurrent, "rate": wanted.rate}
     edited = edit_limit_section(text, scope, values)
     try:
         after = parse_limits(parse_config_text(edited, target))[scope]

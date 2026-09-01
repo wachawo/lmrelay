@@ -115,7 +115,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -129,14 +129,16 @@ relais en mode détaché.
 
 ```bash
 lmrelay limits set total 1              # une requête à la fois
-lmrelay limits set total 1 60s          # une par minute, et toujours une à la fois
-lmrelay limits set per_address 10 30m   # dix par demi-heure
+lmrelay limits set total 1/60s          # une par minute, et toujours une à la fois
+lmrelay limits set per_address 2 10/30m # dix par demi-heure, deux à la fois
 lmrelay limits set per_token 0          # désactivé
 ```
 
-Trois portées, un nombre chacune. `requests` est le nombre de requêtes qu'un appelant peut
-avoir en cours à la fois ; ajoutez une période et ce même nombre est aussi le nombre qu'il
-peut lancer pendant ce temps. Une requête doit passer toutes les portées que vous fixez.
+Trois portées, deux nombres chacune. `concurrent` est le nombre de requêtes qu'un appelant
+peut avoir en cours à la fois, `rate` est la fréquence à laquelle il peut en lancer une,
+écrite `nombre/période`, et une requête doit passer toutes les portées que vous fixez. Une
+fréquence seule apporte son propre plafond : « une par minute », sans rien dire du
+simultané, veut dire une à la fois.
 
 **Si vous ne fixez qu'un nombre, fixez `total`.** C'est celui qui protège la machine : dix
 appelants, chacun dans sa propre limite, arrivent tout de même ensemble, et un plafond par
@@ -147,7 +149,7 @@ Un appelant refusé reçoit un 429 qui nomme la portée, et un `Retry-After` qua
 peut en calculer un honnêtement :
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 La commande écrit dans `lmrelay.toml` et laisse le reste du fichier intact, commentaires
@@ -174,7 +176,7 @@ compris, puis signale un relais en fonctionnement.
 | `lmrelay provider add NAME TOKEN` | ajouter un upstream ou en changer la clé |
 | `lmrelay provider list [--show]` | tous les upstreams, ceux du fichier et ceux de l'état |
 | `lmrelay provider delete NAME` | supprimer un fournisseur détenu par l'état |
-| `lmrelay limits set SCOPE N [PERIOD]` | écrire les limites d'une portée dans le fichier de configuration |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | écrire les limites d'une portée dans le fichier de configuration |
 | `lmrelay export [PATH]` | écrire tout ce qu'il faut pour reproduire ce relais |
 | `lmrelay import [PATH]` | remplacer la configuration et l'état par un paquet |
 

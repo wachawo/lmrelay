@@ -30,12 +30,12 @@ connect_timeout  = 25
 log_level        = "DEBUG"
 
 [limits.per_token]
-requests = 2
-period   = "120s"
+concurrent = 2
+rate       = "2/120s"
 
 [limits.total]
-requests = 6
-period   = "30m"
+concurrent = 6
+rate       = "10/30m"
 
 [auth]
 token = "token-from-the-file"
@@ -629,7 +629,7 @@ class TestRefusingABundleItCannotApply:
 
     def test_an_unknown_limit_scope(self, source, bundle_path, target):
         data = export(source, bundle_path)
-        data["limits"]["per_model"] = {"requests": 1}
+        data["limits"]["per_model"] = {"concurrent": 1}
         with pytest.raises(BundleError, match="per_model"):
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
@@ -646,24 +646,26 @@ class TestRefusingABundleItCannotApply:
                          "--config", str(target)])
 
     def test_a_whole_number_key_holding_a_fraction(self, source, bundle_path, target):
-        """requests = 2.5 is a JSON number and not a count of requests."""
+        """concurrent = 2.5 is a number and not a count of requests."""
         data = export(source, bundle_path)
-        data["limits"]["total"]["requests"] = 2.5
+        data["limits"]["total"]["concurrent"] = 2.5
         with pytest.raises(BundleError, match="not a whole number"):
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
-    @pytest.mark.parametrize("value", [float("nan"), float("inf"), 30, "1d", "1.5m", ""])
-    def test_a_period_that_is_not_a_duration(self, source, bundle_path, target, value):
+    @pytest.mark.parametrize(
+        "value", [float("nan"), float("inf"), 30, "10/1d", "10/1.5m", "10/30", "10/0s"]
+    )
+    def test_a_rate_that_is_not_a_rate(self, source, bundle_path, target, value):
         """The second value validator, beside log_level's, and for the same
-        reason: each of these is the right JSON type or close enough to pass one,
-        and each writes a pair of files the relay then refuses to start from, on
-        a machine whose working config the import has already moved aside.
+        reason: each of these is the right type or close enough to pass one, and
+        each writes a pair of files the relay then refuses to start from, on a
+        machine whose working config the import has already moved aside.
 
-        `30` matters most: read as seconds it would be a limit nobody wrote, and
-        half an hour to whoever did write it about as often as half a minute."""
+        `10/30` matters most: it names no unit, and that is half an hour to
+        whoever wrote it about as often as it is half a minute."""
         data = export(source, bundle_path)
-        data["limits"]["total"]["period"] = value
+        data["limits"]["total"]["rate"] = value
         with pytest.raises(BundleError):
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
@@ -698,7 +700,7 @@ class TestRefusingABundleItCannotApply:
         """0 is off, so a negative is a mistake rather than another spelling of
         it, and config.py refuses one for the same reason."""
         data = export(source, bundle_path)
-        data["limits"]["total"]["requests"] = -1
+        data["limits"]["total"]["concurrent"] = -1
         with pytest.raises(BundleError, match="negative"):
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
@@ -757,7 +759,7 @@ class TestRefusingABundleItCannotApply:
         {"limitz": {}},
         {"upstream": {}},
         {"server": {"log_level": "VERBOSE"}},
-        {"limits": {"total": {"period": "1d"}}},
+        {"limits": {"total": {"rate": "10/1d"}}},
     ])
     def test_and_none_of_them_writes_anything_at_all(
         self, source, bundle_path, target, change

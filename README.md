@@ -112,7 +112,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -125,16 +125,17 @@ manager, `lmrelay serve` runs the relay detached.
 
 ```bash
 lmrelay limits set total 1              # one request at a time
-lmrelay limits set total 1 60s          # one a minute, and still one at a time
-lmrelay limits set per_address 10 30m   # ten every half hour
+lmrelay limits set total 1/60s          # one a minute, and still one at a time
+lmrelay limits set per_address 2 10/30m # ten every half hour, two at a time
 lmrelay limits set per_token 0          # off
 ```
 
-Three scopes, one number each. `requests` is how many a caller may have in flight at once;
-add a period and the same number is also how many they may start in that long. A request
-must pass every scope you set.
+Three scopes, two numbers each. `concurrent` is how many a caller may have in flight at
+once, `rate` is how often it may start one, written `count/period`, and a request must pass
+every scope you set. A rate on its own carries a cap of its own count, because "one a
+minute" said with nothing about at-once means one at a time.
 
-**If you set one number, set `total`.** It is the one that protects the machine: ten callers
+**If you set one thing, set `total`.** It is the one that protects the machine: ten callers
 each inside their own limit still arrive together, and a per-caller cap cannot see that.
 `per_token` beside it is what keeps one client with fifty threads from owning all of it.
 
@@ -142,7 +143,7 @@ A refused caller gets a 429 naming the scope, and a `Retry-After` when the relay
 one out honestly:
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 The command writes into `lmrelay.toml` and leaves the rest of the file alone, comments
@@ -169,7 +170,7 @@ included, then signals a running relay.
 | `lmrelay provider add NAME TOKEN` | add or rotate an upstream |
 | `lmrelay provider list [--show]` | every upstream, from the file and from state |
 | `lmrelay provider delete NAME` | remove a provider that state owns |
-| `lmrelay limits set SCOPE N [PERIOD]` | set one scope's limits in the config file |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | set one scope's limits in the config file |
 | `lmrelay export [PATH]` | write everything needed to reproduce this relay |
 | `lmrelay import [PATH]` | replace the config and the state with a bundle |
 

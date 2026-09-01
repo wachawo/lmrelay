@@ -107,7 +107,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 10 per 30m, 10 at once
+limits       total 10/30m, 2 at once
 autostart    systemd: enabled, active
 ```
 
@@ -120,19 +120,19 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 
 ```bash
 lmrelay limits set total 1              # 同时一个请求
-lmrelay limits set total 1 60s          # 每分钟一个，而且仍是同时一个
-lmrelay limits set per_address 10 30m   # 每半小时十个
+lmrelay limits set total 1/60s          # 每分钟一个，而且仍是同时一个
+lmrelay limits set per_address 2 10/30m # 每半小时十个，同时两个
 lmrelay limits set per_token 0          # 关闭
 ```
 
-三个作用域，每个一个数字。`requests` 是一个调用方同时可以有多少请求在飞行中；再给一个周期，同一个数字也就是它在那段时间里可以发起多少个。一个请求必须通过你设置的每一个作用域。
+三个作用域，每个两个数字。`concurrent` 是一个调用方同时可以有多少请求在飞行中，`rate` 是它多久可以发起一个，写成 `次数/周期`，而一个请求必须通过你设置的每一个作用域。单独给出的速率会自带一个并发上限：「每分钟一个」在没有另外说明并发的情况下，就是同时一个。
 
 **如果只设一个数字，就设 `total`。** 它才是保护这台机器的那个：十个调用方各自都在自己的限额之内，仍然会同时到达，而按调用方计的上限看不见这一点。旁边的 `per_token` 才是让一个开五十个线程的客户端占不满全部的东西。
 
 被拒绝的调用方收到一个点名作用域的 429，以及一个 `Retry-After`（当中继能诚实地算出来时）：
 
 ```text
-lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 ```
 
 这条命令写入 `lmrelay.toml`，文件其余部分原样不动，注释也在，然后给正在运行的中继发信号。
@@ -158,7 +158,7 @@ lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
 | `lmrelay provider add NAME TOKEN` | 添加或轮换一个上游 |
 | `lmrelay provider list [--show]` | 全部上游，来自配置文件和 state |
 | `lmrelay provider delete NAME` | 删除由 state 拥有的服务商 |
-| `lmrelay limits set SCOPE N [PERIOD]` | 把某个作用域的上限写入配置文件 |
+| `lmrelay limits set SCOPE N[/PERIOD] [N/PERIOD]` | 把某个作用域的上限写入配置文件 |
 | `lmrelay export [PATH]` | 写出在别处重建这个中继所需的一切 |
 | `lmrelay import [PATH]` | 用一个打包文件替换配置和 state |
 
