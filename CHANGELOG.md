@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A retired `[server]` limit key now points at a key that exists.** `rate_limit` and
+  `rate_burst` are refused with a pointer to `[limits.*] rate`, `max_concurrent` with one to
+  `[limits.*] concurrent`. The pointer used to name `requests`, which 0.0.6 retired in turn, so
+  an operator following it walked into a second refusal.
 - The test suite no longer emits `StarletteDeprecationWarning`: starlette 1.6 wants `httpx2`
   behind its `TestClient`, and `requirements-dev.txt` now installs it.
 

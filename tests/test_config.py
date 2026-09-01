@@ -15,7 +15,7 @@ from lmrelay.config import (
     find_config_path,
     load_config,
 )
-from lmrelay.ratelimit import SCOPES, ScopeLimits, default_limits
+from lmrelay.ratelimit import LIMIT_KEYS, SCOPES, ScopeLimits, default_limits
 from tests.conftest import write_state
 
 MINIMAL = """
@@ -428,10 +428,12 @@ class TestTheThreeScopes:
             load_config(target)
         assert "[limits.per_token] is configured but auth is off" in caplog.text
 
-    def test_and_nothing_is_said_when_auth_is_on(self, tmp_path):
+    def test_and_nothing_is_said_when_auth_is_on(self, tmp_path, caplog):
         target = write(tmp_path, "[limits.per_token]\nconcurrent = 2\n" + MINIMAL)
         write_state(tmp_path, auth_enabled=True, tokens=("a-token",))
-        assert load_config(target).limits["per_token"].concurrent == 2
+        with caplog.at_level(logging.WARNING):
+            assert load_config(target).limits["per_token"].concurrent == 2
+        assert "is configured but auth is off" not in caplog.text
 
 
 class TestTheKeysThatWereReplaced:
@@ -439,8 +441,7 @@ class TestTheKeysThatWereReplaced:
 
     @pytest.mark.parametrize(
         ("key", "replacement"),
-        [("rate_limit", "requests"), ("rate_burst", "requests"),
-         ("max_concurrent", "requests")],
+        [("rate_limit", "rate"), ("rate_burst", "rate"), ("max_concurrent", "concurrent")],
     )
     def test_an_old_limit_key_is_refused_rather_than_ignored(
         self, tmp_path, key, replacement
@@ -454,6 +455,9 @@ class TestTheKeysThatWereReplaced:
         assert key in message
         # Every scope it could have meant, since the old key named none of them.
         assert all(f"[limits.{scope}] {replacement}" in message for scope in SCOPES)
+        # And a key that exists there: 0.0.5's `requests` was itself retired,
+        # and a pointer to it sent the operator into a second refusal.
+        assert replacement in LIMIT_KEYS
 
 
 class TestSayingWhenThePortIsOpen:

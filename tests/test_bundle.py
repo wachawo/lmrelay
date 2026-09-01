@@ -287,7 +287,7 @@ class TestTheRoundTrip:
         run_command(["export", STDIO_PATH, "--config", str(source)])
         bundle_path.write_text(capsys.readouterr().out, encoding="utf-8")
         leave_the_source_machine(monkeypatch)
-        monkeypatch.setattr("sys.stdin", bundle_path.open(encoding="utf-8"))
+        monkeypatch.setattr("sys.stdin", io.StringIO(bundle_path.read_text(encoding="utf-8")))
         run_command(["import", STDIO_PATH, "--config", str(target)])
         assert load_config(target).port == 11500
 

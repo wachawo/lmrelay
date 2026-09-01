@@ -69,10 +69,15 @@ packages = ["lmrelay"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Import mode and rootdir together let the suite import `tests.conftest` for the
-# shared fixtures while `lmrelay` resolves to the source tree, not an installed
-# copy, so a test run cannot pass against a build made before the edit.
+# tests/__init__.py makes `tests` a package, so the suite imports its shared
+# fixtures as `tests.conftest` while `lmrelay` resolves to the source tree, not
+# an installed copy, and a test run cannot pass against a build made before
+# the edit.
 addopts = "-q"
+# A warning is a failure. A deprecation, or a file handle a test left open,
+# otherwise scrolls past in the summary until the release that turns it into
+# an error, and by then nobody remembers which test it came from.
+filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 100

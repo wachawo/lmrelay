@@ -76,9 +76,9 @@ SERVER_KEYS = ("host", "port", "default_upstream", "connect_timeout", "log_level
 # Refused rather than ignored, for one release: a silently ignored key leaves an
 # operator believing a limit is on when it is off.
 RETIRED_SERVER_KEYS = {
-    "rate_limit": "requests",
-    "rate_burst": "requests",
-    "max_concurrent": "requests",
+    "rate_limit": "rate",
+    "rate_burst": "rate",
+    "max_concurrent": "concurrent",
 }
 
 # The keys `concurrent` and `rate` replaced, refused by name rather than

@@ -378,14 +378,7 @@ class TestReleasingTheWholeSetExactlyOnce:
         release_all(counter, (CALLER, "total"))()
         assert counter.counts == {}
 
-    def test_a_second_call_does_nothing(self):
-        counter = InflightCounter({CALLER: 1})
-        release = release_all(counter, (CALLER,))
-        release()
-        release()
-        assert counter.counts == {}
-
-    def test_and_that_is_the_point_of_it(self):
+    def test_a_second_call_does_not_release_someone_elses_slot(self):
         """Without the flag the second call would decrement the count of a
         different live request, and let that caller past the cap. The relay's
         error paths and its body generator are meant not to overlap; this is

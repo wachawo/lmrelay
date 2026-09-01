@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 # Local imports
 from lmrelay.config import CONFIG_ENV_VAR, load_config
 from lmrelay.daemon import (
+    BIND_ENV_VAR,
     LOG_NAME,
     PID_NAME,
     daemon_status,
@@ -35,7 +37,6 @@ from lmrelay.daemon import (
     write_pid,
 )
 from lmrelay.errors import LmrelayError
-from lmrelay.state import STATE_ENV_VAR
 
 # An upstream pointed at a host nothing resolves: nothing in this file asks the
 # relay to forward anything, and a test that accidentally did would fail loudly
@@ -63,14 +64,6 @@ sock.listen(1)
 print("bound", flush=True)
 time.sleep(60)
 """
-
-
-@pytest.fixture(autouse=True)
-def isolated_home(tmp_path, monkeypatch):
-    """No test here may find, or write over, the operator's real ~/.lmrelay."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
-    monkeypatch.delenv(STATE_ENV_VAR, raising=False)
 
 
 def write_config(tmp_path, port: int):
@@ -222,6 +215,11 @@ class TestWhetherAProcessIsThere:
         assert not process_alive(999999999999999999999)
 
 
+# Under root the refusal these tests rely on never comes: os.kill(1, SIGTERM) is
+# permitted, and stop_daemon would go on to wait out its timeout and SIGKILL init.
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root may signal pid 1"
+)
 class TestAPidWeMayNotSignal:
     """process_alive reports another user's process as alive on purpose, so a
     pid we cannot signal reaches the commands that signal it."""
@@ -254,18 +252,24 @@ class TestStoppingSomethingThatWillNotGo:
         down hands `restart` an address still in use."""
         port = free_port()
         config = write_config(tmp_path, port)
-        child = subprocess.Popen(
+        # The context manager closes the stdout pipe on the way out, which a bare
+        # Popen left open for the garbage collector to complain about.
+        with subprocess.Popen(
             [sys.executable, "-c", HOLDS_A_PORT, str(port)], stdout=subprocess.PIPE
-        )
-        try:
-            assert child.stdout.readline().strip() == b"bound"
-            write_pid(pid_file(config), child.pid)
-            assert stop_daemon(config, timeout=0.2) is True
-            with socket.socket() as rebind:
-                rebind.bind(("127.0.0.1", port))
-        finally:
-            child.kill()
-            child.wait()
+        ) as child:
+            try:
+                assert child.stdout.readline().strip() == b"bound"
+                write_pid(pid_file(config), child.pid)
+                # Reap as init would for a real detached relay. Unreaped, the
+                # killed child is a zombie that os.kill(pid, 0) still finds, and
+                # stop_daemon sits out its whole SIGKILL timeout on a process
+                # that is gone.
+                threading.Thread(target=child.wait, daemon=True).start()
+                assert stop_daemon(config, timeout=0.2) is True
+                with socket.socket() as rebind:
+                    rebind.bind(("127.0.0.1", port))
+            finally:
+                child.kill()
 
 
 class TestAskingTheRelayIfItIsWell:
@@ -342,6 +346,10 @@ class TestTheAddressTheRelayRecorded:
 
     def test_the_published_address_is_what_gets_recorded(self, tmp_path, monkeypatch):
         config = load_config(write_config(tmp_path, 11435))
+        # publish_bind writes os.environ directly; recording the variable with
+        # monkeypatch first is what takes the published address back out at
+        # teardown. recorded_bind reads the empty string as unset.
+        monkeypatch.setenv(BIND_ENV_VAR, "")
         assert recorded_bind(config) == "127.0.0.1:11435"
         publish_bind("0.0.0.0", 8080)
         assert recorded_bind(config) == "0.0.0.0:8080"
@@ -443,7 +451,10 @@ class TestWaitingForTheRelayWeStarted:
         target = tmp_path / PID_NAME
         write_pid(target, os.getpid())
         with pytest.raises(LmrelayError) as raised:
-            wait_for_relay(os.getpid() + 1, target, tmp_path / LOG_NAME)
+            wait_for_relay(FOREIGN_PID, target, tmp_path / LOG_NAME)
+        # The timeout branch by name: a dead pid would also raise, from the
+        # "exited during startup" branch, and prove nothing about the wait.
+        assert "no relay appeared" in str(raised.value)
         assert str(tmp_path / LOG_NAME) in str(raised.value)
 
     def test_a_child_that_died_is_reported_rather_than_waited_out(self, tmp_path):

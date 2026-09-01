@@ -28,13 +28,6 @@ from lmrelay.state import (
 )
 
 
-@pytest.fixture(autouse=True)
-def isolated_home(tmp_path, monkeypatch):
-    """Nothing here may read or write the operator's real ~/.lmrelay."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv(STATE_ENV_VAR, raising=False)
-
-
 @pytest.fixture
 def permissive_umask():
     """A developer whose own umask is 0o077 would pass the file-mode test below
