@@ -200,8 +200,10 @@ curl http://127.0.0.1:11435/api/chat \
 }'
 ```
 
-`GET /healthz` répond `{"status": "ok"}` sans toucher à un upstream et sans identifiant. Tout le
-reste passe par le relais.
+`GET /healthz` répond `{"status": "ok"}` sans toucher à un upstream et sans identifiant.
+`GET /metrics` répond à un scrape Prometheus avec des compteurs agrégés et en exige un, lui,
+car il dit comment le relais est utilisé et pas seulement qu'il est vivant. Tout le reste
+passe par le relais.
 
 ### Compatibilité
 

@@ -27,14 +27,14 @@ section is the point of this file: a decision that is not written down gets made
 - [ ] **`config export` and `config import`.** One file that reproduces a relay elsewhere,
       written 0600 because it carries tokens and provider keys.
 
-## Next
+- [ ] **`GET /metrics`, in Prometheus text format.** Aggregate only, and built: requests by
+      upstream and status, time to first byte as a histogram per upstream, requests in flight,
+      refusals by scope and by measure, authentication failures, upstream errors by exception
+      type, and the version on a `build_info` gauge. Written by hand rather than with
+      `prometheus_client`, because the dependency count is a documented property of this
+      project, and it is still four.
 
-- [ ] **`GET /metrics`, in Prometheus text format.** Aggregate only: requests by upstream and
-      status, time to first byte, requests in flight, refusals by which limit was hit.
-      Written by hand rather than with `prometheus_client`, because the dependency count is a
-      documented property of this project.
-
-      Two decisions that come with it. It requires a credential like everything else rather
+      Two decisions that came with it. It requires a credential like everything else rather
       than being exempt as `/healthz` is: `/healthz` tells a caller nothing, `/metrics` tells
       them how the relay is used, and Prometheus supports `bearer_token` in a scrape job.
       And it carries no per-token labels, which keeps `No token accounting, usage database or
@@ -42,15 +42,29 @@ section is the point of this file: a decision that is not written down gets made
       time series per credential, forever.
 
       Counters live in memory and reset when the relay restarts. Prometheus understands a
-      counter reset, and it is what keeps this from becoming the usage database above.
+      counter reset, and it is what keeps this from becoming the usage database above. A
+      reload does not reset them, unlike the limiters, so a config edit cannot look like a
+      restart on a chart.
+
+      The histogram bounds run to 300s rather than the Prometheus default 10s, because a
+      local model that has to be read off disk puts almost every answer in `+Inf` under the
+      default. Only a request an upstream answered is timed; a refusal is counted and not
+      timed, so the relay's own overhead cannot drag the distribution down.
 
 - [ ] **A request id in the log line.** Enough to tie a caller's request to the upstream call
-      it caused when both land in `lmrelay.log`. Through a `logging.Filter` and a field in
-      the format, no dependency.
+      it caused when both land in `lmrelay.log`. Eight hex characters in a field of the
+      format, filled in by a callable filter on the handler, `-` for a line that belongs to no
+      request. No dependency. Not a trace id: it is neither read from an inbound header nor
+      sent upstream, and it is not returned to the caller.
 
-- [ ] **Old and new values in the reload warning.** It names which of `host`, `port` and
-      `connect_timeout` changed, but not to what, so an operator reading the log has to open
-      the TOML to find out. `port 11435 -> 8080` costs one f-string.
+- [ ] **Old and new values in the reload warning.** It named which of `host`, `port` and
+      `connect_timeout` changed, but not to what, so an operator reading the log had to open
+      the TOML to find out. Now `port 11435 -> 8080, connect_timeout 10 -> 30`, which cost one
+      f-string.
+
+## Next
+
+Nothing agreed. Everything that was is in the section above, built and not yet released.
 
 ## Considered and declined
 

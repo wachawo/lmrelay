@@ -2,9 +2,9 @@
 
 The [README](https://github.com/wachawo/lmrelay/blob/main/README.md) covers installation and
 usage. This document covers the config file, the environment, the state file, autostart, the
-limits, moving a whole configuration between machines, the behaviour that is not obvious from
-the outside, what every message the relay prints means, and how to have fail2ban act on
-refused credentials.
+limits, moving a whole configuration between machines, what a Prometheus scrape of `/metrics`
+holds, how to read `lmrelay.log`, the behaviour that is not obvious from the outside, what
+every message the relay prints means, and how to have fail2ban act on refused credentials.
 
 **A setting is a path, and a path has three spellings.** `limits.total.concurrent` is
 `[limits.total] concurrent` in the file, `LMRELAY_LIMITS_TOTAL_CONCURRENT` in the environment,
@@ -1022,8 +1022,16 @@ manager owns it.
 | `connect_timeout` | `lmrelay restart` | The shared httpx client is already open and carries the timeout; closing it to re-time would abort every stream being relayed through it. |
 
 The reload log names whichever of `host`, `port` and `connect_timeout` differs from what the
-running relay started with, and says a restart applies them. They are named individually, so
-a changed port does not hide an unchanged timeout.
+running relay started with, gives the old value and the new one, and says a restart applies
+them. They are named individually, so a changed port does not hide an unchanged timeout:
+
+```text
+lmrelay: port 11435 -> 8080, connect_timeout 10 -> 30 in /home/u/.lmrelay/lmrelay.toml but a reload cannot apply that: the socket is already bound and the client already open; restart to apply
+```
+
+Both values, because the running relay is the only thing that knows what it bound with. The
+file has the new number, so a warning naming only the key would send you to the file to read
+the half of the answer the file already has.
 
 The keys above them are applied without comment, except the three that say what they moved
 from and to, so that a reload can be read back afterwards:
@@ -1047,6 +1055,269 @@ delivered, not acknowledged, so `lmrelay reload` and every command that reloads 
 behalf stop at what they did. The outcome is in `lmrelay.log`: a discarded reload is logged
 whatever the level, an accepted one at `INFO` or below.
 
+## Metrics
+
+`GET /metrics` answers a Prometheus scrape: aggregate counters in the text exposition format,
+served as `text/plain; version=0.0.4; charset=utf-8`. That `0.0.4` is the version of the
+exposition format, which Prometheus parses by, and not lmrelay's own; the two are the same
+number today by coincidence and will diverge.
+
+Nothing configures it. There is no key in `lmrelay.toml`, and none in the environment, to
+turn it on, turn it off or move it. It is one route, written by hand rather than with
+`prometheus_client`, because the dependency count is a documented property of this project
+and there are still four.
+
+### It needs a credential, and `/healthz` does not
+
+This is the one way the two endpoints differ, and the reason is what each one tells a
+stranger. `/healthz` says a process is alive, which is nothing. `/metrics` says how the relay
+is used, what it is in front of, how busy it is at this instant and how often it refuses
+people. So it sits behind the same credential as everything else, and a scrape with no token
+is refused with the same 401 and the same message any other request would get.
+
+Prometheus takes a bearer token in a scrape job, so the credential costs one stanza of scrape
+config, below.
+
+With `lmrelay auth false` there is no credential to require, and `/metrics` is then as open as
+every other path, to whoever can reach the port. That is the same fact the exposure warning
+is already about, with one more thing behind it: on a non-loopback bind with auth off, a
+stranger can now read how the relay is used as well as use it. Nothing new is exposed on
+loopback, and nothing is exposed at all once auth is on.
+
+Only `GET` is the scrape. Every other method on `/metrics` is relayed to the upstream like
+any other path, exactly as with `/healthz`, because an upstream may well have a `/metrics` of
+its own and the relay does not get to decide otherwise.
+
+### What is in a scrape
+
+| Metric | Type | Labels | Answers |
+|---|---|---|---|
+| `lmrelay_build_info` | gauge | `version` | Which lmrelay these numbers came from. Always `1`; the version is the label, which is how a version is exposed in this format. |
+| `lmrelay_requests_total` | counter | `upstream`, `status` | How much traffic the relay answered, split by the upstream it chose and the status it returned. Includes the relay's own answers: a 400 for a wrong-dialect path, a 429 from a limit and a 500 from a fault in the relay are all requests it answered. A 401 is not here, because no upstream was chosen; it is in `lmrelay_auth_failures_total`. |
+| `lmrelay_request_ttfb_seconds` | histogram | `upstream` | Seconds from the request arriving to the upstream's first byte, so it carries the relay's own admission work as well, which is microseconds. The same measure the access log prints in brackets, unrounded. Written as `_bucket`, `_sum` and `_count`, as the format requires. |
+| `lmrelay_requests_in_flight` | gauge | none | How many answers are being relayed right now. A streamed answer counts until its last byte reaches the caller, which is the same lifetime `[limits.<scope>] concurrent` bounds. |
+| `lmrelay_refusals_total` | counter | `scope`, `kind` | How often a limit turned somebody away. `scope` is `per_token`, `per_address` or `total`; `kind` is `rate` or `concurrent`. These are the six numbers in `[limits.*]`, counted. |
+| `lmrelay_auth_failures_total` | counter | none | How often a credential was missing or wrong. Unlabelled, and deliberately not also counted as a request: it never reached the point where an upstream is chosen. |
+| `lmrelay_upstream_errors_total` | counter | `upstream`, `type` | How often the relay failed to reach an upstream at all, named by its httpx exception type, usually `ConnectError` or `ConnectTimeout`. A stream that breaks after the headers arrived is not here: the caller already had the upstream's own status, so that failure belongs to the answer rather than to getting there. |
+
+The histogram's bounds are seconds, and they are not the Prometheus defaults:
+
+```text
+0.05  0.1  0.25  0.5  1.0  2.5  5.0  10.0  30.0  60.0  120.0  300.0  +Inf
+```
+
+The defaults stop at 10, and a local model that is not resident has to be read off disk
+before it can produce a token, which is tens of seconds for a large one and minutes on a cold
+cache. Under the default bounds almost every local answer lands in `+Inf`, where the
+histogram has recorded that something took longer than ten seconds and nothing else at all.
+The low end still has to resolve a hosted provider answering in well under a second, so the
+range spans four orders of magnitude and is coarse in the middle on purpose. The questions it
+is built for are "was that a hosted answer or a local one" and "did a model have to load",
+not "3.4s or 3.6s".
+
+Only a request an upstream actually answered is timed. A dialect refusal costs microseconds
+and a refused request costs the price of refusing it, so counting either as a time to first
+byte would pull the distribution down until the number you read is this relay's own overhead
+rather than a model's first token. Both are still counted in `lmrelay_requests_total`; they
+are simply not in the histogram. A connection that failed is not timed either, for the same
+reason: that elapsed time is a connect timeout, not a first token. Nor is a 500 the relay
+answered with before an upstream got a chance to; one raised after the upstream had already
+answered is timed, because by then the elapsed time is a real first byte.
+
+What the histogram measures is when the upstream's response headers arrive, and for one kind
+of caller that is not the first token at all. An upstream streaming an answer sends its
+headers with the first token. The same upstream answering a request with `"stream": false`
+sends them only once the whole answer is finished, because until then it has nothing to send.
+Measured against one Ollama, one model and one path: 0.15s streaming, 7.4s not. Both land in
+the same `{upstream="ollama"}` histogram and nothing separates them, because the `stream`
+flag is in the request body and the relay does not read request bodies, which is the same
+reason there is no model label. So a distribution with two humps in it is two kinds of caller
+before it is anything about load, and the 7.4s hump is not a model that had to be loaded.
+
+A labelled series appears at its first sample rather than being declared up front, so a
+status this relay has never returned has no line at all, instead of a zero that reads as
+"measured, and it did not happen". The three families with no labels are always there:
+`lmrelay_build_info`, `lmrelay_requests_in_flight` and `lmrelay_auth_failures_total`, the
+last two starting at `0`. So the first scrape after a restart is this, and it describes what
+the relay will measure rather than answering with a nearly empty page:
+
+```text
+# HELP lmrelay_build_info The version of the relay these counters came from, as a label on a constant 1.
+# TYPE lmrelay_build_info gauge
+lmrelay_build_info{version="0.0.4"} 1
+# HELP lmrelay_requests_total Requests the relay answered, by the upstream chosen and the status returned.
+# TYPE lmrelay_requests_total counter
+# HELP lmrelay_request_ttfb_seconds Seconds from a request arriving to the upstream's first byte, by upstream.
+# TYPE lmrelay_request_ttfb_seconds histogram
+# HELP lmrelay_requests_in_flight Answers being relayed right now, counted until the last byte of each reaches the caller.
+# TYPE lmrelay_requests_in_flight gauge
+lmrelay_requests_in_flight 0
+# HELP lmrelay_refusals_total Requests refused by a limit, by the scope that refused and which of its measures.
+# TYPE lmrelay_refusals_total counter
+# HELP lmrelay_auth_failures_total Requests refused for a missing or invalid credential.
+# TYPE lmrelay_auth_failures_total counter
+lmrelay_auth_failures_total 0
+# HELP lmrelay_upstream_errors_total Failures reaching an upstream, by upstream and exception type.
+# TYPE lmrelay_upstream_errors_total counter
+```
+
+A family with `# HELP` and `# TYPE` and nothing under it is valid, and Prometheus reads it as
+a family it has seen no samples of.
+
+### No caller is named anywhere
+
+There is no per-token label, no per-address label and no per-caller label of any other kind.
+Two reasons, and both are load-bearing.
+
+It is what keeps **"No token accounting, usage database or budgets"** in [Not in
+scope](#not-in-scope) true. That sentence is a promise about what this relay declines to
+know, and a counter broken out by credential is exactly the accounting it forswears, whatever
+it is called.
+
+And a label per credential is unbounded cardinality. Every token that ever presented itself
+would become its own time series, kept by whatever scrapes this, forever, including the ones
+you revoked and the ones that were guesses. The aggregate answers the operational question
+anyway: `lmrelay_refusals_total{scope="per_token"}` says a token limit is biting without
+saying whose, and the caller you actually want is in `lmrelay.log`, with an address and a
+request id.
+
+There is no model name either, for a different reason: the model is in the request body, both
+SDKs serialise it last, and the relay does not read request bodies. See [Why a client cannot
+cross dialects](#why-a-client-cannot-cross-dialects).
+
+### The counters reset when the relay restarts
+
+They live in memory in this process and nowhere else. A restart puts every one of them back
+to zero, and that is the intended behaviour, not a gap. Prometheus recognises a counter reset
+and reads across it, so `rate()` and `increase()` stay correct over a restart.
+
+The alternative is a number that survives a restart, which is a file on disk written on the
+hot path, which is the usage database this project says it is not. `lmrelay_build_info`
+carries the version, so a reset that coincides with a version change is legible as an
+upgrade.
+
+A reload does **not** reset them, unlike the rate limiters, which are rebuilt when their
+numbers move. These are what a chart is drawn from, and a counter that went back to zero
+because somebody edited a config file would read as a restart that never happened.
+
+Counted in one process, exactly as the limits are. Two relays beside each other report two
+sets of numbers and neither is the total. Under several uvicorn workers a scrape reaches one
+worker and reports that worker.
+
+### A scrape does not appear in its own numbers
+
+A successful scrape is not counted in `lmrelay_requests_total`, is not timed, is not counted
+as in flight, and writes no line to the access log. Otherwise every poll would move a counter
+it is itself reporting, the series would grow by one on each poll with nothing behind it, and
+`lmrelay.log` would fill with a line every fifteen seconds about the monitoring rather than
+about the relay.
+
+A scrape refused for a missing or bad credential **is** logged, and does count in
+`lmrelay_auth_failures_total`. That one is about the relay: it is either a misconfigured job
+or somebody who is not the monitoring.
+
+Nor does a scrape spend anybody's allowance. `/metrics` is its own route, and admission
+happens in the relay route, so a poll every fifteen seconds cannot use up the rate limit of
+whichever address the monitoring happens to share. It reaches no upstream either.
+
+### A scrape job
+
+`bearer_token` holds a caller token, one of the values `lmrelay token list --show` prints:
+
+```yaml
+scrape_configs:
+  - job_name: lmrelay
+    scheme: http
+    bearer_token: "REPLACE-WITH-A-CALLER-TOKEN"
+    static_configs:
+      - targets: ["127.0.0.1:11435"]
+```
+
+`bearer_token_file` takes a path instead, and is worth the extra file: it keeps the
+credential out of `prometheus.yml`, which is usually world-readable, and lets you rotate the
+token with `lmrelay token gen` without editing the scrape config.
+
+```yaml
+scrape_configs:
+  - job_name: lmrelay
+    scheme: http
+    bearer_token_file: /etc/prometheus/lmrelay.token
+    static_configs:
+      - targets: ["127.0.0.1:11435"]
+```
+
+The default `metrics_path` is already `/metrics`, so there is nothing to set. If nginx sits
+in front for TLS, set `scheme: https` and point `targets` at it; the relay is reached the same
+way every other caller reaches it.
+
+Check it by hand first, which is also how you read these numbers when there is no Prometheus:
+
+```bash
+curl http://127.0.0.1:11435/metrics -H "Authorization: Bearer $LMRELAY_TOKEN"
+```
+
+Two scrapes of an unchanged relay are the same bytes, so `diff` between two of them is a
+usable way to see what happened in between.
+
+## The request id in the log
+
+Every line the relay writes carries a short id in brackets, after the logger name and before
+the message:
+
+```text
+2026-08-31 10:25:34.554 [INFO]: (lmrelay.app) [c4eacac4] 127.0.0.1 GET /api/tags -> ollama: 200 (0.00s)
+```
+
+It exists for one job: tying a caller's request to what that request caused, when both land
+in `lmrelay.log` in the middle of everybody else's traffic. A 502 and the access line that
+reports it share an id, so the upstream failure a few lines above a request line is provably
+the one that request caused, rather than one that merely happened at about the same time.
+
+```text
+2026-08-31 10:25:34.552 [WARNING]: (lmrelay.app) [7b0e41d5] lmrelay: upstream 'ollama' at http://127.0.0.1:11434 is unreachable: ConnectError
+2026-08-31 10:25:34.554 [INFO]: (lmrelay.app) [7b0e41d5] 127.0.0.1 GET /api/chat -> ollama: 502 (0.01s)
+```
+
+The two levels are not the same, and it matters for reading the pair. The access line is
+`INFO` whatever status it carries, because it is the same line every served request writes;
+only a limit refusal raises it to `WARNING`. So at `log_level = "WARNING"` the first of those
+two lines is written and the second is not, and the id has nothing left to pair with. Run at
+`INFO` if you want the pairing.
+
+The relay's own 500 is the other way round, and pairs the same way: the access line comes
+first at `INFO`, and the traceback that follows it is `ERROR`, written from above the
+middleware on the way out.
+
+Worth knowing about it:
+
+- **It is not a distributed trace id.** It is generated by this relay, for this relay's log,
+  and it is neither read from an inbound header nor sent to the upstream. Nothing correlates
+  it with anything your client or your provider recorded. If you need that, you need tracing,
+  which is a dependency and is not here.
+- **It is not returned to the caller**, in a header or anywhere else, so a caller cannot
+  quote it at you.
+- **Eight hex characters**, from `secrets.token_hex(4)`. That is a page of log an operator
+  greps, not a key: four random bytes collide at around sixty thousand requests by the
+  birthday bound, which in that setting is a coincidence rather than a wrong answer, and the
+  id is never used to look anything up.
+- **A line the relay did not write for a request of its own carries `-`.** Startup, shutdown,
+  a reload, the exposure warning, and everything uvicorn says on its own account. At
+  `log_level = "DEBUG"` the connection-level chatter from `httpcore` carries it too, a dozen
+  lines per request wrapped around the access line: those lines do belong to a request, but
+  they come from inside the HTTP client, which is never told which. That is also all `DEBUG`
+  adds, since the relay writes no debug lines of its own.
+- **A scrape of `/metrics` and a `/healthz` check write no line at all**, so neither has an id
+  to carry. A scrape refused for a bad credential does write one, and carries an id like any
+  other refusal.
+- **Command output has no id and no timestamp.** `lmrelay status` and `lmrelay token list` are
+  tables, and a table is a table only without a timestamp and a logger name in front of every
+  row. A command is not serving anybody's request.
+
+The id is a field in the log format, which means it appears in `lmrelay.log` for every relay
+started by `run`, `serve` or a service manager. Anything that parses that file by position,
+a fail2ban filter above all, has to account for it: see [Banning repeat
+offenders](#banning-repeat-offenders-with-fail2ban).
+
 ## Behaviour worth knowing
 
 - **Nothing is buffered.** Request and response bodies stream in both directions; the
@@ -1060,7 +1331,13 @@ whatever the level, an accepted one at `INFO` or below.
   stripped from every forwarded request before the upstream's own headers are applied, so
   an upstream with no configured headers receives no credential at all.
 - **The elapsed time in the access log is time to first byte**, not the duration of a
-  streamed answer.
+  streamed answer. The same measure is the histogram behind
+  `lmrelay_request_ttfb_seconds`.
+- **Every log line carries a request id**, and lines about one request share it. `-` marks a
+  line the relay did not write for a request of its own.
+- **`GET /metrics` is a Prometheus scrape and needs a credential**, which is the one way it
+  differs from `/healthz`. It touches no upstream, spends no allowance and writes no access
+  line.
 - **The pidfile is written by the relay itself**, whether it was started by `run`, by
   `serve` or by a service manager, so `status`, `stop` and `reload` have one place to look
   regardless. A pidfile naming a dead process is overwritten silently; one naming a live
@@ -1264,7 +1541,7 @@ Logged and then ignored. Nothing is refused and nothing stops.
 | `lmrelay: [limits.per_token] is configured but auth is off, so nothing is keyed by a token. [limits.per_address] and [limits.total] still apply. Run 'lmrelay auth true'.` | any command that loads the config | A per-credential limit is set on a relay where there is no credential to key it on. | Nothing, if auth is going on later: the scope becomes live the moment it does. Otherwise move the number to `[limits.per_address]` or `[limits.total]`. |
 | `lmrelay: the environment sets <paths>, overriding <config>` | relay startup, `lmrelay reload`, any command that loads the config | An environment variable and the file both name the same key, and the environment is winning. Only genuine shadows are named, so this line is about the actual confusion rather than about the whole environment. | Nothing, if that was the intent. Otherwise unset the variable. The environment is re-read on every reload, so a shell export made after the relay started is not in it. |
 | `lmrelay: provider(s) <names> from state.json shadow the [upstream.*] of the same name in <config>` | any command that loads the config | A CLI-added provider is winning over a hand-written table. | Nothing, if that was the intent. Otherwise `lmrelay provider delete <name>`. |
-| `lmrelay: <fields> changed in <config> but a reload cannot apply that: the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout. |
+| `lmrelay: <field> <old> -> <new>, ... in <config> but a reload cannot apply that: the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with, e.g. `lmrelay: port 11435 -> 8080, connect_timeout 10 -> 30 in ...`. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout, and each carries both values, because the running relay is the only thing that knows what it bound with. |
 | `<error message>; keeping the running config` | relay log, on reload | The re-read config or state did not parse. The relay is still serving the one it already had. | Fix what the message names, then `lmrelay reload` again. |
 | `lmrelay: pid <N> ignored SIGTERM for 10s; forcing it with SIGKILL` | `lmrelay stop`, `restart` | The relay did not exit on SIGTERM inside the stop timeout. | Nothing: the stop continues. A relay that needs SIGKILL every time is worth reading the log about. |
 | `lmrelay: pid <N> is still there after SIGKILL` | `lmrelay stop`, `restart` | The process survived SIGKILL and the kernel has not finished tearing it down. | Check the process by hand before starting another relay on the same port. |
@@ -1295,6 +1572,12 @@ Logged and then ignored. Nothing is refused and nothing stops.
 - A **dialect refusal is charged nothing** either. Nothing forwarded is nothing charged, which
   costs the relay a client that can loop against a 400 without being rate limited, and buys
   one rule with no exception in it.
+- Every line above carries a **request id** between the logger name and the message, and the
+  lines about one request share it: `[c4eacac4] 127.0.0.1 GET /api/tags -> ollama: 200`. A
+  line that belongs to no request, such as a reload or the exposure warning, carries `-`.
+- A **scrape of `/metrics` writes no line**, and a scrape refused for a bad credential writes
+  the ordinary 401 line. Everything the relay refuses is still counted in
+  `lmrelay_auth_failures_total` and `lmrelay_refusals_total`, whether it was logged or not.
 
 ## Troubleshooting
 
@@ -1310,7 +1593,13 @@ Logged and then ignored. Nothing is refused and nothing stops.
 | An occasional request takes tens of seconds before its first token | Ollama evicted a resident model to load the one this request named | `curl 127.0.0.1:11434/api/ps` first: if only one model stays resident, VRAM binds and `OLLAMA_MAX_LOADED_MODELS` will not help, so cut `num_ctx` or the rotation instead. If several stay but fewer than you rotate through, raise it to cover them. No relay setting affects either |
 | 400 naming two dialects | The path belongs to a dialect the chosen upstream does not serve | Check the path prefix against the compatibility table in the README |
 | A token or provider change had no effect | The relay was signalled but discarded what it re-read, or nothing was running | Read `lmrelay.log`, then `lmrelay reload` |
-| A `host`, `port` or `connect_timeout` change had no effect | A reload cannot rebind a socket or re-time an open client | `lmrelay restart` |
+| A `host`, `port` or `connect_timeout` change had no effect | A reload cannot rebind a socket or re-time an open client | The warning names all three with both values, `port 11435 -> 8080`; then `lmrelay restart` |
+| A Prometheus scrape comes back 401 | `/metrics` needs a credential, unlike `/healthz` | Give the job a `bearer_token` or `bearer_token_file` holding a value from `lmrelay token list --show`. A fail2ban jail will ban the polling host long before you notice otherwise |
+| A labelled family shows `# HELP` and `# TYPE` and no numbers | The relay has served nothing of that kind since it started, so the series does not exist yet | Nothing: a labelled series is created at its first sample. Send one request and scrape again |
+| `lmrelay_requests_total` carries a `status="500"` | A fault in lmrelay itself. An upstream that cannot be reached is a 502, and a status the upstream chose is the upstream's | Read `lmrelay.log`: the access line names the caller, the path and the upstream, and the traceback on the line after it carries the same request id |
+| `lmrelay_request_ttfb_seconds` has two humps | Some callers send `"stream": false`, and an upstream answering one of those sends its headers only when the whole answer is done | Nothing to set. The relay cannot tell the two apart: the flag is in the request body, which it does not read |
+| Every counter went back to zero | The relay restarted; they live in memory | Nothing. Prometheus reads across a counter reset. `lmrelay_build_info` says whether the version changed with it |
+| `rate()` shows a drop that `lmrelay.log` does not | Two relays, or several uvicorn workers, each counting their own | Scrape each one as its own target; a scrape reaches one process and reports that process |
 | `serve` reports that the relay did not start | The config or the bind failed inside the detached process | Read `lmrelay.log` |
 | `status` says running but not responding | The pidfile names a live process, but `/healthz` did not answer on the recorded address | Read `lmrelay.log`, then `lmrelay restart` |
 | A start refuses with `already running` | A relay, or a service manager unit, already owns the port | `lmrelay status` names the pid and the manager; then `lmrelay restart` |
@@ -1320,8 +1609,13 @@ Logged and then ignored. Nothing is refused and nothing stops.
 Every refused credential is one line in the relay's own log, carrying the caller's address:
 
 ```text
-2026-08-31 10:25:34.595 [WARNING]: (lmrelay.app) 203.0.113.7 GET /api/tags -> -: 401 (auth)
+2026-08-31 10:25:34.595 [WARNING]: (lmrelay.app) [b9271105] 203.0.113.7 GET /api/tags -> -: 401 (auth)
 ```
+
+The bracketed field before the address is the [request id](#the-request-id-in-the-log). It
+sits between the logger name and the address, so a filter written against the older format,
+which had the address immediately after `(lmrelay.app)`, matches nothing at all. Anything of
+your own that reads this file by position needs the same edit.
 
 A filter and a jail that read it ship with the source:
 
@@ -1340,6 +1634,13 @@ and is deliberately not matched: the caller whose key stopped working is not an 
 is a limit refusal matched, in any of the six scopes: a caller getting 429s is a misconfigured
 client far more often than an attacker, and it is already being refused.
 
+A Prometheus scrape with a wrong or missing token is refused like any other request, and its
+line looks like any other, `GET /metrics -> -: 401 (auth)`. A job polling every fifteen
+seconds hits the shipped `maxretry = 5` in seventy-five seconds, well inside the ten-minute
+`findtime`, so a misconfigured `bearer_token` bans the monitoring host. Fix the job rather
+than the filter: a scrape refused at the door is a credential the relay does not accept,
+which is exactly what this jail is for.
+
 ### The jail ships disabled
 
 `forwarded_allow_ips` is `"*"`, so uvicorn takes the client address from `X-Forwarded-For`
@@ -1356,8 +1657,13 @@ proxy. A relay listening on `0.0.0.0` must not run it.
 ## Not in scope
 
 No failover, retry or load balancing. No dialect translation. No model catalogue or
-aliasing. No token accounting, usage database or budgets. No admin API, dashboard or
-metrics. No caching. No TLS: put nginx in front.
+aliasing. No token accounting, usage database or budgets. No admin API or dashboard.
+No caching. No TLS: put nginx in front.
+
+**No token accounting, usage database or budgets** is why [`/metrics`](#metrics) carries no
+per-token label. Aggregate counters that name nobody are not accounting, and that is the
+line: the relay will say how often a token limit refused somebody, and will not say whose
+token it was or how much anyone has spent.
 
 The three scopes above are the whole of the limits subject, and these were considered and left
 out:
@@ -1370,13 +1676,15 @@ out:
 - **Anything per model.** The model is in the request body, both SDKs serialise it last, and
   the relay does not read request bodies. `OLLAMA_MAX_LOADED_MODELS` remains the answer.
 - **Shared counters.** No Redis, no database, no second process. Every scope is counted in one
-  process, `[limits.total]` included.
+  process, `[limits.total]` included. So are the numbers behind `/metrics`.
 - **`Retry-After` on a concurrency refusal**, and **503 anywhere**. Both for the reasons given
   in the limits section.
-- **Live counters in `lmrelay status`.** The `limits` line says what the numbers are, which is
-  read from the same files the relay reads. Showing what is in flight against them right now
-  is a different thing: it needs the CLI to ask the running process, which needs an admin
-  endpoint, which is the first line of this section.
+- **Live counters in `lmrelay status`.** The `limits` line says what the numbers are, read
+  from the same files the relay reads, and `status` reports rather than asserts. What is in
+  flight against them right now is a different question, and it is answered:
+  `lmrelay_requests_in_flight` on [`/metrics`](#metrics). Putting it in `status` as well would
+  make the CLI a second client of that endpoint, with a credential to find and a running
+  relay to require, for a number `curl` already prints.
 - **`lmrelay limits set`.** Limits are settings, settings live in the file, and the CLI does
   not edit `lmrelay.toml`. `lmrelay config import` replaces it wholesale, after a backup, and
   says so.

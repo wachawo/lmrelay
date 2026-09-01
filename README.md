@@ -194,7 +194,9 @@ curl http://127.0.0.1:11435/api/chat \
 ```
 
 `GET /healthz` answers `{"status": "ok"}` without touching an upstream and without a
-credential. Everything else goes through the relay.
+credential. `GET /metrics` answers a Prometheus scrape of aggregate counters and does need
+one, because it says how the relay is used rather than only that it is alive. Everything else
+goes through the relay.
 
 ### Compatibility
 

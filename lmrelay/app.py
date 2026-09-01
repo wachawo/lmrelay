@@ -20,10 +20,21 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 # Local imports
+from lmrelay import __version__
 from lmrelay.config import ConfigError, check_exposure, describe_upstreams, load_config
 from lmrelay.daemon import pid_file, read_pid, recorded_bind, remove_pid, write_pid
 from lmrelay.errors import LmrelayError
-from lmrelay.logging_setup import setup_logging
+from lmrelay.logging_setup import NO_REQUEST, new_request_id, setup_logging
+from lmrelay.metrics import (
+    CONTENT_TYPE,
+    Metrics,
+    count_auth_failure,
+    count_refusal,
+    count_upstream_error,
+    observe_request,
+    render,
+    track_in_flight,
+)
 from lmrelay.ratelimit import (
     SCOPES,
     InflightCounter,
@@ -52,6 +63,10 @@ HEALTH_PATH    = "/healthz"
 # catch-all instead and is relayed, so an exemption by path alone would hand an
 # anonymous caller the default upstream with its credentials attached.
 HEALTH_METHODS = frozenset({"GET"})
+METRICS_PATH   = "/metrics"
+# Read the same way as HEALTH_METHODS above, and for the same reason: this is
+# what the metrics route answers, and every other method on the path is relayed.
+METRICS_METHODS = frozenset({"GET"})
 RELAY_METHODS  = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
@@ -90,6 +105,53 @@ def describe_slots(limits: ScopeLimits) -> str:
     return f"{limits.concurrent} at once" if limits.concurrent > 0 else "off"
 
 
+def log_extra(request: Request) -> dict[str, str]:
+    """The request id, as logging's `extra`, for a line written while serving a request.
+
+    Read off the request rather than out of a context variable, so that the id
+    travels the same way the upstream name already does and nothing has to be
+    reset when a task ends. Defaulted for the same reason the log filter has a
+    default: a line written before the middleware has run must still format.
+    """
+    return {"request_id": getattr(request.state, "request_id", NO_REQUEST)}
+
+
+def record_request(request: Request, client: str, status: int, elapsed: float) -> None:
+    """Count one request the relay answered, and write its one access line.
+
+    Called on both ways out of the middleware, so that the counters and the log
+    agree with what the caller was actually sent. The second way out is the whole
+    reason this is a function rather than the tail of the middleware: an
+    unhandled exception becomes lmrelay's own 500 in a handler that starlette
+    lifts outside the user middleware stack, so it never comes back through
+    `call_next`, and until this it was the one status counted in no family and
+    given no access line at all.
+    """
+    upstream_name = getattr(request.state, "upstream", "-")
+    # A route that refused leaves the measure and the scope it refused on: six
+    # limits answer 429 and only three of them carry a Retry-After, so the line
+    # has to say which. It stands in place of the elapsed time, which for a
+    # request that was never forwarded would only be the cost of refusing it,
+    # and it keeps the refusal to one line, at the level the others use.
+    refused = getattr(request.state, "refused", "")
+    # Timed only when an upstream answered, which is what this flag says. A
+    # dialect refusal, an unreachable host and a fault in the relay all leave a
+    # status and an elapsed time here, and none of the three is a time to first
+    # byte: they are the cost of refusing, of failing to connect, and of failing.
+    forwarded = getattr(request.state, "forwarded", False)
+    observe_request(
+        request.app.state.metrics, upstream_name, status, elapsed if forwarded else None
+    )
+    line = (
+        f"{client} {request.method} {request.url.path} -> {upstream_name}: "
+        f"{status} ({refused or f'{elapsed:.2f}s'})"
+    )
+    if refused:
+        logger.warning(line, extra=log_extra(request))
+    else:
+        logger.info(line, extra=log_extra(request))
+
+
 def caller_scopes(request: Request, config) -> dict[str, str | None]:
     """What each scope counts this request against.
 
@@ -122,14 +184,19 @@ def reload_config(app: FastAPI) -> None:
     # where the first one put it has still not moved the socket, and must say so
     # again. Named individually rather than as one fixed sentence, so an
     # operator who changed the port can tell that connect_timeout did not drift.
+    #
+    # Both values, not just the name: the running relay is the only thing that
+    # knows what it bound with, and a warning that says the port changed sends
+    # the operator to the file to read the half of the answer the file has.
     started = app.state.startup_config
     unapplied = [
-        name for name in ("host", "port", "connect_timeout")
+        f"{name} {getattr(started, name)} -> {getattr(config, name)}"
+        for name in ("host", "port", "connect_timeout")
         if getattr(config, name) != getattr(started, name)
     ]
     if unapplied:
         logger.warning(
-            f"lmrelay: {', '.join(unapplied)} changed in {config.config_path} but a reload "
+            f"lmrelay: {', '.join(unapplied)} in {config.config_path} but a reload "
             f"cannot apply that: the socket is already bound and the client already open; "
             f"restart to apply"
         )
@@ -235,6 +302,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # request has to ask whether it exists. An empty table costs nothing: with
     # `concurrent = 0` no slot is taken at all.
     app.state.inflight = InflightCounter({})
+    # Never rebuilt by a reload, unlike the limiters above: these numbers are
+    # what a chart is drawn from, and a counter that went back to zero because
+    # somebody edited a config file would read as a restart that never happened.
+    # A real restart does reset them, which Prometheus knows how to read across.
+    app.state.metrics = Metrics()
     app.state.http = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=config.connect_timeout, read=None, write=None, pool=None),
     )
@@ -268,14 +340,34 @@ app = FastAPI(title="lmrelay", lifespan=lifespan, docs_url=None, redoc_url=None,
 @app.middleware("http")
 async def log_and_authenticate(request: Request, call_next):
     """Check the caller's credential, then log the request line."""
+    # Set before anything can log, so that every line written while serving this
+    # request carries the same one: the access line at the end, the refusal, and
+    # whatever the route said about an upstream in between. That is the whole
+    # point of it, since all of them land in one file with everybody else's.
+    request.state.request_id = new_request_id()
+
     if request.url.path == HEALTH_PATH and request.method in HEALTH_METHODS:
         return await call_next(request)
 
     client = request.client.host if request.client else "-"
     config = request.app.state.config
     if config.auth_enabled and not check_caller_token(request.headers, config.auth_tokens):
-        logger.warning(f"{client} {request.method} {request.url.path} -> -: 401 (auth)")
+        count_auth_failure(request.app.state.metrics)
+        logger.warning(
+            f"{client} {request.method} {request.url.path} -> -: 401 (auth)",
+            extra=log_extra(request),
+        )
         return JSONResponse({"error": "lmrelay: missing or invalid credential"}, status_code=401)
+
+    # Answered above the access log and above the counters, and after the
+    # credential rather than before it, which is the one way this differs from
+    # /healthz. A scrape is not traffic the relay is relaying: counting it would
+    # have every scrape move a counter it is itself reporting, and logging it
+    # would write a line every fifteen seconds about the monitoring rather than
+    # about the relay. An unauthenticated scrape is still refused and still
+    # logged, above, because that one is about the relay.
+    if request.url.path == METRICS_PATH and request.method in METRICS_METHODS:
+        return await call_next(request)
 
     # The limits are not charged here. They are one decision made once, in the
     # relay route, so that a request refused by one scope has not been charged
@@ -286,32 +378,34 @@ async def log_and_authenticate(request: Request, call_next):
     # wrong-dialect path is no longer rate limited. It costs microseconds per
     # 400 and cannot touch a model, and fail2ban is the answer if it matters.
     start_time = time.monotonic()
-    response: Response = await call_next(request)
+    try:
+        response: Response = await call_next(request)
+    except Exception:
+        # A fault in the relay itself, on its way to the 500 handler below. It is
+        # recorded here because that handler runs outside this middleware and its
+        # answer never returns through the call above, so without this the one
+        # error class caused by the relay rather than by an upstream is the one
+        # class that moves no counter and leaves no access line: an alert on
+        # `status=~"5.."` would catch every 502 and never a 500, and look like it
+        # worked. The status is the one handle_exception answers with.
+        #
+        # Exception and not BaseException: a caller that hangs up before the
+        # upstream answers cancels this task, and a cancelled request was
+        # answered with nothing at all rather than with a 500.
+        record_request(request, client, 500, time.monotonic() - start_time)
+        raise
     # For a streamed response the handler returns once the upstream headers
     # arrive, so this is time to first byte, not the duration of the answer.
-    ttfb = time.monotonic() - start_time
-    upstream_name = getattr(request.state, "upstream", "-")
-    # A route that refused leaves the measure and the scope it refused on: six
-    # limits answer 429 and only three of them carry a Retry-After, so the line
-    # has to say which. It stands in place of the elapsed time, which for a
-    # request that was never forwarded would only be the cost of refusing it,
-    # and it keeps the refusal to one line, at the level the others use.
-    refused = getattr(request.state, "refused", "")
-    line = (
-        f"{client} {request.method} {request.url.path} -> {upstream_name}: "
-        f"{response.status_code} ({refused or f'{ttfb:.2f}s'})"
-    )
-    if refused:
-        logger.warning(line)
-    else:
-        logger.info(line)
+    record_request(request, client, response.status_code, time.monotonic() - start_time)
     return response
 
 
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception) -> JSONResponse:
     """Report anything unhandled as lmrelay's own 500 rather than a bare traceback."""
-    logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+    logger.error(
+        f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}", extra=log_extra(request)
+    )
     return JSONResponse({"error": f"lmrelay: {type(exc).__name__}: {str(exc)}"}, status_code=500)
 
 
@@ -319,6 +413,23 @@ async def handle_exception(request: Request, exc: Exception) -> JSONResponse:
 async def healthz() -> dict[str, str]:
     """Relay-local liveness. Does not touch any upstream and needs no credential."""
     return {"status": "ok"}
+
+
+@app.get(METRICS_PATH)
+async def metrics(request: Request) -> Response:
+    """The Prometheus scrape: aggregate counters, behind the same credential as everything else.
+
+    Not exempt from authentication the way /healthz is, and what separates them
+    is what each tells a stranger: /healthz says a process is alive, this says
+    how the relay is used and how busy it is right now. Prometheus takes a
+    `bearer_token` in a scrape job, so the credential costs an operator one line
+    of scrape config.
+
+    Its own route rather than a branch in the relay, which is also what keeps it
+    out of the limits: a scrape every fifteen seconds must not spend the
+    allowance of whichever address the monitoring happens to share.
+    """
+    return Response(render(request.app.state.metrics, __version__), media_type=CONTENT_TYPE)
 
 
 async def relay_body(
@@ -390,6 +501,7 @@ async def relay_request(request: Request) -> Response:
         # per request, and a second line from this route would say the same
         # thing again. It logs this one as a refusal, and names the scope.
         request.state.refused = f"{refusal.kind}, {refusal.scope}"
+        count_refusal(request.app.state.metrics, refusal.scope, refusal.kind)
         headers = None
         if refusal.kind == "rate":
             # Whole seconds, rounded up: the header takes no fractions, and
@@ -404,6 +516,13 @@ async def relay_request(request: Request) -> Response:
             headers=headers,
         )
 
+    # From here to the release is what "in flight" means, and it is wrapped
+    # around the release rather than counted beside it so the gauge cannot
+    # outlive the slots: every way out below already gives the slots back.
+    # After the refusal above, so that a refused request is never counted as
+    # being carried by a relay that never carried it.
+    release = track_in_flight(request.app.state.metrics, release)
+
     try:
         # stream=True returns as soon as the headers arrive and leaves the body
         # unread; the context-manager form would close the connection before the
@@ -411,15 +530,20 @@ async def relay_request(request: Request) -> Response:
         upstream_response = await http.send(upstream_request, stream=True)
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
         release()
+        count_upstream_error(request.app.state.metrics, upstream.name, type(exc).__name__)
         message = (
             f"lmrelay: upstream '{upstream.name}' at {upstream.base_url} "
             f"is unreachable: {type(exc).__name__}"
         )
-        logger.warning(message)
+        logger.warning(message, extra=log_extra(request))
         return JSONResponse({"error": message}, status_code=502)
     except httpx.HTTPError as exc:
         release()
-        logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}")
+        count_upstream_error(request.app.state.metrics, upstream.name, type(exc).__name__)
+        logger.error(
+            f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}",
+            extra=log_extra(request),
+        )
         return JSONResponse(
             {"error": f"lmrelay: upstream '{upstream.name}' failed: {type(exc).__name__}"},
             status_code=502,
@@ -431,6 +555,12 @@ async def relay_request(request: Request) -> Response:
         # has to happen here or not at all.
         release()
         raise
+
+    # The upstream has answered, so the elapsed time the access log is about to
+    # measure is a real time to first byte and belongs in the histogram. Set
+    # here rather than inferred from the status, because an upstream is entitled
+    # to answer 400 or 502 itself and those answers were still relayed.
+    request.state.forwarded = True
 
     try:
         return StreamingResponse(

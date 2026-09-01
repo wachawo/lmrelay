@@ -196,6 +196,8 @@ curl http://127.0.0.1:11435/api/chat \
 ```
 
 `GET /healthz` किसी upstream को छुए बिना और बिना credential के `{"status": "ok"}` लौटाता है।
+`GET /metrics` समुच्चित (aggregate) काउंटरों का Prometheus scrape लौटाता है और उसे credential
+चाहिए ही, क्योंकि वह बताता है कि relay कैसे इस्तेमाल हो रहा है, न कि सिर्फ़ यह कि वह चल रहा है।
 बाक़ी सब कुछ relay से होकर जाता है।
 
 ### संगतता

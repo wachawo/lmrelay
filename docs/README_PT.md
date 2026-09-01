@@ -199,7 +199,9 @@ curl http://127.0.0.1:11435/api/chat \
 ```
 
 `GET /healthz` responde `{"status": "ok"}` sem tocar em nenhum upstream e sem credencial.
-Todo o resto passa pelo relay.
+`GET /metrics` responde a um scrape do Prometheus com contadores agregados e exige uma,
+porque diz como o relay é usado e não apenas que ele está vivo. Todo o resto passa pelo
+relay.
 
 ### Compatibilidade
 

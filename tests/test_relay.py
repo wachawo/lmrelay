@@ -1126,8 +1126,20 @@ class TestReloadingInPlace:
         write_config(tmp_path, moved)
         with caplog.at_level(logging.WARNING):
             reload_config(app)
-        assert "port changed" in caplog.text
+        assert "port 11435 -> 11439" in caplog.text
         assert "connect_timeout" not in caplog.text
+
+    def test_and_it_quotes_the_value_it_is_still_bound_to(self, authed, tmp_path, caplog):
+        """The old value is the half of this only the running relay knows. Named
+        alone, the warning sent an operator to the file to read what they had
+        just written there, and left the number the socket is actually on
+        nowhere at all."""
+        from lmrelay.app import app, reload_config
+
+        write_config(tmp_path, config_where("connect_timeout", "42"))
+        with caplog.at_level(logging.WARNING):
+            reload_config(app)
+        assert "connect_timeout 10 -> 42" in caplog.text
 
     def test_and_it_keeps_saying_so_on_every_later_reload(self, authed, tmp_path, caplog):
         """The socket is still where it was bound, so a second reload that leaves
@@ -1142,7 +1154,7 @@ class TestReloadingInPlace:
         caplog.clear()
         with caplog.at_level(logging.WARNING):
             reload_config(app)
-        assert "port changed" in caplog.text
+        assert "port 11435 -> 11439" in caplog.text
 
     def test_and_putting_it_back_stops_the_warning(self, authed, tmp_path, caplog):
         """The other half of the same baseline: a file that once again names the
