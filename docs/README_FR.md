@@ -167,6 +167,7 @@ compris, puis signale un relais en fonctionnement.
 | `lmrelay restart` | l'arrêter, puis le relancer en mode détaché |
 | `lmrelay reload` | relire la configuration sans couper une connexion |
 | `lmrelay status` | ce qui tourne, où, et avec quels upstreams |
+| `lmrelay version` | afficher la version |
 | `lmrelay enable` | démarrer à l'ouverture de session, et démarrer maintenant |
 | `lmrelay disable` | annuler `enable` |
 | `lmrelay auth true\|false` | exiger un identifiant de l'appelant, ou non |

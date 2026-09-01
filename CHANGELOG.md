@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`lmrelay version`**, the command, beside `--version`, the flag. It prints the same line
+  and needs no config file to do it.
 
 ## [0.0.7] - 2026-09-01
 

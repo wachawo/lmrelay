@@ -165,6 +165,7 @@ poi segnala a un relay in esecuzione.
 | `lmrelay restart` | lo arresta, poi lo riavvia in background |
 | `lmrelay reload` | rilegge la configurazione senza far cadere una connessione |
 | `lmrelay status` | cosa è in esecuzione, dove, con quali upstream |
+| `lmrelay version` | stampare la versione |
 | `lmrelay enable` | avvia al login, e avvia subito |
 | `lmrelay disable` | annulla `enable` |
 | `lmrelay auth true\|false` | richiede una credenziale al chiamante, oppure no |

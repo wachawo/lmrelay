@@ -151,6 +151,7 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay restart` | 멈춘 뒤 다시 분리 실행합니다 |
 | `lmrelay reload` | 연결을 끊지 않고 설정을 다시 읽습니다 |
 | `lmrelay status` | 무엇이 어디서 어떤 업스트림으로 실행 중인지 |
+| `lmrelay version` | 버전을 출력 |
 | `lmrelay enable` | 로그인할 때 시작하고, 지금도 시작합니다 |
 | `lmrelay disable` | `enable`을 되돌립니다 |
 | `lmrelay auth true\|false` | 호출자 자격 증명을 요구하거나, 요구하지 않습니다 |

@@ -151,6 +151,7 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay restart` | 停止して、再びデタッチで起動する |
 | `lmrelay reload` | 接続を落とさずに設定を読み直す |
 | `lmrelay status` | 何が、どこで、どのアップストリームで動いているか |
+| `lmrelay version` | バージョンを表示する |
 | `lmrelay enable` | ログイン時に起動し、いま起動する |
 | `lmrelay disable` | `enable` を取り消す |
 | `lmrelay auth true\|false` | 呼び出し元に資格情報を要求する、またはしない |

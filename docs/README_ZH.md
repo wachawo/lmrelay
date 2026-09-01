@@ -149,6 +149,7 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay restart` | 先停止，再重新以后台方式启动 |
 | `lmrelay reload` | 重新读取配置，不断开任何连接 |
 | `lmrelay status` | 正在运行什么、在哪里运行、用了哪些上游 |
+| `lmrelay version` | 打印版本号 |
 | `lmrelay enable` | 登录时启动，并立即启动 |
 | `lmrelay disable` | 撤销 `enable` |
 | `lmrelay auth true\|false` | 要求调用方出示凭据，或不要求 |

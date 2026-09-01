@@ -10,7 +10,7 @@ import sys
 import pytest
 
 # Local imports
-from lmrelay import cli, daemon, service
+from lmrelay import __version__, cli, daemon, service
 from lmrelay.cli import build_parser
 from lmrelay.config import CONFIG_ENV_VAR, ConfigError, load_config
 from lmrelay.daemon import pid_file, write_pid
@@ -39,6 +39,7 @@ DOCUMENTED = [
     ["restart"],
     ["reload"],
     ["status"],
+    ["version"],
     ["enable"],
     ["disable"],
     ["auth", "true"],
@@ -131,6 +132,20 @@ class TestTheCommandSurface:
     def test_the_auth_switch_takes_only_true_or_false(self):
         with pytest.raises(SystemExit):
             build_parser().parse_args(["auth", "on"])
+
+
+class TestSayingWhichLmrelayThisIs:
+    """`version`, the command, beside `--version`, the flag."""
+
+    def test_it_prints_the_same_line_the_flag_does(self, capsys):
+        run_command(["version"])
+        assert capsys.readouterr().err.strip() == f"lmrelay {__version__}"
+
+    def test_and_needs_no_config_to_do_it(self, tmp_path, monkeypatch):
+        """Asked which lmrelay this is on a machine that has never run `init`,
+        the answer is the version, not a complaint about a missing file."""
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
+        run_command(["version"])
 
 
 class TestTurningAuthOn:

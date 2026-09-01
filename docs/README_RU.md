@@ -164,6 +164,7 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay restart` | остановить и снова запустить в фоне |
 | `lmrelay reload` | перечитать конфиг, не разрывая соединений |
 | `lmrelay status` | что запущено, где и с какими апстримами |
+| `lmrelay version` | показать версию |
 | `lmrelay enable` | запускать при входе в систему и запустить сейчас |
 | `lmrelay disable` | отменить `enable` |
 | `lmrelay auth true\|false` | требовать учётные данные от клиента или не требовать |

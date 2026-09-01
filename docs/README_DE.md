@@ -168,6 +168,7 @@ Kommentare eingeschlossen, und signalisiert danach ein laufendes Relay.
 | `lmrelay restart` | stoppen, dann wieder im Hintergrund starten |
 | `lmrelay reload` | Konfiguration neu einlesen, ohne eine Verbindung zu verlieren |
 | `lmrelay status` | was läuft, wo und mit welchen Upstreams |
+| `lmrelay version` | die Version ausgeben |
 | `lmrelay enable` | beim Login starten und jetzt starten |
 | `lmrelay disable` | `enable` rückgängig machen |
 | `lmrelay auth true\|false` | Zugangsdaten vom Aufrufer verlangen oder nicht |

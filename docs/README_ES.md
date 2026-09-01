@@ -167,6 +167,7 @@ incluidos, y luego avisa a un relay en marcha.
 | `lmrelay restart` | lo detiene y lo vuelve a arrancar en segundo plano |
 | `lmrelay reload` | relee la configuración sin cortar ninguna conexión |
 | `lmrelay status` | qué se está ejecutando, dónde y con qué upstreams |
+| `lmrelay version` | mostrar la versión |
 | `lmrelay enable` | arranca al iniciar sesión, y arranca ahora |
 | `lmrelay disable` | deshace `enable` |
 | `lmrelay auth true\|false` | exigir una credencial a quien llama, o no |

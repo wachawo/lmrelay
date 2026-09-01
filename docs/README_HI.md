@@ -164,6 +164,7 @@ command `lmrelay.toml` में लिखती है और बाकी फ�
 | `lmrelay restart` | उसे रोकती है, फिर दोबारा detached शुरू करती है |
 | `lmrelay reload` | कोई connection गिराए बिना config दोबारा पढ़ती है |
 | `lmrelay status` | क्या चल रहा है, कहाँ, किन upstreams के साथ |
+| `lmrelay version` | संस्करण दिखाएँ |
 | `lmrelay enable` | login पर शुरू, और अभी शुरू |
 | `lmrelay disable` | `enable` को पलटती है |
 | `lmrelay auth true\|false` | caller credential माँगे, या न माँगे |

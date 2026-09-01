@@ -166,6 +166,7 @@ incluídos, e então sinaliza um relay em execução.
 | `lmrelay restart` | para o relay e o inicia de novo em segundo plano |
 | `lmrelay reload` | relê a configuração sem derrubar nenhuma conexão |
 | `lmrelay status` | o que está rodando, onde e com quais upstreams |
+| `lmrelay version` | mostrar a versão |
 | `lmrelay enable` | inicia no login e inicia agora |
 | `lmrelay disable` | desfaz `enable` |
 | `lmrelay auth true\|false` | exigir uma credencial de quem chama, ou não |

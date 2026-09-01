@@ -161,6 +161,7 @@ included, then signals a running relay.
 | `lmrelay restart` | stop it, then start it detached again |
 | `lmrelay reload` | re-read the config without dropping a connection |
 | `lmrelay status` | what is running, where, with which upstreams |
+| `lmrelay version` | print the version |
 | `lmrelay enable` | start at login, and start now |
 | `lmrelay disable` | undo `enable` |
 | `lmrelay auth true\|false` | require a caller credential, or do not |

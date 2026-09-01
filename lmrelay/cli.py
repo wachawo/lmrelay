@@ -353,6 +353,13 @@ def show_status(args: argparse.Namespace) -> None:
         logger.info(f"{label:<{STATUS_LABEL_WIDTH}} {value}")
 
 
+def show_version(unused_args: argparse.Namespace) -> None:
+    """The same line `--version` prints, as a command: it is what an operator
+    types when asked which lmrelay they are running, and a flag is not."""
+    setup_logging(plain=True)
+    logger.info(f"lmrelay {__version__}")
+
+
 def enable_service(args: argparse.Namespace) -> None:
     """Register the relay with the platform's service manager and start it."""
     apply_config_env(args)
@@ -945,6 +952,9 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="report the relay's state")
     add_config_option(status_parser)
     status_parser.set_defaults(handler=show_status)
+
+    version_parser = subparsers.add_parser("version", help="print the version")
+    version_parser.set_defaults(handler=show_version)
 
     enable_parser = subparsers.add_parser("enable", help="start the relay at login")
     add_config_option(enable_parser)
