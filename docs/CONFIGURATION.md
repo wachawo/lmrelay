@@ -29,9 +29,11 @@ The split exists so that the CLI never has to rewrite a file you are editing: yo
 in `lmrelay.toml` survive forever. State is JSON rather than a second TOML file because it
 is machine-owned, and because `tomllib` reads but cannot write.
 
-`lmrelay config import` is the one command that writes `lmrelay.toml`, and it replaces it
-wholesale rather than editing it, after moving the existing pair to `lmrelay.toml.bak` and
-`state.json.bak`. The rule is one line: **the CLI edits state, and replaces config.**
+Two commands write `lmrelay.toml`, and neither of them rewrites it. `lmrelay limits set`
+replaces the value on one assignment and leaves every other byte of the file alone,
+comments and all. `lmrelay config import` replaces the whole file, and moves the existing
+pair to `lmrelay.toml.bak` and `state.json.bak` before it does. Everything else the CLI
+writes goes to `state.json`.
 
 `lmrelay init` writes `lmrelay.toml` with mode 0600, because the file is meant to hold
 provider keys. So do `config import` and `config export`.
@@ -218,6 +220,46 @@ cannot be in flight.
 caller spend its whole allowance in the last instant of one window and again in the first
 instant of the next, which is twice the rate across the boundary and exactly the burst a
 limit is meant to prevent.
+
+### Setting them from the command line
+
+`lmrelay limits set` writes into `[limits.<scope>]` in the config file and signals a running
+relay, so the change is live without a restart.
+
+```bash
+lmrelay limits set total --concurrent 6
+lmrelay limits set per_token --rate 2 --burst 5
+lmrelay limits set per_address --rate 0.5     # one request every two seconds
+lmrelay limits set total --rate 0             # 0 turns one off
+```
+
+It reports the scope before and after, in the words `status` prints and the reload log
+uses, so there is nothing to go and check afterwards:
+
+```
+[limits.total] off -> 6 at once in /home/you/.lmrelay/lmrelay.toml.
+Signalled the running relay to re-read it (SIGHUP).
+```
+
+Several keys in one command is one write and one reload. That matters for `rate` and
+`burst`, which are two halves of one decision: setting them in two goes leaves the relay
+running on half of it in between.
+
+**It edits, it does not rewrite.** Only the assignment named changes; the comments, the
+key order, the alignment and any note you wrote beside a number all stay exactly as they
+were. A key the scope has not got is added to it, and a scope the file has not got is
+appended whole.
+
+**Nothing is written until the result has been checked.** The edit is made to a string, and
+that string is parsed and confirmed to carry the numbers you asked for before it reaches the
+disk. So a file this cannot edit, `total = { concurrent = 1 }` written as an inline table
+say, ends as a refusal with the file untouched rather than as a config the relay will not
+start from. Edit that one by hand.
+
+Values go through the same readers the file goes through, so `--rate abc` is refused in the
+words a bad `rate` in the TOML is refused in. There is no `limits show`: `lmrelay status`
+prints what is in force, which is the same question asked of the relay rather than of the
+file.
 
 ### If you set one number, set `[limits.total] concurrent`
 
@@ -1340,6 +1382,18 @@ another version.
 | `lmrelay: provider '<name>' needs a base_url starting with http:// or https://` | `lmrelay provider add` | `--base-url` has no scheme. | Give a full origin. |
 | `lmrelay: provider '<name>' has dialect '<dialect>'; expected one of ollama, openai, anthropic` | `lmrelay provider add` | `--dialect` is not one of the three. | Use `ollama`, `openai` or `anthropic`. |
 | `lmrelay: no provider '<name>' was added by the CLI; known: <list>` | `lmrelay provider delete` | State holds no provider under that name. | Use a name from the list. |
+
+### Limit errors
+
+`lmrelay limits set` is the one command that edits `lmrelay.toml`. Every refusal below
+leaves the file exactly as it was.
+
+| Message | Where | Means | Do |
+|---|---|---|---|
+| `lmrelay: limits set needs at least one of --rate, --burst and --concurrent; pass 0 to turn one off` | `lmrelay limits set` | A scope was named and no number was given. | Pass a number. A command with no flags is not a request to set them to nothing, and it is not read as one. |
+| `lmrelay: no config at <path> to edit; limits live in lmrelay.toml. Run 'lmrelay init' first.` | `lmrelay limits set` | There is no config file to edit. | Run `lmrelay init`. Writing one here would produce a config with limits and no upstream, which the relay refuses to start from. |
+| `lmrelay: editing [limits.<scope>] in <path> would not have left a file this relay can read (<detail>)` | `lmrelay limits set` | The edit was made, parsed, and would not have loaded. Almost always an inline table: `total = { concurrent = 1 }` is legal TOML that a line rewrite cannot reach. | Edit that scope by hand. The file has not been written. |
+| `lmrelay: [limits.<scope>] <key> in <path> would still read <x> rather than <y>` | `lmrelay limits set` | The edit parsed, but the key did not end up carrying the value asked for, so something else in the file is defining it. | Edit that scope by hand. The file has not been written. |
 | `lmrelay: provider '<name>' was not added by the CLI; if it is defined in <config>, remove its [upstream.<name>] section by hand` | `lmrelay provider delete` | The name exists, but `lmrelay.toml` owns it and the CLI does not edit that file. | Delete the `[upstream.<name>]` section yourself, then `lmrelay reload`. |
 | `lmrelay: --header expects NAME=VALUE, got '<pair>'` | `lmrelay provider add` | A `--header` argument had no `=`, or an empty name. | Write `--header Name=value`. Only the first `=` splits, so a value may contain more. |
 

@@ -139,6 +139,7 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | アップストリームを追加、またはローテーションする |
 | `lmrelay provider list [--show]` | ファイルと state の両方から、すべてのアップストリーム |
 | `lmrelay provider delete NAME` | state が所有するプロバイダを削除する |
+| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | あるスコープの上限を設定ファイルに書き込む |
 | `lmrelay config export PATH` | このリレーを再現するのに要るものを全部書き出す |
 | `lmrelay config import PATH` | 設定と state をバンドルで置き換える |
 

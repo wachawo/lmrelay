@@ -144,6 +144,7 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | upstream जोड़ती है या rotate करती है |
 | `lmrelay provider list [--show]` | हर upstream, file से और state से |
 | `lmrelay provider delete NAME` | state के अधिकार वाला provider हटाती है |
+| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | एक scope की सीमाएँ config फ़ाइल में लिखती है |
 | `lmrelay config export PATH` | इस relay को कहीं और दोबारा खड़ा करने भर सब कुछ लिखती है |
 | `lmrelay config import PATH` | config और state को एक bundle से बदल देती है |
 

@@ -30,6 +30,16 @@ log_level        = "INFO"
 # default: a relay in front of one operator's own Ollama has nobody to limit,
 # and a limit nobody chose is a refusal nobody expects.
 #
+# Editable here, or from the command line, which writes into these same tables
+# and signals a running relay:
+#
+#   lmrelay limits set total --concurrent 6
+#   lmrelay limits set per_token --rate 2 --burst 5
+#   lmrelay status                  what is in force right now
+#
+# It replaces the value on one line and leaves the rest of this file alone,
+# these comments included.
+#
 # A request must pass every scope you set, and is charged to all of them or to
 # none of them, so a refusal costs nothing anywhere: being turned away by one
 # scope does not also drain the allowance of the others. They are not

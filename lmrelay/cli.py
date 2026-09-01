@@ -29,11 +29,15 @@ from lmrelay.config import (
     CONFIG_ENV_VAR,
     DEFAULT_LOG_LEVEL,
     HOME_CONFIG_PATH,
+    SCOPES,
     ConfigError,
     RelayConfig,
     check_exposure,
     find_config_path,
     load_config,
+    read_int,
+    read_rate,
+    set_limit_values,
 )
 from lmrelay.daemon import (
     daemon_status,
@@ -45,7 +49,7 @@ from lmrelay.daemon import (
 )
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.logging_setup import setup_logging
-from lmrelay.ratelimit import describe_limits
+from lmrelay.ratelimit import describe_limits, describe_scope
 from lmrelay.service import (
     LAUNCHD_PLIST_PATH,
     SYSTEMD_UNIT_NAME,
@@ -472,6 +476,72 @@ def provider_delete(args: argparse.Namespace) -> None:
     reload_running_relay(config_path)
 
 
+def limit_values_from(args: argparse.Namespace) -> dict[str, float | int]:
+    """The keys this invocation sets, validated the way the file validates them.
+
+    Through the config's own readers rather than argparse's `type=`, so
+    `--rate abc` is refused in the words a bad `rate` in the TOML is refused in,
+    and so the floor on `concurrent` is the one place it has always been.
+    """
+    section = f"limits.{args.scope}"
+    values: dict[str, float | int] = {}
+    if args.rate is not None:
+        values["rate"] = read_rate({"rate": args.rate}, section, "rate", 0.0)
+    if args.burst is not None:
+        values["burst"] = read_rate({"burst": args.burst}, section, "burst", 0.0)
+    if args.concurrent is not None:
+        values["concurrent"] = read_int(
+            {"concurrent": args.concurrent}, section, "concurrent", 0, minimum=0
+        )
+    return values
+
+
+def warn_about_a_scope_nothing_keys(scope: str, config_path: Path, limits) -> None:
+    """Say when the scope just set is keyed by something that does not exist yet.
+
+    load_config says this too, at the next start. It is worth saying twice: there
+    it lands in a log, and here it lands in front of the operator at the moment
+    they can still make the other choice.
+    """
+    if scope != "per_token" or not limits.configured():
+        return
+    if load_state(state_path_for(config_path)).auth_enabled:
+        return
+    logger.warning(
+        "Auth is off, so nothing is keyed by a token and this scope refuses nobody. "
+        "[limits.per_address] and [limits.total] still apply. Run 'lmrelay auth true'."
+    )
+
+
+def limits_set(args: argparse.Namespace) -> None:
+    """Write one scope's numbers into the config file."""
+    config_path = config_path_from(args)
+    values = limit_values_from(args)
+    if not values:
+        raise LmrelayError(
+            "lmrelay: limits set needs at least one of --rate, --burst and --concurrent; "
+            "pass 0 to turn one off"
+        )
+    if not config_path.exists():
+        # Writing one would produce a config with limits and no upstream, which
+        # is a file the relay refuses to start from.
+        raise ConfigError(
+            f"lmrelay: no config at {config_path} to edit; limits live in lmrelay.toml. "
+            f"Run 'lmrelay init' first."
+        )
+
+    before, after = set_limit_values(config_path, args.scope, values)
+    # Before and after in the words `status` and the reload log use, because a
+    # command that only said "written" leaves the operator running `status` to
+    # find out whether it wrote what they meant.
+    logger.info(
+        f"[limits.{args.scope}] {describe_scope(before)} -> {describe_scope(after)} "
+        f"in {config_path}."
+    )
+    warn_about_a_scope_nothing_keys(args.scope, config_path, after)
+    reload_running_relay(config_path)
+
+
 def plural(count: int, noun: str) -> str:
     """N nouns, with the s only when there is not exactly one of them."""
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
@@ -697,6 +767,27 @@ def add_provider_commands(subparsers: argparse._SubParsersAction) -> None:
     delete_parser.set_defaults(handler=provider_delete)
 
 
+def add_limits_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Attach `lmrelay limits <verb>`."""
+    limits_parser = subparsers.add_parser("limits", help="set how much a caller may ask for")
+    limits_subparsers = limits_parser.add_subparsers(dest="limits_command", required=True)
+
+    set_parser = limits_subparsers.add_parser(
+        "set", help="write one scope's numbers into the config file"
+    )
+    set_parser.add_argument("scope", choices=SCOPES, help="whose requests the numbers count")
+    # Left as strings, and read by the config's own readers in the handler: a
+    # number argparse refused would be refused in argparse's words rather than
+    # in the ones the same number in the file is refused in.
+    set_parser.add_argument("--rate", default=None, help="requests per second, 0 off")
+    set_parser.add_argument("--burst", default=None, help="how many may arrive at once")
+    set_parser.add_argument(
+        "--concurrent", default=None, help="how many may be in flight at once, 0 off"
+    )
+    add_config_option(set_parser)
+    set_parser.set_defaults(handler=limits_set)
+
+
 def add_config_commands(subparsers: argparse._SubParsersAction) -> None:
     """Attach `lmrelay config <verb>`."""
     config_parser = subparsers.add_parser("config", help="move a whole configuration about")
@@ -781,6 +872,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_token_commands(subparsers)
     add_provider_commands(subparsers)
+    add_limits_commands(subparsers)
     add_config_commands(subparsers)
     return parser
 

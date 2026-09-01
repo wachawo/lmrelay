@@ -6,6 +6,7 @@ import ipaddress
 import logging
 import math
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,7 @@ from lmrelay.state import (
     RelayState,
     load_state,
     state_path_for,
+    write_private,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,15 @@ RETIRED_SERVER_KEYS = {
     "rate_burst": "burst",
     "max_concurrent": "concurrent",
 }
+
+# For `lmrelay limits set`, which edits one number in place rather than
+# rewriting the file. A table header of its own, and anything else that opens a
+# table, which is where this scope's body ends.
+LIMIT_TABLE_HEADER = re.compile(r"^\s*\[\s*limits\s*\.\s*([A-Za-z0-9_]+)\s*\]\s*$")
+ANY_TABLE_HEADER   = re.compile(r"^\s*\[")
+# The column the example config aligns its `=` on, so a key this writes in looks
+# like the ones already there.
+LIMIT_KEY_WIDTH    = max(len(key) for key in LIMIT_KEYS)
 
 
 @dataclass(frozen=True)
@@ -375,6 +386,150 @@ def read_config_file(target: Path) -> dict:
             return tomllib.load(fh)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"lmrelay: cannot read {target}: {type(exc).__name__}: {exc}")
+
+
+def read_config_text(target: Path) -> str:
+    """The config as text, for the one command that edits it rather than reading it."""
+    try:
+        return target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"lmrelay: cannot read {target}: {type(exc).__name__}: {exc}")
+
+
+def parse_config_text(text: str, target: Path) -> dict:
+    """Parse config text, naming the file it came from. Same words read_config_file uses."""
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"lmrelay: cannot read {target}: {type(exc).__name__}: {exc}")
+
+
+def render_limit_value(value: float | int) -> str:
+    """One limit as the file should spell it: 2 rather than 2.0, and 0.5 as itself."""
+    if isinstance(value, int):
+        return str(value)
+    return str(int(value)) if value.is_integer() else repr(value)
+
+
+def is_key_line(line: str, name: str) -> bool:
+    """Whether this line assigns `name`, and not something merely starting with it."""
+    remainder = line.lstrip()
+    if not remainder.startswith(name):
+        return False
+    return remainder[len(name):].lstrip().startswith("=")
+
+
+def rewrite_key_line(line: str, rendered: str) -> str:
+    """Replace the value on an assignment, keeping the indent, the column and any note.
+
+    The trailing comment survives because it is the operator's, and a number
+    changed by a command is exactly the number somebody wrote a reason beside.
+    """
+    head, _, remainder = line.partition("=")
+    ending = "\n" if line.endswith("\n") else ""
+    body = remainder.rstrip("\n")
+    comment = ""
+    if "#" in body:
+        at = body.index("#")
+        value, comment = body[:at], body[at:]
+        # The gap as it was, so the comment stays about where it was written.
+        comment = value[len(value.rstrip()):] + comment
+    return f"{head}= {rendered}{comment}{ending}"
+
+
+def new_limit_section(scope: str, values: dict[str, float | int]) -> str:
+    """A whole `[limits.<scope>]` table, for a file that has not got one.
+
+    Only the keys that were asked for. The others are 0 whether they are written
+    down or not, so writing them would add lines that say nothing.
+    """
+    written = [
+        f"{key:<{LIMIT_KEY_WIDTH}} = {render_limit_value(values[key])}\n"
+        for key in LIMIT_KEYS if key in values
+    ]
+    return f"\n[limits.{scope}]\n" + "".join(written)
+
+
+def edit_limit_section(text: str, scope: str, values: dict[str, float | int]) -> str:
+    """Return the config with one scope's numbers changed and nothing else touched.
+
+    A line rewrite rather than a re-render of the whole file, because this file
+    belongs to the operator: `lmrelay init` ships it with sixty lines of comment
+    explaining the numbers, and a command that dropped those to change one of
+    them would be a command nobody runs twice.
+
+    Only the assignments named in `values` move. A key the scope has not got is
+    appended to it, and a scope the file has not got is appended to the file.
+    """
+    lines = text.splitlines(keepends=True)
+    opens = [
+        index for index, line in enumerate(lines)
+        if (match := LIMIT_TABLE_HEADER.match(line)) and match.group(1) == scope
+    ]
+    if not opens:
+        return text + new_limit_section(scope, values)
+
+    start = opens[0]
+    end = start + 1
+    while end < len(lines) and not ANY_TABLE_HEADER.match(lines[end]):
+        end += 1
+    body = lines[start + 1:end]
+
+    for name in LIMIT_KEYS:
+        if name not in values:
+            continue
+        rendered = render_limit_value(values[name])
+        for offset, line in enumerate(body):
+            if is_key_line(line, name):
+                body[offset] = rewrite_key_line(line, rendered)
+                break
+        else:
+            # After the last line that says something, so the blank line before
+            # the next table stays where it is.
+            place = len(body)
+            while place > 0 and not body[place - 1].strip():
+                place -= 1
+            body.insert(place, f"{name:<{LIMIT_KEY_WIDTH}} = {rendered}\n")
+
+    return "".join(lines[:start + 1] + body + lines[end:])
+
+
+def set_limit_values(
+    target: Path, scope: str, values: dict[str, float | int]
+) -> tuple[ScopeLimits, ScopeLimits]:
+    """Write one scope's numbers into the config file. Returns what it was and now is.
+
+    Everything is decided before anything is written. The file is read, the edit
+    is made to a string, and that string is parsed and checked to carry the
+    numbers that were asked for. Only then does it reach the disk. So a file
+    this editor cannot handle, an inline `limits.total = {...}` say, ends as a
+    refusal with the file untouched rather than as a config the relay will not
+    start from.
+    """
+    text = read_config_text(target)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    before = parse_limits(parse_config_text(text, target))[scope]
+
+    edited = edit_limit_section(text, scope, values)
+    try:
+        after = parse_limits(parse_config_text(edited, target))[scope]
+    except ConfigError as exc:
+        raise ConfigError(
+            f"lmrelay: editing [limits.{scope}] in {target} would not have left a file this "
+            f"relay can read ({exc}). Edit it by hand; nothing has been written."
+        )
+    for name, wanted in values.items():
+        if getattr(after, name) != wanted:
+            raise ConfigError(
+                f"lmrelay: [limits.{scope}] {name} in {target} would still read "
+                f"{render_limit_value(getattr(after, name))} rather than "
+                f"{render_limit_value(wanted)}. Edit it by hand; nothing has been written."
+            )
+
+    # 0600 like every other writer of this file: it is meant to hold provider keys.
+    write_private(target, edited)
+    return before, after
 
 
 def load_config(path: Path | None = None) -> RelayConfig:

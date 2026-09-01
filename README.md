@@ -142,6 +142,7 @@ manager, `lmrelay serve` runs the relay detached.
 | `lmrelay provider add NAME TOKEN` | add or rotate an upstream |
 | `lmrelay provider list [--show]` | every upstream, from the file and from state |
 | `lmrelay provider delete NAME` | remove a provider that state owns |
+| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | set one scope's limits in the config file |
 | `lmrelay config export PATH` | write everything needed to reproduce this relay |
 | `lmrelay config import PATH` | replace the config and the state with a bundle |
 

@@ -22,6 +22,16 @@ section is the point of this file: a decision that is not written down gets made
 - [ ] **Limits in three scopes.** Per token, per address, and for the relay as a whole. A
       per-caller cap does not protect the upstream, since callers each inside their own
       limit still arrive together; the global scope is the one that does.
+- [ ] **`lmrelay limits set <scope> [--rate] [--burst] [--concurrent]`.** Writes into
+      `[limits.<scope>]` and signals a running relay. It edits rather than rewrites: only
+      the assignment named changes, and the comments `lmrelay init` ships stay. The edit is
+      parsed and checked to carry the numbers asked for before it reaches the disk, so a
+      spelling a line rewrite cannot reach ends as a refusal with the file untouched.
+
+      No `limits show`, because `status` already prints what is in force, and no writing to
+      `state.json`: an override there would be invisible in the file, which is the defect
+      the environment layer was removed for.
+
 - [ ] **`config export` and `config import`.** One file that reproduces a relay elsewhere,
       written 0600 because it carries tokens and provider keys.
 

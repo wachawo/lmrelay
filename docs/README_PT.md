@@ -145,6 +145,7 @@ plano.
 | `lmrelay provider add NAME TOKEN` | adiciona ou rotaciona um upstream |
 | `lmrelay provider list [--show]` | todos os upstreams, do arquivo e do estado |
 | `lmrelay provider delete NAME` | remove um provedor que pertence ao estado |
+| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | escreve os limites de um escopo no arquivo de configuração |
 | `lmrelay config export PATH` | escreve tudo o que é preciso para reproduzir este relay |
 | `lmrelay config import PATH` | substitui a configuração e o estado por um pacote |
 

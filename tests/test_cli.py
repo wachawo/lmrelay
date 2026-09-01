@@ -53,6 +53,9 @@ DOCUMENTED = [
     ["provider", "list"],
     ["provider", "list", "--show"],
     ["provider", "delete", "openai"],
+    ["limits", "set", "total", "--concurrent", "6"],
+    ["limits", "set", "per_token", "--rate", "2", "--burst", "5"],
+    ["limits", "set", "per_address", "--rate", "0.5"],
     ["config", "export", "relay.json"],
     ["config", "export", "relay.json", "--no-secrets"],
     ["config", "export", "relay.json", "--force"],
@@ -67,7 +70,7 @@ CONFIGURABLE = [
     ["run"], ["serve"], ["stop"], ["restart"], ["reload"], ["status"], ["enable"],
     ["auth", "true"], ["token", "gen"], ["token", "add", "lmr_pasted"], ["token", "list"],
     ["token", "delete", "3"], ["provider", "add", "openai", "sk-test"], ["provider", "list"],
-    ["provider", "delete", "openai"],
+    ["provider", "delete", "openai"], ["limits", "set", "total", "--concurrent", "6"],
     ["config", "export", "relay.json"], ["config", "import", "relay.json"],
 ]
 

@@ -139,6 +139,7 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | 업스트림을 추가하거나 교체합니다 |
 | `lmrelay provider list [--show]` | 파일과 상태에 있는 모든 업스트림 |
 | `lmrelay provider delete NAME` | 상태가 소유한 제공자를 제거합니다 |
+| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | 한 범위의 상한을 설정 파일에 씁니다 |
 | `lmrelay config export PATH` | 이 릴레이를 그대로 재현하는 데 필요한 것을 모두 씁니다 |
 | `lmrelay config import PATH` | 설정과 상태를 번들로 교체합니다 |
 
