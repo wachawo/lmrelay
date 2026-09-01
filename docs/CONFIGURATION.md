@@ -536,8 +536,8 @@ questions: concurrent = 2, rate = "10/30m". See docs/CONFIGURATION.md.
 ```
 
 Silently ignoring one would leave an operator believing a limit is on when it is off, which
-is the exact failure this shape exists to avoid. The refusal is due to be deleted after
-0.0.5.
+is the exact failure this shape exists to avoid. The refusals stay for as long as an
+operator might still be arriving from the release that had those keys.
 
 For the same reason, a scope or a key inside `[limits]` that lmrelay does not recognise is
 refused and named rather than ignored. A misspelt `[limits.per_tokens]` is indistinguishable
@@ -736,10 +736,10 @@ keys at the top. An operator reading a bundle, hand-editing one to provision a m
 diffing two of them is reading the file they already know.
 
 ```toml
-# lmrelay bundle, written by lmrelay 0.0.5 at 2026-08-31T18:04:11Z.
+# lmrelay bundle, written by lmrelay 0.0.6 at 2026-08-31T18:04:11Z.
 
 bundle_version = 1
-written_by     = "lmrelay 0.0.5"
+written_by     = "lmrelay 0.0.6"
 exported_at    = "2026-08-31T18:04:11Z"
 
 [server]
@@ -866,7 +866,7 @@ not accept leaves the existing pair exactly as it was. What it then writes, it n
 ```text
 Moved /home/u/.lmrelay/lmrelay.toml to /home/u/.lmrelay/lmrelay.toml.bak.
 Moved /home/u/.lmrelay/state.json to /home/u/.lmrelay/state.json.bak.
-Imported relay.toml, written by lmrelay 0.0.5 at 2026-08-31T18:04:11Z.
+Imported relay.toml, written by lmrelay 0.0.6 at 2026-08-31T18:04:11Z.
 Wrote /home/u/.lmrelay/lmrelay.toml and /home/u/.lmrelay/state.json (0600): 3 upstreams,
 2 caller tokens, auth on.
 ```
@@ -1002,9 +1002,10 @@ whatever the level, an accepted one at `INFO` or below.
 
 `GET /metrics` answers a Prometheus scrape: aggregate counters in the text exposition format,
 served as `text/plain; version=0.0.4; charset=utf-8`. That `0.0.4` is the version of the
-exposition format, which Prometheus parses by, and not lmrelay's own. They were the same
-number for one release, by coincidence, and 0.0.5 is where they part: the header still says
-`0.0.4` and `lmrelay_build_info` says `0.0.5`.
+exposition format, which Prometheus parses by, and not lmrelay's own. They matched for
+one release, by coincidence, and have moved apart since: the header stays at `0.0.4` for as
+long as Prometheus keeps that format, and `lmrelay_build_info` carries whatever this relay
+is.
 
 Nothing configures it. There is no key in `lmrelay.toml` to turn it on, turn it off or move
 it. It is one route, written by hand rather than with
@@ -1088,7 +1089,7 @@ the relay will measure rather than answering with a nearly empty page:
 ```text
 # HELP lmrelay_build_info The version of the relay these counters came from, as a label on a constant 1.
 # TYPE lmrelay_build_info gauge
-lmrelay_build_info{version="0.0.5"} 1
+lmrelay_build_info{version="0.0.6"} 1
 # HELP lmrelay_requests_total Requests the relay answered, by the upstream chosen and the status returned.
 # TYPE lmrelay_requests_total counter
 # HELP lmrelay_request_ttfb_seconds Seconds from a request arriving to the upstream's first byte, by upstream.

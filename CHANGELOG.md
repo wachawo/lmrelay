@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.0.6] - 2026-09-01
+
 ### Changed
 
 - **`[limits.*]` takes `concurrent` and `rate`, and they are two independent numbers.**
@@ -125,7 +129,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Autostart through a systemd user unit or a launchd agent: `enable`, `disable`.
 - Caller tokens addressed by id, and providers by preset: `token`, `provider`, `auth`.
 
-[Unreleased]: https://github.com/wachawo/lmrelay/compare/0.0.5...HEAD
+[Unreleased]: https://github.com/wachawo/lmrelay/compare/0.0.6...HEAD
+[0.0.6]: https://github.com/wachawo/lmrelay/compare/0.0.5...0.0.6
 [0.0.5]: https://github.com/wachawo/lmrelay/compare/0.0.4...0.0.5
 [0.0.4]: https://github.com/wachawo/lmrelay/compare/0.0.3...0.0.4
 [0.0.3]: https://github.com/wachawo/lmrelay/compare/0.0.2...0.0.3

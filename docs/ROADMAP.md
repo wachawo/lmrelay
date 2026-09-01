@@ -48,8 +48,8 @@ section is the point of this file: a decision that is not written down gets made
       `state.json`: an override there would be invisible in the file, which is the defect
       the environment layer was removed for.
 
-      One number was one too few, and the entry under In progress says why. This one stays
-      as written because it is what 0.0.5 shipped, not because it is still the position.
+      One number was one too few, and 0.0.6 below says why. This entry stays as written
+      because it is what 0.0.5 shipped, not because it is still the position.
 
   - [x] **`lmrelay export` and `lmrelay import`.** One file that reproduces a relay elsewhere,
       written 0600 because it carries tokens and provider keys.
@@ -114,9 +114,11 @@ section is the point of this file: a decision that is not written down gets made
       the comparison and the sentence are one function each, shared with the relay's own
       warning.
 
-## In progress
+- [x] **0.0.6** Two numbers per scope instead of one, and the rate written as one
+      token. One release after the shape it replaces, because the shape was wrong in a
+      way that only showed when somebody tried to use it:
 
-- [ ] **Two numbers per scope: `concurrent` and `rate`.** 0.0.5 shipped one, where a period
+  - [x] **Two numbers per scope: `concurrent` and `rate`.** 0.0.5 shipped one, where a period
       turned `requests` into a how-often as well and the cap was forced to equal the count.
       That cannot say "ten every half hour, two at a time", and on a machine holding one
       model in memory that is the shape an operator wants: the rate apportions the day, the
