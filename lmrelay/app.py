@@ -18,6 +18,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Local imports
 from lmrelay import __version__
@@ -398,6 +399,37 @@ async def log_and_authenticate(request: Request, call_next):
     # arrive, so this is time to first byte, not the duration of the answer.
     record_request(request, client, response.status_code, time.monotonic() - start_time)
     return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def handle_http_exception(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    """Answer a framework refusal in the relay's own shape.
+
+    Starlette phrases these itself, as {"detail": "Method Not Allowed"}, and that
+    is the one error a caller cannot attribute: it carries neither the
+    `lmrelay: ` prefix that the README promises of every error this relay
+    generates, nor the `error` key that the other five refusals use. A client
+    parsing one shape got another for the cases nobody writes a handler for.
+
+    Reachable in practice for a method outside RELAY_METHODS, TRACE being the
+    one a scanner tries, and for anything a future route rejects before the
+    relay route sees it. Not reachable for a bad URL: uvicorn answers that in
+    plain text before the application is entered at all, which is a layer no
+    handler here can reach.
+    """
+    logger.warning(
+        f"{request.client.host if request.client else '-'} "
+        f"{request.method} {request.url.path} -> -: "
+        f"{exc.status_code} (refused)",
+        extra=log_extra(request),
+    )
+    return JSONResponse(
+        {"error": f"lmrelay: {exc.detail.lower()} for {request.method} {request.url.path}"},
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+    )
 
 
 @app.exception_handler(Exception)

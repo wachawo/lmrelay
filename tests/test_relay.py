@@ -262,6 +262,23 @@ class TestTheDoor:
         relay.get("/healthz")
         assert recorder.requests == []
 
+    def test_a_framework_refusal_is_phrased_by_the_relay(self, authed, recorder):
+        """TRACE is outside RELAY_METHODS, so Starlette refuses it before any of
+        this project's code runs and used to answer {"detail": "Method Not
+        Allowed"}: no `lmrelay: ` prefix, and a key no other refusal here uses.
+        It was the one error a caller could not attribute, against a README that
+        promises every error this relay generates begins with that prefix.
+
+        Sent with a credential on purpose: the middleware authenticates before
+        routing decides the method is unroutable, so an anonymous TRACE is a 401
+        and never reaches the refusal under test."""
+        response = authed.request("TRACE", "/api/tags")
+        assert response.status_code == 405
+        body = response.json()
+        assert "detail" not in body
+        assert body["error"].startswith("lmrelay: ")
+        assert recorder.requests == []
+
     @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
     def test_health_is_exempt_by_method_as_well_as_by_path(self, relay, recorder, method):
         """The health route answers GET only, and FastAPI does not add HEAD, so
