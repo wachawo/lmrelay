@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`requirements.txt` and `requirements-dev.txt`** beside `pyproject.toml`, for the
+  `pip install -r` workflow; the dev file adds pytest and ruff.
+- **`main.py`** at the repository root, so `python3 main.py run` starts the relay from a
+  checkout without installing the package.
+- **`.pre-commit-config.yaml`**: ruff and the usual hygiene hooks on every commit, the test
+  suite before a push. Install with `pre-commit install --hook-type pre-commit --hook-type pre-push`.
+
+### Changed
+
+- **The fail2ban filter is `contrib/fail2ban/filter.d/lmrelay.conf`**, named like the jail
+  beside it, and the jail refers to it as `filter = lmrelay`. If you installed the previous
+  `lmrelay-auth.conf`, copy the new file over and drop the old one.
+
+### Fixed
+
+- The test suite no longer emits `StarletteDeprecationWarning`: starlette 1.6 wants `httpx2`
+  behind its `TestClient`, and `requirements-dev.txt` now installs it.
 
 ## [0.0.6] - 2026-09-01
 

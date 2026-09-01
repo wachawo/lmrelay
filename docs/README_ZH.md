@@ -1,6 +1,7 @@
 ## lmrelay - 本地 Ollama 旁的凭据中继
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/wachawo/lmrelay/branch/main/graph/badge.svg)](https://codecov.io/gh/wachawo/lmrelay?branch=main)
 [![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
@@ -242,9 +243,14 @@ lmrelay 产生的每条错误都以 `lmrelay: ` 开头，所以绝不会被误�
 ### 测试
 
 ```sh
-pip install -e '.[test]'
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 pytest
+pytest --cov=lmrelay --cov-report=term-missing
 ```
+
+`python3 main.py run` 直接从检出的源码启动 relay，无需安装；这种情况下只需 `requirements.txt`。
 
 测试套件大部分在进程内驱动应用，对接一个记录型上游，因此不需要网络，也不需要 Ollama。
 [`tests/test_streaming.py`](../tests/test_streaming.py) 是例外：它把中继跑在 uvicorn

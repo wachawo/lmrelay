@@ -48,8 +48,10 @@ dependencies = [
 # `pip install -e '.[test]'` then `pytest`. httpx is already a runtime
 # dependency and is what the tests drive the relay with. anyio is named because
 # the tests import it themselves; it would otherwise arrive only as something
-# starlette happens to depend on.
-test = ["pytest>=8", "anyio>=4"]
+# starlette happens to depend on. httpx2 is what starlette 1.6 wants behind its
+# TestClient; without it every run opens with a deprecation warning. pytest-cov
+# is for the coverage report CI uploads.
+test = ["pytest>=8", "anyio>=4", "httpx2>=2", "pytest-cov>=5"]
 
 [project.scripts]
 lmrelay = "lmrelay.cli:main"

@@ -1,6 +1,7 @@
 ## lmrelay - un relais à identifiants à côté d'un Ollama local
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/wachawo/lmrelay/branch/main/graph/badge.svg)](https://codecov.io/gh/wachawo/lmrelay?branch=main)
 [![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
@@ -267,9 +268,14 @@ un message du fournisseur.
 ### Tests
 
 ```sh
-pip install -e '.[test]'
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 pytest
+pytest --cov=lmrelay --cov-report=term-missing
 ```
+
+`python3 main.py run` lance le relais directement depuis le checkout, sans l'installer ; pour cela `requirements.txt` seul suffit.
 
 L'essentiel de la suite pilote l'application dans le processus face à un upstream qui enregistre
 les échanges ; elle n'a donc besoin ni du réseau ni d'Ollama.

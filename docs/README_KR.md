@@ -1,6 +1,7 @@
 ## lmrelay - 로컬 Ollama 옆에 두는 자격 증명 릴레이
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/wachawo/lmrelay/branch/main/graph/badge.svg)](https://codecov.io/gh/wachawo/lmrelay?branch=main)
 [![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
@@ -247,9 +248,14 @@ lmrelay가 만들어 내는 모든 오류는 `lmrelay: `로 시작하므로, 제
 ### 테스트
 
 ```sh
-pip install -e '.[test]'
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 pytest
+pytest --cov=lmrelay --cov-report=term-missing
 ```
+
+`python3 main.py run`은 설치 없이 체크아웃에서 바로 릴레이를 실행합니다. 그 경우 `requirements.txt` 하나로 충분합니다.
 
 테스트 대부분은 기록된 업스트림을 상대로 앱을 인프로세스로 구동하므로 네트워크도 Ollama도 필요
 없습니다. [`tests/test_streaming.py`](../tests/test_streaming.py)는 예외입니다. 한 번에 한 청크씩

@@ -1,6 +1,7 @@
 ## lmrelay - un relay con credenciales junto a un Ollama local
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/wachawo/lmrelay/branch/main/graph/badge.svg)](https://codecov.io/gh/wachawo/lmrelay?branch=main)
 [![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
@@ -266,9 +267,14 @@ por el proveedor.
 ### Pruebas
 
 ```sh
-pip install -e '.[test]'
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 pytest
+pytest --cov=lmrelay --cov-report=term-missing
 ```
+
+`python3 main.py run` arranca el relay directamente desde el checkout, sin instalarlo; para eso basta con `requirements.txt`.
 
 La mayor parte de la suite ejecuta la aplicación en el mismo proceso contra un upstream que
 graba lo que recibe, así que no necesita red ni Ollama.

@@ -1,6 +1,7 @@
 ## lmrelay - लोकल Ollama के बगल में एक credential-आधारित relay
 
 [![CI](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/wachawo/lmrelay/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/wachawo/lmrelay/branch/main/graph/badge.svg)](https://codecov.io/gh/wachawo/lmrelay?branch=main)
 [![PyPI](https://img.shields.io/pypi/v/lmrelay.svg)](https://pypi.org/project/lmrelay/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/wachawo/lmrelay/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://github.com/wachawo/lmrelay)
@@ -263,9 +264,14 @@ lmrelay जो भी error बनाता है वह `lmrelay: ` से श
 ### परीक्षण
 
 ```sh
-pip install -e '.[test]'
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 pytest
+pytest --cov=lmrelay --cov-report=term-missing
 ```
+
+`python3 main.py run` रिले को इंस्टॉल किए बिना सीधे चेकआउट से चलाता है; इसके लिए अकेला `requirements.txt` ही काफी है।
 
 suite का ज़्यादातर हिस्सा app को उसी process में एक recording upstream के सामने चलाता है, इसलिए
 उसे न network चाहिए न Ollama। [`tests/test_streaming.py`](../tests/test_streaming.py) अपवाद है: वह

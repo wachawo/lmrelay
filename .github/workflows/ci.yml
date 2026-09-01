@@ -71,4 +71,11 @@ jobs:
         run: pip install -e '.[test]'
 
       - name: Test
-        run: pytest
+        run: pytest --cov=lmrelay --cov-report=xml
+
+      # Every leg uploads; Codecov merges them into one report, so a line only
+      # one interpreter reaches still counts as covered.
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

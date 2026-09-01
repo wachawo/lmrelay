@@ -25,7 +25,7 @@ from lmrelay.logging_setup import LOG_DATEFMT, LOG_FORMAT
 from tests.conftest import CONFIG_TEMPLATE, TOKEN, build_relay, write_config, write_state
 
 FILTER_PATH = (
-    Path(__file__).resolve().parents[1] / "contrib" / "fail2ban" / "filter.d" / "lmrelay-auth.conf"
+    Path(__file__).resolve().parents[1] / "contrib" / "fail2ban" / "filter.d" / "lmrelay.conf"
 )
 
 FORMATTER = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)

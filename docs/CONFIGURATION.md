@@ -1564,13 +1564,13 @@ your own that reads this file by position needs the same edit.
 
 A filter and a jail that read it ship with the source:
 
-- [`contrib/fail2ban/filter.d/lmrelay-auth.conf`](../contrib/fail2ban/filter.d/lmrelay-auth.conf)
+- [`contrib/fail2ban/filter.d/lmrelay.conf`](../contrib/fail2ban/filter.d/lmrelay.conf)
 - [`contrib/fail2ban/jail.d/lmrelay.conf`](../contrib/fail2ban/jail.d/lmrelay.conf)
 
 ```bash
-sudo cp contrib/fail2ban/filter.d/lmrelay-auth.conf /etc/fail2ban/filter.d/
+sudo cp contrib/fail2ban/filter.d/lmrelay.conf /etc/fail2ban/filter.d/
 sudo cp contrib/fail2ban/jail.d/lmrelay.conf /etc/fail2ban/jail.d/
-fail2ban-regex ~/.lmrelay/lmrelay.log /etc/fail2ban/filter.d/lmrelay-auth.conf
+fail2ban-regex ~/.lmrelay/lmrelay.log /etc/fail2ban/filter.d/lmrelay.conf
 ```
 
 The filter matches the relay refusing a credential and nothing else. A 401 that came from an
