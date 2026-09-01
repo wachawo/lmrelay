@@ -8,11 +8,9 @@ import pytest
 
 # Local imports
 from lmrelay import service
-from lmrelay.cli import build_parser
 from lmrelay.config import CONFIG_ENV_VAR, load_config
 from lmrelay.errors import ConfigError, LmrelayError
-from lmrelay.state import STATE_ENV_VAR
-from tests.conftest import write_state
+from tests.conftest import run_command, write_state
 
 # The shape `lmrelay init` writes: a commented file with the scopes spelled out
 # and every number off. What survives an edit to it is the point of most of the
@@ -42,10 +40,8 @@ dialect  = "ollama"
 
 @pytest.fixture(autouse=True)
 def isolated_environment(tmp_path, monkeypatch):
-    """No test here may find the operator's own files or reach a service manager."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    """No test here may find the operator's own config or reach a service manager."""
     monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
-    monkeypatch.delenv(STATE_ENV_VAR, raising=False)
     monkeypatch.setattr(service, "detect_manager", lambda: "none")
 
 
@@ -55,12 +51,6 @@ def config_path(tmp_path):
     target = tmp_path / "lmrelay.toml"
     target.write_text(CONFIG_BODY, encoding="utf-8")
     return target
-
-
-def run_command(argv: list[str]) -> None:
-    """Parse and dispatch exactly as main() does, minus its exit handling."""
-    args = build_parser().parse_args(argv)
-    args.handler(args)
 
 
 def set_limit(config_path, *words: str) -> None:

@@ -16,13 +16,7 @@ from lmrelay.config import (
     load_config,
 )
 from lmrelay.ratelimit import LIMIT_KEYS, SCOPES, ScopeLimits, default_limits
-from tests.conftest import write_state
-
-MINIMAL = """
-[upstream.ollama]
-base_url = "http://127.0.0.1:11434"
-dialect  = "ollama"
-"""
+from tests.conftest import MINIMAL, write_config, write_state
 
 LIMITS = """
 [limits.total]
@@ -38,22 +32,16 @@ OPENAI_PROVIDER = {
 }
 
 
-def write(path, body: str):
-    target = path / "lmrelay.toml"
-    target.write_text(body, encoding="utf-8")
-    return target
-
-
 class TestFindingTheFile:
     """First hit wins, and a wrong pointer reports itself."""
 
     def test_the_environment_variable_wins(self, tmp_path, monkeypatch):
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
-        chosen = write(elsewhere, MINIMAL)
+        chosen = write_config(elsewhere, MINIMAL)
         # A config in the working directory too, so the test distinguishes
         # "the env var was read" from "the first location happened to hit".
-        write(tmp_path, MINIMAL)
+        write_config(tmp_path, MINIMAL)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(CONFIG_ENV_VAR, str(chosen))
         assert find_config_path() == chosen
@@ -61,7 +49,7 @@ class TestFindingTheFile:
     def test_then_the_working_directory(self, tmp_path, monkeypatch):
         monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
         monkeypatch.chdir(tmp_path)
-        local = write(tmp_path, MINIMAL)
+        local = write_config(tmp_path, MINIMAL)
         assert find_config_path() == local
 
     def test_then_the_home_directory(self, tmp_path, monkeypatch):
@@ -78,7 +66,7 @@ class TestFindingTheFile:
         to an unrelated file that happens to be in the working directory."""
         monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
         monkeypatch.chdir(tmp_path)
-        write(tmp_path, MINIMAL)
+        write_config(tmp_path, MINIMAL)
         assert find_config_path() == tmp_path / "absent.toml"
 
     def test_and_the_error_names_it(self, tmp_path, monkeypatch):
@@ -103,18 +91,18 @@ class TestRefusingABrokenConfig:
     """Each refusal names the setting, so it can be acted on without a bisect."""
 
     def test_a_file_that_is_not_toml(self, tmp_path):
-        target = write(tmp_path, "this is not = = toml")
+        target = write_config(tmp_path, "this is not = = toml")
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         assert str(target) in str(raised.value)
 
     def test_no_upstreams_at_all(self, tmp_path):
-        target = write(tmp_path, '[server]\nhost = "127.0.0.1"\n')
+        target = write_config(tmp_path, '[server]\nhost = "127.0.0.1"\n')
         with pytest.raises(ConfigError, match=r"\[upstream"):
             load_config(target)
 
     def test_a_default_upstream_that_does_not_exist(self, tmp_path):
-        target = write(tmp_path, MINIMAL + '\n[server]\ndefault_upstream = "typo"\n')
+        target = write_config(tmp_path, MINIMAL + '\n[server]\ndefault_upstream = "typo"\n')
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         # The known names are listed, because the mistake is almost always a typo.
@@ -125,22 +113,22 @@ class TestRefusingABrokenConfig:
         """Either name would swallow the root every Ollama and OpenAI client
         already sends to, and the breakage would surface as an unexplained 404
         far from its cause."""
-        target = write(tmp_path, f'[upstream.{reserved}]\nbase_url = "http://x"\n')
+        target = write_config(tmp_path, f'[upstream.{reserved}]\nbase_url = "http://x"\n')
         with pytest.raises(ConfigError, match="reserved"):
             load_config(target)
 
     def test_a_missing_base_url(self, tmp_path):
-        target = write(tmp_path, '[upstream.ollama]\ndialect = "ollama"\n')
+        target = write_config(tmp_path, '[upstream.ollama]\ndialect = "ollama"\n')
         with pytest.raises(ConfigError, match="base_url"):
             load_config(target)
 
     def test_a_base_url_with_no_scheme(self, tmp_path):
-        target = write(tmp_path, '[upstream.ollama]\nbase_url = "127.0.0.1:11434"\n')
+        target = write_config(tmp_path, '[upstream.ollama]\nbase_url = "127.0.0.1:11434"\n')
         with pytest.raises(ConfigError, match="base_url"):
             load_config(target)
 
     def test_a_dialect_nobody_speaks(self, tmp_path):
-        target = write(tmp_path, '[upstream.x]\nbase_url = "http://x"\ndialect = "llama-ish"\n')
+        target = write_config(tmp_path, '[upstream.x]\nbase_url = "http://x"\ndialect = "llama-ish"\n')
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         assert "llama-ish" in str(raised.value)
@@ -153,7 +141,7 @@ class TestKeepingSecretsOutOfTheFile:
 
     def test_a_header_reads_its_value_from_the_environment(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PROVIDER_KEY", "sk-from-env")
-        target = write(tmp_path, """
+        target = write_config(tmp_path, """
 [server]
 default_upstream = "openai"
 
@@ -168,7 +156,7 @@ headers  = { Authorization = "Bearer ${PROVIDER_KEY}" }
         """Starting without it would send an unauthenticated request and report
         the provider's 401 as though the key were wrong."""
         monkeypatch.delenv("PROVIDER_KEY", raising=False)
-        target = write(tmp_path, """
+        target = write_config(tmp_path, """
 [upstream.openai]
 base_url = "https://api.openai.com"
 headers  = { Authorization = "Bearer ${PROVIDER_KEY}" }
@@ -179,7 +167,7 @@ headers  = { Authorization = "Bearer ${PROVIDER_KEY}" }
         assert "PROVIDER_KEY" in message and "openai" in message and "Authorization" in message
 
     def test_a_literal_value_is_left_alone(self, tmp_path):
-        target = write(tmp_path, """
+        target = write_config(tmp_path, """
 [server]
 default_upstream = "openai"
 
@@ -193,13 +181,13 @@ headers  = { Authorization = "Bearer sk-literal" }
     def test_the_token_in_the_file_is_a_credential(self, tmp_path):
         """How an install that never runs the CLI gets one. It joins the tokens
         in state.json rather than replacing them."""
-        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
+        target = write_config(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
         assert load_config(target).auth_tokens == ("from-file",)
 
     def test_an_empty_token_is_no_token(self, tmp_path):
         """Otherwise an empty string would be a credential every caller could
         guess, while the exposure warning stayed silent."""
-        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = ""\n')
+        target = write_config(tmp_path, MINIMAL + '\n[auth]\ntoken = ""\n')
         assert load_config(target).auth_tokens == ()
 
 
@@ -209,7 +197,7 @@ class TestWhatTheStateAdds:
     def test_a_cli_added_provider_overrides_an_upstream_of_the_same_name(self, tmp_path):
         """`lmrelay provider add` is the newer statement of intent; losing to a
         stale hand-written table would make rotating a key silently ineffective."""
-        target = write(tmp_path, MINIMAL + '\n[upstream.openai]\n'
+        target = write_config(tmp_path, MINIMAL + '\n[upstream.openai]\n'
                                            'base_url = "https://from-file.invalid"\n')
         write_state(tmp_path, providers={"openai": OPENAI_PROVIDER})
         openai = load_config(target).upstreams["openai"]
@@ -217,7 +205,7 @@ class TestWhatTheStateAdds:
         assert openai.headers["Authorization"] == "Bearer sk-from-state"
 
     def test_and_an_upstream_it_does_not_name_is_left_alone(self, tmp_path):
-        target = write(tmp_path, MINIMAL + '\n[upstream.openai]\n'
+        target = write_config(tmp_path, MINIMAL + '\n[upstream.openai]\n'
                                            'base_url = "https://from-file.invalid"\n')
         write_state(tmp_path, providers={"openai": OPENAI_PROVIDER})
         assert load_config(target).upstreams["ollama"].base_url == "http://127.0.0.1:11434"
@@ -225,7 +213,7 @@ class TestWhatTheStateAdds:
     def test_a_config_with_no_upstream_table_is_legal_once_the_state_has_one(self, tmp_path):
         """Nothing has to be hand-written any more: `provider add` on its own is
         a working relay, and refusing here would make the CLI half a config."""
-        target = write(tmp_path, '[server]\nhost = "127.0.0.1"\n')
+        target = write_config(tmp_path, '[server]\nhost = "127.0.0.1"\n')
         write_state(tmp_path, providers={"ollama": OLLAMA_PROVIDER})
         assert load_config(target).upstreams["ollama"].dialect == "ollama"
 
@@ -241,7 +229,7 @@ class TestWhatTheStateAdds:
             "dialect": "openai",
             "headers": {"Authorization": "Bearer sk-live-ab$HOME-cd"},
         }})
-        loaded = load_config(write(tmp_path, MINIMAL))
+        loaded = load_config(write_config(tmp_path, MINIMAL))
         assert loaded.upstreams["openai"].headers["Authorization"] == "Bearer sk-live-ab$HOME-cd"
 
     def test_and_a_stored_key_that_looks_like_a_bad_reference_still_loads(self, tmp_path):
@@ -252,25 +240,25 @@ class TestWhatTheStateAdds:
             "dialect": "openai",
             "headers": {"Authorization": "Bearer sk-live-9f$1abc"},
         }})
-        loaded = load_config(write(tmp_path, MINIMAL))
+        loaded = load_config(write_config(tmp_path, MINIMAL))
         assert loaded.upstreams["openai"].headers["Authorization"] == "Bearer sk-live-9f$1abc"
 
     def test_a_state_token_leads_and_the_file_one_joins_it(self, tmp_path):
-        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
+        target = write_config(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
         write_state(tmp_path, auth_enabled=True, tokens=("from-state",))
         loaded = load_config(target)
         assert loaded.auth_tokens == ("from-state", "from-file")
         assert loaded.auth_enabled is True
 
     def test_the_same_token_from_two_places_is_one_token(self, tmp_path):
-        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "shared"\n')
+        target = write_config(tmp_path, MINIMAL + '\n[auth]\ntoken = "shared"\n')
         write_state(tmp_path, tokens=("shared",))
         assert load_config(target).auth_tokens == ("shared",)
 
     def test_a_token_in_the_file_does_not_turn_checking_on(self, tmp_path):
         """The switch is one thing in one place. A token is a credential, not a
         decision to start refusing everyone who has not got it."""
-        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
+        target = write_config(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
         loaded = load_config(target)
         assert loaded.auth_enabled is False
         assert loaded.auth_tokens == ("from-file",)
@@ -278,7 +266,7 @@ class TestWhatTheStateAdds:
     def test_a_fresh_install_has_auth_off(self, tmp_path):
         """No state file at all: a relay on loopback in front of the operator's
         own Ollama must not lock them out before they have a token."""
-        loaded = load_config(write(tmp_path, MINIMAL))
+        loaded = load_config(write_config(tmp_path, MINIMAL))
         assert loaded.auth_enabled is False
         assert loaded.auth_tokens == ()
 
@@ -289,27 +277,27 @@ class TestDefaults:
     def test_it_binds_loopback_beside_ollama_rather_than_on_top_of_it(self, tmp_path):
         """11434 stays Ollama's, so an existing install needs no change at all;
         the clients are what move."""
-        loaded = load_config(write(tmp_path, MINIMAL))
+        loaded = load_config(write_config(tmp_path, MINIMAL))
         assert (loaded.host, loaded.port) == ("127.0.0.1", 11435)
         assert loaded.default_upstream == "ollama"
 
     def test_an_upstream_that_does_not_say_gets_the_openai_dialect(self, tmp_path):
         """Four of the five providers an operator is likely to add are
         OpenAI-shaped."""
-        target = write(tmp_path, '[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"\n')
+        target = write_config(tmp_path, '[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"\n')
         assert load_config(target).upstreams["ollama"].dialect == "openai"
 
     def test_a_trailing_slash_on_base_url_is_removed(self, tmp_path):
         """It would double against the forwarded path, which some upstreams
         answer with a redirect and others with a 404."""
-        target = write(tmp_path, '[server]\ndefault_upstream = "x"\n\n'
+        target = write_config(tmp_path, '[server]\ndefault_upstream = "x"\n\n'
                                 '[upstream.x]\nbase_url = "https://api.openai.com/"\n')
         assert load_config(target).upstreams["x"].base_url == "https://api.openai.com"
 
     def test_every_scope_of_every_limit_is_off(self, tmp_path):
         """A relay in front of one operator's own Ollama has nobody to limit,
         and an install that predates these keys must behave as it did."""
-        assert load_config(write(tmp_path, MINIMAL)).limits == default_limits()
+        assert load_config(write_config(tmp_path, MINIMAL)).limits == default_limits()
 
 
 class TestTheThreeScopes:
@@ -317,19 +305,19 @@ class TestTheThreeScopes:
     rather than a setting."""
 
     def test_a_scope_is_read_as_written(self, tmp_path):
-        target = write(tmp_path, LIMITS + MINIMAL)
+        target = write_config(tmp_path, LIMITS + MINIMAL)
         assert load_config(target).limits["total"] == ScopeLimits(
             concurrent=2, rate="10/30m"
         )
 
     def test_and_the_scopes_it_does_not_name_stay_off(self, tmp_path):
-        target = write(tmp_path, LIMITS + MINIMAL)
+        target = write_config(tmp_path, LIMITS + MINIMAL)
         loaded = load_config(target)
         assert loaded.limits["per_token"] == ScopeLimits()
         assert loaded.limits["per_address"] == ScopeLimits()
 
     def test_a_count_with_no_rate_is_only_a_cap(self, tmp_path):
-        target = write(tmp_path, "[limits.total]\nconcurrent = 4\n" + MINIMAL)
+        target = write_config(tmp_path, "[limits.total]\nconcurrent = 4\n" + MINIMAL)
         limits = load_config(target).limits["total"]
         assert (limits.concurrent, limits.per_second()) == (4, 0.0)
 
@@ -337,7 +325,7 @@ class TestTheThreeScopes:
         """Legal in the file, unlike on the command line, where a bare rate
         carries a cap of its own count. Somebody who wrote only this in the TOML
         wrote only this."""
-        target = write(tmp_path, '[limits.total]\nrate = "10/30m"\n' + MINIMAL)
+        target = write_config(tmp_path, '[limits.total]\nrate = "10/30m"\n' + MINIMAL)
         limits = load_config(target).limits["total"]
         assert (limits.concurrent, limits.rate) == (0, "10/30m")
 
@@ -345,21 +333,21 @@ class TestTheThreeScopes:
         """0 already means off, so a negative one is a mistake. Admitting it as
         a second spelling would hide the mistake behind the behaviour the
         operator was trying to change."""
-        target = write(tmp_path, "[limits.total]\nconcurrent = -1\n" + MINIMAL)
+        target = write_config(tmp_path, "[limits.total]\nconcurrent = -1\n" + MINIMAL)
         with pytest.raises(ConfigError, match="concurrent"):
             load_config(target)
 
     def test_and_so_is_one_that_is_not_a_number(self, tmp_path):
         """int() raises ValueError, which a reload's `except LmrelayError` does
         not catch: it would leave the signal handler as a traceback."""
-        target = write(tmp_path, '[limits.total]\nconcurrent = "lots"\n' + MINIMAL)
+        target = write_config(tmp_path, '[limits.total]\nconcurrent = "lots"\n' + MINIMAL)
         with pytest.raises(ConfigError, match="whole number"):
             load_config(target)
 
     def test_a_rate_with_no_period_is_refused(self, tmp_path):
         """A count on its own is not a rate, and reading it as one per second
         would be a limit nobody wrote."""
-        target = write(tmp_path, '[limits.total]\nrate = "30"\n' + MINIMAL)
+        target = write_config(tmp_path, '[limits.total]\nrate = "30"\n' + MINIMAL)
         with pytest.raises(ConfigError, match="a count, a slash and a period"):
             load_config(target)
 
@@ -375,7 +363,7 @@ class TestTheThreeScopes:
         refused nobody, while `status` printed the scope as off. `10/0s` is the
         newest: it has the shape, and dividing by it is a limit of infinity,
         which "off" already spells as an empty rate."""
-        target = write(tmp_path, f'[limits.total]\nrate = "{spelling}"\n' + MINIMAL)
+        target = write_config(tmp_path, f'[limits.total]\nrate = "{spelling}"\n' + MINIMAL)
         with pytest.raises(ConfigError, match="a count, a slash and a period"):
             load_config(target)
 
@@ -383,7 +371,7 @@ class TestTheThreeScopes:
         """One reader serves [server] and three [limits.*] tables now, and an
         error naming the wrong one sends an operator to edit a key that is not
         there."""
-        target = write(tmp_path, '[limits.per_address]\nconcurrent = "fast"\n' + MINIMAL)
+        target = write_config(tmp_path, '[limits.per_address]\nconcurrent = "fast"\n' + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         assert "[limits.per_address] concurrent" in str(raised.value)
@@ -391,13 +379,13 @@ class TestTheThreeScopes:
     def test_a_misspelt_scope_is_refused_by_name(self, tmp_path):
         """Ignored, it would leave an operator believing a limit is on when it
         is off, which is the whole failure this table is shaped against."""
-        target = write(tmp_path, "[limits.per_toke]\nconcurrent = 2\n" + MINIMAL)
+        target = write_config(tmp_path, "[limits.per_toke]\nconcurrent = 2\n" + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         assert "per_toke" in str(raised.value) and "per_token" in str(raised.value)
 
     def test_and_so_is_a_misspelt_key(self, tmp_path):
-        target = write(tmp_path, "[limits.total]\nconcurent = 6\n" + MINIMAL)
+        target = write_config(tmp_path, "[limits.total]\nconcurent = 6\n" + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         assert "concurent" in str(raised.value) and "concurrent" in str(raised.value)
@@ -406,7 +394,7 @@ class TestTheThreeScopes:
     def test_and_the_keys_these_two_replaced(self, tmp_path, key):
         """Reported as unrecognised, an operator would read it as a typo in a
         key that still exists. These are named, with what to write instead."""
-        target = write(tmp_path, f"[limits.total]\n{key} = 6\n" + MINIMAL)
+        target = write_config(tmp_path, f"[limits.total]\n{key} = 6\n" + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         assert key in str(raised.value) and "concurrent and rate" in str(raised.value)
@@ -414,7 +402,7 @@ class TestTheThreeScopes:
     def test_a_port_is_still_read_without_a_floor(self, tmp_path):
         """The floor is passed by one key. Ports and timeouts were not given
         one, and this change must not have quietly handed them one."""
-        target = write(tmp_path, "[server]\nport = 65535\n" + MINIMAL)
+        target = write_config(tmp_path, "[server]\nport = 65535\n" + MINIMAL)
         assert load_config(target).port == 65535
 
     def test_configuring_the_token_scope_with_auth_off_is_said_out_loud(
@@ -423,13 +411,13 @@ class TestTheThreeScopes:
         """Legal, because turning auth on later makes it live, but nothing is
         keyed by a token until then and a limit that quietly does nothing is the
         failure this redesign exists to remove."""
-        target = write(tmp_path, "[limits.per_token]\nconcurrent = 2\n" + MINIMAL)
+        target = write_config(tmp_path, "[limits.per_token]\nconcurrent = 2\n" + MINIMAL)
         with caplog.at_level(logging.WARNING):
             load_config(target)
         assert "[limits.per_token] is configured but auth is off" in caplog.text
 
     def test_and_nothing_is_said_when_auth_is_on(self, tmp_path, caplog):
-        target = write(tmp_path, "[limits.per_token]\nconcurrent = 2\n" + MINIMAL)
+        target = write_config(tmp_path, "[limits.per_token]\nconcurrent = 2\n" + MINIMAL)
         write_state(tmp_path, auth_enabled=True, tokens=("a-token",))
         with caplog.at_level(logging.WARNING):
             assert load_config(target).limits["per_token"].concurrent == 2
@@ -448,7 +436,7 @@ class TestTheKeysThatWereReplaced:
     ):
         """Ignored, it leaves an operator believing a limit is on when it is
         off. Refused, they find out at the moment they reload."""
-        target = write(tmp_path, f"[server]\n{key} = 2\n" + MINIMAL)
+        target = write_config(tmp_path, f"[server]\n{key} = 2\n" + MINIMAL)
         with pytest.raises(ConfigError) as raised:
             load_config(target)
         message = str(raised.value)
@@ -470,7 +458,7 @@ class TestSayingWhenThePortIsOpen:
             auth_enabled=auth_enabled,
             tokens=("a-token",) if auth_enabled else (),
         )
-        return load_config(write(tmp_path, MINIMAL + f'\n[server]\nhost = "{host}"\n'))
+        return load_config(write_config(tmp_path, MINIMAL + f'\n[server]\nhost = "{host}"\n'))
 
     def test_loopback_with_auth_off_is_not_warned_about(self, tmp_path):
         assert check_exposure(self.make(tmp_path, "127.0.0.1")) is None
@@ -506,11 +494,11 @@ class TestTheEnvironmentIsNotASource:
 
     def test_a_setting_shaped_name_is_not_read(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LMRELAY_SERVER_PORT", "11440")
-        assert load_config(write(tmp_path, MINIMAL)).port == 11435
+        assert load_config(write_config(tmp_path, MINIMAL)).port == 11435
 
     def test_nor_is_a_limit(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_REQUESTS", "6")
-        assert load_config(write(tmp_path, MINIMAL)).limits["total"].concurrent == 0
+        assert load_config(write_config(tmp_path, MINIMAL)).limits["total"].concurrent == 0
 
     def test_nor_the_auth_switch(self, tmp_path, monkeypatch):
         """The switch is state.json's, and `lmrelay auth true` is what moves it.
@@ -518,16 +506,16 @@ class TestTheEnvironmentIsNotASource:
         operator had just turned it on."""
         monkeypatch.setenv("LMRELAY_AUTH_ENABLED", "true")
         write_state(tmp_path, auth_enabled=False)
-        assert load_config(write(tmp_path, MINIMAL)).auth_enabled is False
+        assert load_config(write_config(tmp_path, MINIMAL)).auth_enabled is False
 
     def test_nor_a_credential(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LMRELAY_TOKEN", "from-env")
-        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
+        target = write_config(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
         assert load_config(target).auth_tokens == ("from-file",)
 
     def test_nor_an_upstream(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LMRELAY_UPSTREAM_OPENAI_KEY", "sk-from-env")
-        assert sorted(load_config(write(tmp_path, MINIMAL)).upstreams) == ["ollama"]
+        assert sorted(load_config(write_config(tmp_path, MINIMAL)).upstreams) == ["ollama"]
 
     def test_and_none_of_them_is_refused_either(self, tmp_path, monkeypatch):
         """Refusing would be the other way to have an opinion about a name the
@@ -535,7 +523,7 @@ class TestTheEnvironmentIsNotASource:
         may reasonably use."""
         monkeypatch.setenv("LMRELAY_SERVER_PROT", "11440")
         monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_CONCURENT", "6")
-        assert load_config(write(tmp_path, MINIMAL)).port == 11435
+        assert load_config(write_config(tmp_path, MINIMAL)).port == 11435
 
     def test_but_the_config_path_still_comes_from_the_environment(
         self, tmp_path, monkeypatch
@@ -543,7 +531,7 @@ class TestTheEnvironmentIsNotASource:
         """The one variable that survived, and it names a file rather than a
         setting: `--config` publishes it so the app, which loads the config
         again from scratch under uvicorn, reads the file the command chose."""
-        chosen = write(tmp_path, MINIMAL)
+        chosen = write_config(tmp_path, MINIMAL)
         monkeypatch.setenv(CONFIG_ENV_VAR, str(chosen))
         assert load_config().config_path == chosen
 

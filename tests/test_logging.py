@@ -10,7 +10,6 @@ import pytest
 # Local imports
 from lmrelay.logging_setup import (
     HANDLER_NAME,
-    LOG_DATEFMT,
     LOG_FORMAT,
     NO_REQUEST,
     PLAIN_FORMAT,
@@ -18,8 +17,7 @@ from lmrelay.logging_setup import (
     setup_logging,
     supply_request_id,
 )
-
-FORMATTER = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+from tests.conftest import FORMATTER, relay_records
 
 
 def record_of(message: str, **fields) -> logging.LogRecord:
@@ -30,12 +28,6 @@ def record_of(message: str, **fields) -> logging.LogRecord:
     return record
 
 
-def relay_records(caplog) -> list[logging.LogRecord]:
-    """Only what the relay itself said. Whatever http client is installed beside
-    it announces its own requests, and those records never passed our filter."""
-    return [record for record in caplog.records if record.name == "lmrelay.app"]
-
-
 def ids_in(caplog) -> list[str]:
     """The request id on every line the relay wrote, in the order it wrote them."""
     return [record.request_id for record in relay_records(caplog)]
@@ -44,21 +36,6 @@ def ids_in(caplog) -> list[str]:
 def ours() -> list[logging.Handler]:
     """The root handlers setup_logging installed, which are the only ones it owns."""
     return [one for one in logging.getLogger().handlers if one.get_name() == HANDLER_NAME]
-
-
-@pytest.fixture
-def logging_restored():
-    """Put the root logger back afterwards.
-
-    setup_logging reconfigures it for the whole process, which is the point of
-    it, so a test that calls it would otherwise hand the next one a logger it
-    never asked for.
-    """
-    root = logging.getLogger()
-    handlers, level = root.handlers[:], root.level
-    yield
-    root.handlers[:] = handlers
-    root.setLevel(level)
 
 
 class TestTheIdItself:

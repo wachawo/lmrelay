@@ -5,11 +5,6 @@
 import logging
 import os
 import re
-import threading
-import time
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
-from typing import NamedTuple
 
 import anyio
 import httpx
@@ -17,17 +12,30 @@ import pytest
 from starlette.testclient import TestClient
 
 # Local imports
+from lmrelay.config import CONFIG_ENV_VAR
 from lmrelay.daemon import PID_NAME, read_pid, write_pid
 from lmrelay.state import STATE_NAME
-from tests.conftest import CONFIG_TEMPLATE, TOKEN, build_relay, write_config, write_state
+from tests.conftest import (
+    CONFIG_TEMPLATE,
+    FIRST_CHUNK,
+    GATED_CHUNKS,
+    OTHER_TOKEN,
+    TOKEN,
+    answer_in_flight,
+    bearer,
+    build_relay,
+    config_limits,
+    relay_with,
+    wait_until,
+    write_config,
+    write_state,
+)
 
 EXTRA_UPSTREAM = """
 [upstream.second]
 base_url = "http://second.invalid:11434"
 dialect  = "ollama"
 """
-
-FIRST_CHUNK = b'{"response":"a"}\n'
 
 # A response header a provider can legally send and starlette cannot re-emit:
 # the UTF-8 encoding of U+2713, which httpx decodes to a str holding a codepoint
@@ -36,17 +44,9 @@ FIRST_CHUNK = b'{"response":"a"}\n'
 # cannot encode, which would fail in the test rather than in the relay.
 UNENCODABLE_HEADER = (b"x-provider-note", b"\xe2\x9c\x93")
 
-# A second credential, so that two callers in one test are told apart by what
-# they present rather than by an address the test client cannot vary.
-OTHER_TOKEN = "another-callers-token"
-
 # What the in-process client's address resolves to, and therefore the key a
 # relay with auth off counts every request in this module against.
 TESTCLIENT_KEY = "addr:testclient"
-
-# Two chunks, because the hold in the recorder happens between them: an answer
-# that has produced the first and not the second is an answer under way.
-GATED_CHUNKS = [FIRST_CHUNK, b'{"done":true}\n']
 
 
 def fails_after_the_first_chunk():
@@ -82,75 +82,6 @@ def config_where(name: str, value: str) -> str:
     return with_setting(CONFIG_TEMPLATE.format(token=TOKEN), name, value)
 
 
-def config_limits(**scopes: str) -> str:
-    """The standard config with one [limits.<scope>] table per keyword argument.
-
-    Appended rather than edited into [server], because a limit is its own table
-    now: `config_limits(total="concurrent = 1")`.
-    """
-    body = CONFIG_TEMPLATE.format(token=TOKEN)
-    return body + "".join(f"\n[limits.{scope}]\n{keys}\n" for scope, keys in scopes.items())
-
-
-def wait_until(condition, what: str, timeout: float = 10.0) -> None:
-    """Block until `condition` holds, or fail saying what never happened."""
-    deadline = time.monotonic() + timeout
-    while not condition() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert condition(), what
-
-
-class Held(NamedTuple):
-    """An answer part-way through, and the pool it and its rivals run in."""
-
-    answer: Future
-    pool: ThreadPoolExecutor
-
-
-@contextmanager
-def answer_in_flight(client, recorder, **kwargs):
-    """Hold one answer open part way through, for the length of the block.
-
-    The recorder stops before its second chunk, and reaching that point proves
-    the caller already has the headers: starlette writes the response start
-    before it pulls the first chunk from the body, so an upstream that has
-    produced anything is an answer that has begun arriving. Inside the block a
-    caller therefore holds part of an answer while the relay is still streaming
-    the rest, which is the only state a cap on simultaneous requests is about.
-
-    On its own thread because the in-process client settles a response before
-    handing it back: two requests can only overlap here if two threads make
-    them.
-    """
-    recorder.gate = threading.Event()
-    recorder.chunks = list(GATED_CHUNKS)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        held = pool.submit(client.post, "/api/generate", json={}, **kwargs)
-        wait_until(lambda: recorder.produced, "the upstream never began answering")
-        try:
-            yield Held(answer=held, pool=pool)
-        finally:
-            recorder.gate.set()
-
-
-def relay_with(tmp_path, monkeypatch, recorder, body: str, auth_enabled: bool = False):
-    """A relay on a given config body, with auth off unless a test needs it.
-
-    Auth off keys the address scope on what every request from the in-process
-    client shares: one caller, sending more than one thing at once. Auth on adds
-    two credentials, which is the only way two callers in one test can be told
-    apart, since the client cannot vary its address.
-    """
-    monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, body))
-    monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
-    write_state(
-        tmp_path,
-        auth_enabled=auth_enabled,
-        tokens=(TOKEN, OTHER_TOKEN) if auth_enabled else (),
-    )
-    yield from build_relay(recorder)
-
-
 @pytest.fixture
 def capped(tmp_path, monkeypatch, recorder):
     """A relay that admits one answer at a time from one address."""
@@ -174,15 +105,6 @@ def capped_in_total(tmp_path, monkeypatch, recorder):
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
         config_limits(total="concurrent = 1"), auth_enabled=True,
-    )
-
-
-@pytest.fixture
-def limited(tmp_path, monkeypatch, recorder):
-    """One address allowed 3 a second, which is also 3 at once."""
-    yield from relay_with(
-        tmp_path, monkeypatch, recorder,
-        config_limits(per_address='concurrent = 3\nrate = "3/1s"'),
     )
 
 
@@ -217,10 +139,6 @@ def limited_everywhere(tmp_path, monkeypatch, recorder):
         ),
         auth_enabled=True,
     )
-
-
-def bearer(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 class TestTheDoor:
@@ -297,9 +215,8 @@ class TestAnOpenRelay:
 
     @pytest.fixture
     def open_relay(self, tmp_path, monkeypatch, recorder):
-        monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
         body = CONFIG_TEMPLATE.format(token="").replace('token = ""', "")
-        monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, body))
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(write_config(tmp_path, body)))
         yield from build_relay(recorder)
 
     def test_the_switch_being_off_means_no_check(self, open_relay):
@@ -322,9 +239,8 @@ class TestATokenNobodyIsChecking:
 
     @pytest.fixture
     def unchecked(self, tmp_path, monkeypatch, recorder):
-        monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
         monkeypatch.setenv(
-            "LMRELAY_CONFIG", write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN))
+            CONFIG_ENV_VAR, str(write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN)))
         )
         write_state(tmp_path, auth_enabled=False, tokens=(TOKEN,))
         yield from build_relay(recorder)
@@ -1020,7 +936,7 @@ class TestStartup:
         with the same 500."""
         bad = tmp_path / "lmrelay.toml"
         bad.write_text('[server]\nhost = "127.0.0.1"\n', encoding="utf-8")
-        monkeypatch.setenv("LMRELAY_CONFIG", str(bad))
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(bad))
         from lmrelay.app import app
 
         with pytest.raises(Exception, match=r"\[upstream"), TestClient(app):
@@ -1029,9 +945,9 @@ class TestStartup:
     def test_it_records_its_pid_and_clears_it_again(self, tmp_path, monkeypatch):
         from lmrelay.app import app
 
-        monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, CONFIG_TEMPLATE.format(
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(write_config(tmp_path, CONFIG_TEMPLATE.format(
             token=TOKEN
-        )))
+        ))))
         pidfile = tmp_path / PID_NAME
         with TestClient(app):
             assert read_pid(pidfile) == os.getpid()
@@ -1044,9 +960,9 @@ class TestStartup:
         `status` calls stopped and `stop` cannot find."""
         from lmrelay.app import app
 
-        monkeypatch.setenv("LMRELAY_CONFIG", write_config(tmp_path, CONFIG_TEMPLATE.format(
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(write_config(tmp_path, CONFIG_TEMPLATE.format(
             token=TOKEN
-        )))
+        ))))
         pidfile = tmp_path / PID_NAME
         with TestClient(app):
             # Alive, and not this process: exactly what a relay that lost the
@@ -1057,20 +973,6 @@ class TestStartup:
 
 class TestReloadingInPlace:
     """What SIGHUP does, called directly: the config changes under a live relay."""
-
-    @pytest.fixture
-    def logging_restored(self):
-        """Put the root logger back afterwards.
-
-        setup_logging reconfigures it for the whole process, which is the point
-        of the setting, so a test that moves the level would otherwise hand the
-        next one a logger it never asked for.
-        """
-        root = logging.getLogger()
-        handlers, level = root.handlers[:], root.level
-        yield
-        root.handlers[:] = handlers
-        root.setLevel(level)
 
     def test_an_upstream_added_to_the_file_is_in_effect_without_a_restart(
         self, authed, recorder, tmp_path
@@ -1380,10 +1282,9 @@ class TestReloadingARelayAnyoneCanReach:
 
     @pytest.fixture
     def public_relay(self, tmp_path, monkeypatch, recorder):
-        monkeypatch.delenv("LMRELAY_TOKEN", raising=False)
-        monkeypatch.setenv("LMRELAY_CONFIG", write_config(
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(write_config(
             tmp_path, config_where("host", '"0.0.0.0"')
-        ))
+        )))
         write_state(tmp_path, auth_enabled=True, tokens=(TOKEN,))
         yield from build_relay(recorder)
 

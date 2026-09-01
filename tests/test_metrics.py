@@ -20,8 +20,14 @@ from lmrelay.metrics import (
     render,
     track_in_flight,
 )
-from tests.conftest import CONFIG_TEMPLATE, TOKEN, write_config
-from tests.test_relay import answer_in_flight, config_limits, relay_with
+from tests.conftest import (
+    CONFIG_TEMPLATE,
+    TOKEN,
+    answer_in_flight,
+    bearer,
+    relay_records,
+    write_config,
+)
 
 # The three sample names a histogram family writes under one family header, so a
 # sample can be traced back to the HELP and TYPE that declared it.
@@ -122,10 +128,8 @@ def value_of(samples, name: str, **labels) -> float:
 
 
 def relay_lines(caplog) -> list[str]:
-    """Only what the relay itself said. Whatever http client happens to be
-    installed beside it announces its own requests, and a test about lmrelay's
-    log must not pass or fail on that."""
-    return [record.getMessage() for record in caplog.records if record.name == "lmrelay.app"]
+    """The message of every line the relay itself wrote."""
+    return [record.getMessage() for record in relay_records(caplog)]
 
 
 def scrape(client) -> dict[tuple[str, tuple[tuple[str, str], ...]], float]:
@@ -143,14 +147,6 @@ def counted(metrics: Metrics) -> Metrics:
     count_auth_failure(metrics)
     count_upstream_error(metrics, "ollama", "ConnectError")
     return metrics
-
-
-@pytest.fixture
-def limited(tmp_path, monkeypatch, recorder):
-    """A relay that admits three from an address and then refuses."""
-    yield from relay_with(
-        tmp_path, monkeypatch, recorder, config_limits(per_address='concurrent = 3\nrate = "3/1s"')
-    )
 
 
 class TestTheExpositionFormat:
@@ -371,7 +367,7 @@ class TestWhatTheRelayCounts:
 
     def test_a_missing_credential(self, relay):
         relay.post("/api/chat", json={})
-        relay.headers.update({"Authorization": f"Bearer {TOKEN}"})
+        relay.headers.update(bearer(TOKEN))
         assert value_of(scrape(relay), "lmrelay_auth_failures_total") == 1.0
 
     def test_which_is_not_also_counted_as_a_request(self, relay):
@@ -379,7 +375,7 @@ class TestWhatTheRelayCounts:
         to count it under, and a series labelled `-` would be a second meaning
         for a label that otherwise always names one."""
         relay.post("/api/chat", json={})
-        relay.headers.update({"Authorization": f"Bearer {TOKEN}"})
+        relay.headers.update(bearer(TOKEN))
         samples = scrape(relay)
         assert not [name for name, labels in samples if name == "lmrelay_requests_total"]
 

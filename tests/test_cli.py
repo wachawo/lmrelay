@@ -16,7 +16,8 @@ from lmrelay.config import CONFIG_ENV_VAR
 from lmrelay.daemon import pid_file, write_pid
 from lmrelay.errors import LmrelayError
 from lmrelay.service import LAUNCHD_PLIST_PATH
-from lmrelay.state import STATE_ENV_VAR, TOKEN_PREFIX, load_state, state_path_for
+from lmrelay.state import TOKEN_PREFIX, load_state, state_path_for
+from tests.conftest import run_command
 
 CONFIG_BODY = """
 [server]
@@ -79,11 +80,10 @@ CONFIGURABLE = [
 
 @pytest.fixture(autouse=True)
 def isolated_environment(tmp_path, monkeypatch):
-    """No handler here may find the operator's own config or state, and none may
-    reach a real service manager: a systemctl call would act on their session."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    """No handler here may find the operator's own config, and none may reach a
+    real service manager: a systemctl call would act on their session. HOME and
+    the LMRELAY_ names are already conftest's business."""
     monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
-    monkeypatch.delenv(STATE_ENV_VAR, raising=False)
     monkeypatch.setattr(service, "detect_manager", lambda: "none")
 
     def refuse(argv, **unused_kwargs):
@@ -100,12 +100,6 @@ def config_path(tmp_path):
     target = tmp_path / "lmrelay.toml"
     target.write_text(CONFIG_BODY, encoding="utf-8")
     return target
-
-
-def run_command(argv: list[str]) -> None:
-    """Parse and dispatch exactly as main() does, minus its exit handling."""
-    args = build_parser().parse_args(argv)
-    args.handler(args)
 
 
 def state_for(config_path):

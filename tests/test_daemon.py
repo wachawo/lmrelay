@@ -37,6 +37,7 @@ from lmrelay.daemon import (
     write_pid,
 )
 from lmrelay.errors import LmrelayError
+from tests.conftest import free_port
 
 # An upstream pointed at a host nothing resolves: nothing in this file asks the
 # relay to forward anything, and a test that accidentally did would fail loudly
@@ -66,7 +67,7 @@ time.sleep(60)
 """
 
 
-def write_config(tmp_path, port: int):
+def write_config_on_port(tmp_path, port: int):
     """Write a config on the given port and return its path."""
     target = tmp_path / "lmrelay.toml"
     target.write_text(CONFIG_TEMPLATE.format(port=port), encoding="utf-8")
@@ -80,16 +81,10 @@ def dead_pid() -> int:
     return child.pid
 
 
-def free_port() -> int:
-    """A port the kernel says is free, so a developer already running lmrelay
-    does not see a spurious failure here."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-def wait_until(predicate, timeout: float = 20.0) -> bool:
-    """Poll until the predicate holds, because a fork is not instant."""
+def holds_within(predicate, timeout: float = 20.0) -> bool:
+    """Poll until the predicate holds, because a fork is not instant. False
+    rather than a failure when it never does, so the caller can say why with
+    the relay's own log."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -122,7 +117,7 @@ def start_relay_through_the_cli(tmp_path, attempts: int = 3):
     last = ""
     for remaining in range(attempts - 1, -1, -1):
         port = free_port()
-        config = write_config(tmp_path, port)
+        config = write_config_on_port(tmp_path, port)
         done = subprocess.run(
             [sys.executable, "-m", "lmrelay", "serve",
              "--config", str(config), "--port", str(port)],
@@ -225,7 +220,7 @@ class TestAPidWeMayNotSignal:
     pid we cannot signal reaches the commands that signal it."""
 
     def test_stopping_it_says_whose_it_is_rather_than_raising_permission_error(self, tmp_path):
-        config = write_config(tmp_path, 11435)
+        config = write_config_on_port(tmp_path, 11435)
         write_pid(pid_file(config), FOREIGN_PID)
         with pytest.raises(LmrelayError) as raised:
             stop_daemon(config)
@@ -235,7 +230,7 @@ class TestAPidWeMayNotSignal:
         assert pid_file(config).exists()
 
     def test_and_so_does_reloading_it(self, tmp_path):
-        config = write_config(tmp_path, 11435)
+        config = write_config_on_port(tmp_path, 11435)
         write_pid(pid_file(config), FOREIGN_PID)
         with pytest.raises(LmrelayError) as raised:
             reload_daemon(config)
@@ -251,7 +246,7 @@ class TestStoppingSomethingThatWillNotGo:
         the SIGKILL branch. Returning before the kernel has torn the process
         down hands `restart` an address still in use."""
         port = free_port()
-        config = write_config(tmp_path, port)
+        config = write_config_on_port(tmp_path, port)
         # The context manager closes the stdout pipe on the way out, which a bare
         # Popen left open for the garbage collector to complain about.
         with subprocess.Popen(
@@ -285,17 +280,17 @@ class TestNothingToActOn:
     """The commands say so rather than failing."""
 
     def test_stopping_reports_that_nothing_was_running(self, tmp_path):
-        assert stop_daemon(write_config(tmp_path, 11435)) is False
+        assert stop_daemon(write_config_on_port(tmp_path, 11435)) is False
 
     def test_and_so_does_reloading(self, tmp_path):
-        assert reload_daemon(write_config(tmp_path, 11435)) is False
+        assert reload_daemon(write_config_on_port(tmp_path, 11435)) is False
 
 
 class TestTheStatusBlock:
     """What `lmrelay status` is assembled from."""
 
     def status(self, tmp_path):
-        return daemon_status(load_config(write_config(tmp_path, 11435)))
+        return daemon_status(load_config(write_config_on_port(tmp_path, 11435)))
 
     def test_a_stopped_relay_has_no_pid_and_is_not_probed(self, tmp_path):
         status = self.status(tmp_path)
@@ -345,7 +340,7 @@ class TestTheAddressTheRelayRecorded:
         assert read_bind(target) is None
 
     def test_the_published_address_is_what_gets_recorded(self, tmp_path, monkeypatch):
-        config = load_config(write_config(tmp_path, 11435))
+        config = load_config(write_config_on_port(tmp_path, 11435))
         # publish_bind writes os.environ directly; recording the variable with
         # monkeypatch first is what takes the published address back out at
         # teardown. recorded_bind reads the empty string as unset.
@@ -359,7 +354,7 @@ class TestTheAddressTheRelayRecorded:
     ):
         """`serve --port 9999` used to be reported at the configured port, and a
         healthy relay called not responding for answering elsewhere."""
-        config_path = write_config(tmp_path, 11435)
+        config_path = write_config_on_port(tmp_path, 11435)
         write_pid(pid_file(config_path), os.getpid(), "127.0.0.1:9999")
         monkeypatch.setattr("lmrelay.daemon.probe_health", lambda host, port: port == 9999)
 
@@ -411,17 +406,17 @@ class TestNamingWhatAReloadCannotApply:
         return {"host": "127.0.0.1", "port": 11435, "connect_timeout": 10, **overrides}
 
     def test_nothing_moved_is_nothing_to_say(self, tmp_path):
-        config = load_config(write_config(tmp_path, 11435))
+        config = load_config(write_config_on_port(tmp_path, 11435))
         assert unapplied_settings(self.started(), config) == []
 
     def test_a_moved_port_is_named_with_both_values(self, tmp_path):
         """Naming only the key sends the operator to the file to read the half
         of the answer the file already has."""
-        config = load_config(write_config(tmp_path, 8080))
+        config = load_config(write_config_on_port(tmp_path, 8080))
         assert unapplied_settings(self.started(), config) == ["port 11435 -> 8080"]
 
     def test_each_one_separately_so_a_port_does_not_hide_a_timeout(self, tmp_path):
-        config = load_config(write_config(tmp_path, 8080))
+        config = load_config(write_config_on_port(tmp_path, 8080))
         assert unapplied_settings(self.started(connect_timeout=30), config) == [
             "port 11435 -> 8080", "connect_timeout 30 -> 10"
         ]
@@ -429,7 +424,7 @@ class TestNamingWhatAReloadCannotApply:
     def test_a_key_the_pidfile_did_not_record_is_not_named(self, tmp_path):
         """It cannot be compared, and inventing a "from" value would put a
         number in front of the operator that nothing measured."""
-        config = load_config(write_config(tmp_path, 8080))
+        config = load_config(write_config_on_port(tmp_path, 8080))
         started = {"host": "127.0.0.1", "port": 11435}
         assert unapplied_settings(started, config) == ["port 11435 -> 8080"]
 
@@ -484,7 +479,7 @@ class TestARealDetachedRelay:
         pid, config, port = start_relay_through_the_cli(tmp_path)
         try:
             assert process_alive(pid)
-            healthy = wait_until(lambda: probe_health("127.0.0.1", port))
+            healthy = holds_within(lambda: probe_health("127.0.0.1", port))
             # Recorded by the process that bound the socket, which is the only
             # thing that knows what it started with. Asserted here rather than
             # against write_pid alone, because the call site is what a `reload`
@@ -501,7 +496,7 @@ class TestARealDetachedRelay:
     def test_starting_a_second_one_is_refused(self, tmp_path):
         """A second bind would fail later with a message about a port rather
         than about the relay already running."""
-        config = write_config(tmp_path, free_port())
+        config = write_config_on_port(tmp_path, free_port())
         write_pid(pid_file(config), os.getpid())
         with pytest.raises(LmrelayError):
             start_detached(config, "127.0.0.1", 11435)

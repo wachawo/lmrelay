@@ -11,11 +11,11 @@ import pytest
 
 # Local imports
 from lmrelay.bundle import BUNDLE_VERSION, LIMIT_TYPES, SERVER_TYPES, STDIO_PATH
-from lmrelay.cli import build_parser
-from lmrelay.config import CONFIG_ENV_VAR, SERVER_KEYS, RelayConfig, load_config
+from lmrelay.config import SERVER_KEYS, RelayConfig, load_config
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.ratelimit import LIMIT_KEYS, SCOPES
-from lmrelay.state import MASKED_TOKEN, STATE_ENV_VAR, load_state, state_path_for
+from lmrelay.state import MASKED_TOKEN, load_state, state_path_for
+from tests.conftest import MINIMAL, run_command, write_config
 
 # A relay worth moving: a bind that is not the default, every limit scope, a
 # credential in the file, one in the environment, one from `token gen`, and an
@@ -50,12 +50,6 @@ dialect  = "anthropic"
 headers  = { "x-api-key" = "${ANTHROPIC_KEY}", "anthropic-version" = "2023-06-01" }
 """
 
-MINIMAL_CONFIG = """
-[upstream.ollama]
-base_url = "http://127.0.0.1:11434"
-dialect  = "ollama"
-"""
-
 PROVIDER_KEY = "sk-openai-live"
 FILE_TOKEN   = "token-from-the-file"
 # A $ in it on purpose: a key run back through Template would come out as an
@@ -65,25 +59,9 @@ ANTHROPIC_KEY = "sk-ant-with-a-$dollar-in-it"
 
 @pytest.fixture(autouse=True)
 def isolated_environment(tmp_path, monkeypatch):
-    """No test here may find the operator's own config, state or credentials."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    """A relative path on the command line resolves inside tmp_path, never in
+    the checkout. The operator's own files are already conftest's business."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
-    monkeypatch.delenv(STATE_ENV_VAR, raising=False)
-
-
-def run_command(argv: list[str]) -> None:
-    """Parse and dispatch exactly as main() does, minus its exit handling."""
-    args = build_parser().parse_args(argv)
-    args.handler(args)
-
-
-def write_config(directory, body: str):
-    """Put a config in a directory of its own, so the state lands beside it."""
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / "lmrelay.toml"
-    target.write_text(body, encoding="utf-8")
-    return target
 
 
 @pytest.fixture
@@ -505,25 +483,25 @@ class TestImportReplacesRatherThanMerges:
     ):
         """Symmetric with `lmrelay init`, which refuses to overwrite too."""
         export(source, bundle_path)
-        occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
+        occupied = write_config(tmp_path / "occupied", MINIMAL)
         with pytest.raises(BundleError) as raised:
             run_command(["import", str(bundle_path), "--config", str(occupied)])
         assert "--force" in str(raised.value)
 
     def test_and_is_left_exactly_as_it_was(self, source, bundle_path, tmp_path):
-        occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
+        occupied = write_config(tmp_path / "occupied", MINIMAL)
         export(source, bundle_path)
         with pytest.raises(BundleError):
             run_command(["import", str(bundle_path), "--config", str(occupied)])
-        assert occupied.read_text(encoding="utf-8") == MINIMAL_CONFIG
+        assert occupied.read_text(encoding="utf-8") == MINIMAL
 
     def test_force_moves_the_old_pair_aside_first(self, source, bundle_path, tmp_path):
-        occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
+        occupied = write_config(tmp_path / "occupied", MINIMAL)
         run_command(["token", "add", "lmr_was_here", "--config", str(occupied)])
         export(source, bundle_path)
         run_command(["import", str(bundle_path), "--config", str(occupied), "--force"])
         backup = occupied.with_name(occupied.name + ".bak")
-        assert backup.read_text(encoding="utf-8") == MINIMAL_CONFIG
+        assert backup.read_text(encoding="utf-8") == MINIMAL
         assert state_path_for(occupied).with_name("state.json.bak").exists()
 
     def test_and_the_state_that_was_there_is_replaced_not_merged(
@@ -531,7 +509,7 @@ class TestImportReplacesRatherThanMerges:
     ):
         """A merge produces a third relay that is neither the exported one nor
         the existing one, and nobody can predict it."""
-        occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
+        occupied = write_config(tmp_path / "occupied", MINIMAL)
         run_command(["token", "add", "lmr_was_here", "--config", str(occupied)])
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
@@ -544,7 +522,7 @@ class TestImportReplacesRatherThanMerges:
         """The .bak from the previous import is exactly the file an operator
         would reach for, and accumulating timestamped copies instead would leave
         secrets lying about."""
-        occupied = write_config(tmp_path / "occupied", MINIMAL_CONFIG)
+        occupied = write_config(tmp_path / "occupied", MINIMAL)
         export(source, bundle_path)
         run_command(["import", str(bundle_path), "--config", str(occupied), "--force"])
         with pytest.raises(BundleError) as raised:

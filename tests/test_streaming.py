@@ -11,7 +11,6 @@ ordinary HTTP client.
 """
 
 import os
-import socket
 import threading
 import time
 
@@ -23,6 +22,9 @@ from starlette.applications import Starlette
 from starlette.responses import StreamingResponse
 from starlette.routing import Route
 
+# Local imports
+from tests.conftest import free_port
+
 # Set and restored together. LMRELAY_STATE and LMRELAY_TOKEN are cleared beside
 # the config because a state file or token in the developer's environment would
 # switch auth on for a relay this module reaches with no credential.
@@ -33,12 +35,6 @@ CHUNKS = [b"first\n", b"second\n", b"third\n"]
 # "the first chunk was forwarded as it arrived" cannot be confused for one
 # another on a loaded machine.
 CHUNK_DELAY = 0.6
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
 
 
 async def dribble(unused_request):

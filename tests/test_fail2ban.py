@@ -20,15 +20,11 @@ from pathlib import Path
 import pytest
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR
-from lmrelay.logging_setup import LOG_DATEFMT, LOG_FORMAT
-from tests.conftest import CONFIG_TEMPLATE, TOKEN, build_relay, write_config, write_state
+from tests.conftest import FORMATTER, config_limits, relay_records, relay_with
 
 FILTER_PATH = (
     Path(__file__).resolve().parents[1] / "contrib" / "fail2ban" / "filter.d" / "lmrelay.conf"
 )
-
-FORMATTER = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
 
 # What fail2ban expands <HOST> to, reduced to the part that decides this: the
 # character class it will accept an address in. A bracket is not in it, in any
@@ -75,9 +71,7 @@ def as_fail2ban_sees_it(record: logging.LogRecord) -> str:
 
 def relay_lines(caplog) -> list[str]:
     """Every line the relay itself wrote, as the file would hold it."""
-    return [
-        as_fail2ban_sees_it(record) for record in caplog.records if record.name == "lmrelay.app"
-    ]
+    return [as_fail2ban_sees_it(record) for record in relay_records(caplog)]
 
 
 @pytest.fixture
@@ -88,10 +82,9 @@ def rate_limited(tmp_path, monkeypatch, recorder):
     refused at the door: what this fixture is for is the one other WARNING the
     relay writes, which the filter must not confuse with a refused credential.
     """
-    body = CONFIG_TEMPLATE.format(token=TOKEN) + '\n[limits.per_address]\nconcurrent = 1\nrate = "1/1s"\n'
-    monkeypatch.setenv(CONFIG_ENV_VAR, write_config(tmp_path, body))
-    write_state(tmp_path, auth_enabled=False)
-    yield from build_relay(recorder)
+    yield from relay_with(
+        tmp_path, monkeypatch, recorder, config_limits(per_address='concurrent = 1\nrate = "1/1s"')
+    )
 
 
 class TestWhatTheFilterMatches:
