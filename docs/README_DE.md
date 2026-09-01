@@ -116,7 +116,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 6 at once
+limits       total 10 per 30m, 10 at once
 autostart    systemd: enabled, active
 ```
 
@@ -125,6 +125,34 @@ launchd-Agent und startet sie anschließend. Von da an laufen `stop`, `restart` 
 über diesen Manager statt über die PID-Datei, sodass die beiden nicht uneins darüber werden
 können, wem der Prozess gehört. Auf einem POSIX-System ohne beide Manager startet
 `lmrelay serve` das Relay im Hintergrund.
+
+### Was ein Aufrufer verlangen darf
+
+```bash
+lmrelay limits set total 1              # eine Anfrage gleichzeitig
+lmrelay limits set total 1 60s          # eine pro Minute, und weiterhin eine gleichzeitig
+lmrelay limits set per_address 10 30m   # zehn pro halbe Stunde
+lmrelay limits set per_token 0          # aus
+```
+
+Drei Geltungsbereiche, je eine Zahl. `requests` ist, wie viele Anfragen ein Aufrufer
+gleichzeitig offen haben darf; kommt eine Periode dazu, ist dieselbe Zahl auch, wie viele er
+in dieser Zeit starten darf. Eine Anfrage muss jeden gesetzten Bereich passieren.
+
+**Wenn Sie eine einzige Zahl setzen, setzen Sie `total`.** Sie schützt die Maschine: zehn
+Aufrufer, jeder innerhalb seines eigenen Limits, treffen trotzdem gemeinsam ein, und eine
+Grenze pro Aufrufer kann das nicht sehen. `per_token` daneben verhindert, dass ein Client mit
+fünfzig Threads alles belegt.
+
+Ein abgewiesener Aufrufer bekommt ein 429, das den Bereich nennt, und ein `Retry-After`,
+sobald das Relay ehrlich eines berechnen kann:
+
+```text
+lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+```
+
+Der Befehl schreibt in `lmrelay.toml` und lässt den Rest der Datei unangetastet,
+Kommentare eingeschlossen, und signalisiert danach ein laufendes Relay.
 
 ### Verwendung
 
@@ -155,9 +183,9 @@ können, wem der Prozess gehört. Auf einem POSIX-System ohne beide Manager star
 `--dialect` und ein wiederholbares `--header K=V`; bei einem bekannten Namen (`openai`,
 `anthropic`, `deepseek`, `grok`, `ollama`) stammen Basis-URL, Dialekt und Header-Form aus
 einem Preset, sodass `lmrelay provider add openai sk-...` der ganze Befehl ist.
-`export` nimmt `--no-secrets`, beide `export`/`import` nehmen `--force`, um über
-Vorhandenes zu schreiben, und beide nehmen `-` statt eines Pfades, um das Terminal zu
-benutzen.
+`export` nimmt `--no-secrets`, es und `import` nehmen `--force`, um über Vorhandenes zu
+schreiben, und ganz ohne Pfad geht das Bundle nach stdout und wird von stdin gelesen, sodass
+`lmrelay export | ssh other-host lmrelay import` ein Relay in einer Zeile umzieht.
 `--config PATH` nimmt jeder Befehl an, der die Konfiguration oder den State liest, also
 jeder Befehl außer `init`, das immer `~/.lmrelay/lmrelay.toml` schreibt, und `disable`, das
 weder das eine noch das andere liest.

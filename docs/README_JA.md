@@ -109,7 +109,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 6 at once
+limits       total 10 per 30m, 10 at once
 autostart    systemd: enabled, active
 ```
 
@@ -117,6 +117,27 @@ autostart    systemd: enabled, active
 そのまま起動する。以後 `stop`、`restart`、`reload` は pidfile ではなくそのマネージャを経由するので、
 プロセスの持ち主について両者の言い分が食い違うことはない。どちらのマネージャもない POSIX 環境では、
 `lmrelay serve` がリレーをデタッチして動かす。
+
+### 呼び出し側が要求できる量を絞る
+
+```bash
+lmrelay limits set total 1              # 同時に 1 リクエスト
+lmrelay limits set total 1 60s          # 毎分 1 件、しかも同時には 1 件のまま
+lmrelay limits set per_address 10 30m   # 30 分あたり 10 件
+lmrelay limits set per_token 0          # オフ
+```
+
+スコープは 3 つ、それぞれに数字がひとつ。`requests` は呼び出し側が同時に抱えられるリクエスト数で、期間を添えると同じ数字がその間に開始できる件数にもなる。リクエストは設定したすべてのスコープを通らなければならない。
+
+**ひとつだけ設定するなら `total` を設定する。** マシンを守るのはこれで、10 人の呼び出し側がそれぞれ自分の上限の内側にいても同時に到着することはあり、呼び出し側ごとの上限にはそれが見えない。隣に置く `per_token` は、スレッドを 50 本張る 1 クライアントに全部を占有させないためのもの。
+
+拒否された呼び出し側にはスコープ名の入った 429 が返り、リレーが正直に算出できるときは `Retry-After` も付く:
+
+```text
+lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+```
+
+このコマンドは `lmrelay.toml` に書き込み、ファイルの残りはコメントごとそのまま残したうえで、動作中のリレーにシグナルを送る。
 
 ### 使い方
 
@@ -147,8 +168,7 @@ autostart    systemd: enabled, active
 `--dialect`、および繰り返し指定できる `--header K=V` を取る。名前が既知のもの（`openai`、
 `anthropic`、`deepseek`、`grok`、`ollama`）なら、ベース URL、方言、ヘッダの形はプリセットから
 来るので、`lmrelay provider add openai sk-...` だけでコマンドは終わる。`export` は
-`--no-secrets` を取り、`config` の二つの動詞はどちらも、すでにあるものへ書くための `--force`
-を取る。どちらもパスの代わりに `-` を渡せば端末を使う。`--config PATH` は設定
+`--no-secrets` を取り、これと `import` はどちらも、すでにあるものへ書くための `--force` を取る。パスをまったく渡さなければバンドルは stdout へ出て stdin から読まれるので、`lmrelay export | ssh other-host lmrelay import` の一行でリレーを引っ越せる。`--config PATH` は設定
 または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。
 `init` は常に `~/.lmrelay/lmrelay.toml` を書き、`disable` はどちらも読まない。
 

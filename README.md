@@ -112,7 +112,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 6 at once
+limits       total 10 per 30m, 10 at once
 autostart    systemd: enabled, active
 ```
 
@@ -120,6 +120,33 @@ autostart    systemd: enabled, active
 it. From then on `stop`, `restart` and `reload` go through that manager instead of the
 pidfile, so the two cannot disagree about who owns the process. On a POSIX box with neither
 manager, `lmrelay serve` runs the relay detached.
+
+### Limiting what a caller may ask for
+
+```bash
+lmrelay limits set total 1              # one request at a time
+lmrelay limits set total 1 60s          # one a minute, and still one at a time
+lmrelay limits set per_address 10 30m   # ten every half hour
+lmrelay limits set per_token 0          # off
+```
+
+Three scopes, one number each. `requests` is how many a caller may have in flight at once;
+add a period and the same number is also how many they may start in that long. A request
+must pass every scope you set.
+
+**If you set one number, set `total`.** It is the one that protects the machine: ten callers
+each inside their own limit still arrive together, and a per-caller cap cannot see that.
+`per_token` beside it is what keeps one client with fifty threads from owning all of it.
+
+A refused caller gets a 429 naming the scope, and a `Retry-After` when the relay can work
+one out honestly:
+
+```text
+lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+```
+
+The command writes into `lmrelay.toml` and leaves the rest of the file alone, comments
+included, then signals a running relay.
 
 ### Usage
 
@@ -149,11 +176,12 @@ manager, `lmrelay serve` runs the relay detached.
 `run`, `serve` and `restart` take `--host` and `--port`. `provider add` takes `--base-url`,
 `--dialect` and a repeatable `--header K=V`; with a known name (`openai`, `anthropic`,
 `deepseek`, `grok`, `ollama`) the base URL, dialect and header shape come from a preset,
-so `lmrelay provider add openai sk-...` is the whole command. `export` takes
-`--no-secrets`, both verbs take `--force` to write over what is already there, and
-either accepts `-` in place of a path to use the terminal. `--config PATH` is accepted by
-every command that reads the config or the state, which is every command except `init`,
-which always writes `~/.lmrelay/lmrelay.toml`, and `disable`, which reads neither.
+so `lmrelay provider add openai sk-...` is the whole command. `export` takes `--no-secrets`,
+both it and `import` take `--force` to write over what is already there, and with no path at
+all the bundle goes to stdout and is read from stdin, so `lmrelay export | ssh other-host
+lmrelay import` moves a relay in one line. `--config PATH` is accepted by every command that
+reads the config or the state, which is every command except `init`, which always writes
+`~/.lmrelay/lmrelay.toml`, and `disable`, which reads neither.
 
 ### Choosing an upstream
 

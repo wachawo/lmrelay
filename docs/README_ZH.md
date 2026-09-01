@@ -107,7 +107,7 @@ config       /home/u/.lmrelay/lmrelay.toml
 state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
-limits       total 6 at once
+limits       total 10 per 30m, 10 at once
 autostart    systemd: enabled, active
 ```
 
@@ -115,6 +115,27 @@ autostart    systemd: enabled, active
 agent，然后把它启动起来。此后 `stop`、`restart` 和 `reload` 都走该管理器而不是
 pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器都没有的 POSIX 机器上，用
 `lmrelay serve` 以后台方式运行中继。
+
+### 限制一个调用方能要多少
+
+```bash
+lmrelay limits set total 1              # 同时一个请求
+lmrelay limits set total 1 60s          # 每分钟一个，而且仍是同时一个
+lmrelay limits set per_address 10 30m   # 每半小时十个
+lmrelay limits set per_token 0          # 关闭
+```
+
+三个作用域，每个一个数字。`requests` 是一个调用方同时可以有多少请求在飞行中；再给一个周期，同一个数字也就是它在那段时间里可以发起多少个。一个请求必须通过你设置的每一个作用域。
+
+**如果只设一个数字，就设 `total`。** 它才是保护这台机器的那个：十个调用方各自都在自己的限额之内，仍然会同时到达，而按调用方计的上限看不见这一点。旁边的 `per_token` 才是让一个开五十个线程的客户端占不满全部的东西。
+
+被拒绝的调用方收到一个点名作用域的 429，以及一个 `Retry-After`（当中继能诚实地算出来时）：
+
+```text
+lmrelay: the relay's rate limit is exceeded: 10 per 30m ([limits.total])
+```
+
+这条命令写入 `lmrelay.toml`，文件其余部分原样不动，注释也在，然后给正在运行的中继发信号。
 
 ### 用法
 
@@ -145,8 +166,7 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 `--base-url`、`--dialect` 以及可重复的 `--header K=V`；如果名称是已知的那几个（
 `openai`、`anthropic`、`deepseek`、`grok`、`ollama`），base URL、方言和请求头形态都来自
 预设，所以 `lmrelay provider add openai sk-...` 就是完整的命令。`export` 接受
-`--no-secrets`，两个 `config` 子命令都接受 `--force` 以覆盖已经存在的文件；两者都接受用 `-`
-代替路径，以便走终端。
+`--no-secrets`，它和 `import` 都接受 `--force` 以覆盖已经存在的文件；完全不给路径时，打包文件走 stdout 并从 stdin 读入，于是 `lmrelay export | ssh other-host lmrelay import` 一行就把一个中继搬走。
 凡是读取配置或 state
 的命令都接受 `--config PATH`，也就是除 `init` 和 `disable` 以外的全部命令；`init` 始终写入
 `~/.lmrelay/lmrelay.toml`，而 `disable` 两者都不读。
