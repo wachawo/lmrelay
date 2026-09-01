@@ -279,10 +279,9 @@ class TestExportWritesNowhereItWouldRuin:
         CLI-added provider and the auth switch in one line. The file was still
         readable to load_state, which found nothing in it and turned auth off
         without a word, on a relay that was still running."""
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match="state file"):
             run_command(["export", str(state_path_for(source)),
                          "--config", str(source)])
-        assert "state file" in str(raised.value)
         assert load_state(state_path_for(source)).tokens
 
     def test_nor_over_the_config_file(self, source):
@@ -305,9 +304,8 @@ class TestExportWritesNowhereItWouldRuin:
         """Symmetric with `init` and with `config import`, which both refuse to
         overwrite what is already there."""
         bundle_path.write_text("not mine to lose\n", encoding="utf-8")
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match="--force"):
             run_command(["export", str(bundle_path), "--config", str(source)])
-        assert "--force" in str(raised.value)
         assert bundle_path.read_text(encoding="utf-8") == "not mine to lose\n"
 
     def test_and_force_then_replaces_it(self, source, bundle_path):
@@ -365,9 +363,8 @@ class TestTheTerminalIsWhatNoPathMeans:
         reads as a relay that has locked up rather than as a missing argument."""
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
         monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match="no bundle to read"):
             run_command(["import", "--config", str(target)])
-        assert "no bundle to read" in str(raised.value)
         assert not target.exists()
 
 
@@ -484,9 +481,8 @@ class TestImportReplacesRatherThanMerges:
         """Symmetric with `lmrelay init`, which refuses to overwrite too."""
         export(source, bundle_path)
         occupied = write_config(tmp_path / "occupied", MINIMAL)
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match="--force"):
             run_command(["import", str(bundle_path), "--config", str(occupied)])
-        assert "--force" in str(raised.value)
 
     def test_and_is_left_exactly_as_it_was(self, source, bundle_path, tmp_path):
         occupied = write_config(tmp_path / "occupied", MINIMAL)
@@ -525,10 +521,9 @@ class TestImportReplacesRatherThanMerges:
         occupied = write_config(tmp_path / "occupied", MINIMAL)
         export(source, bundle_path)
         run_command(["import", str(bundle_path), "--config", str(occupied), "--force"])
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match=r"\.bak"):
             run_command(["import", str(bundle_path), "--config", str(occupied),
                          "--force"])
-        assert ".bak" in str(raised.value)
 
     def test_the_operator_is_told_the_bind_needs_a_restart(
         self, source, bundle_path, target, monkeypatch, caplog
@@ -552,11 +547,10 @@ class TestRefusingABundleItCannotApply:
         setting this version does not enforce, and importing it would produce a
         relay that looks configured and is not."""
         export(source, bundle_path)
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match="newer lmrelay"):
             run_command(["import",
                          str(edited(bundle_path, bundle_version=BUNDLE_VERSION + 1)),
                          "--config", str(target)])
-        assert "newer lmrelay" in str(raised.value)
 
     def test_one_that_does_not_say_what_it_is(self, tmp_path, target):
         """A TOML file is not a bundle, and bundle_version is what says it is:
@@ -572,9 +566,8 @@ class TestRefusingABundleItCannotApply:
         rather than as one written in the format before this."""
         stray = tmp_path / "relay.json"
         stray.write_text('{"bundle_version": 1, "server": {"port": 11435}}', encoding="utf-8")
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match="is JSON, and a bundle is TOML"):
             run_command(["import", str(stray), "--config", str(target)])
-        assert "is JSON, and a bundle is TOML" in str(raised.value)
         assert not target.exists()
 
     def test_a_file_that_is_not_toml_at_all(self, tmp_path, target):
@@ -593,10 +586,9 @@ class TestRefusingABundleItCannotApply:
         hand edit or a wrong bundle_version. Forward compatibility is what
         bundle_version is for, and it is one line we control at both ends."""
         export(source, bundle_path)
-        with pytest.raises(BundleError) as raised:
+        with pytest.raises(BundleError, match="limitz"):
             run_command(["import", str(edited(bundle_path, limitz={})),
                          "--config", str(target)])
-        assert "limitz" in str(raised.value)
 
     def test_an_unknown_server_key(self, source, bundle_path, target):
         data = export(source, bundle_path)
@@ -631,20 +623,17 @@ class TestRefusingABundleItCannotApply:
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
-    @pytest.mark.parametrize(
-        "value", [float("nan"), float("inf"), 30, "10/1d", "10/1.5m", "10/30", "10/0s"]
-    )
+    @pytest.mark.parametrize("value", [30, "10/30"])
     def test_a_rate_that_is_not_a_rate(self, source, bundle_path, target, value):
         """The second value validator, beside log_level's, and for the same
-        reason: each of these is the right type or close enough to pass one, and
-        each writes a pair of files the relay then refuses to start from, on a
-        machine whose working config the import has already moved aside.
-
-        `10/30` matters most: it names no unit, and that is half an hour to
-        whoever wrote it about as often as it is half a minute."""
+        reason: a rate that is not a string, or a string that is not a rate,
+        writes a pair of files the relay then refuses to start from, on a
+        machine whose working config the import has already moved aside. One
+        spelling of each; every shape parse_rate refuses is
+        tests/test_ratelimit.py's."""
         data = export(source, bundle_path)
         data["limits"]["total"]["rate"] = value
-        with pytest.raises(BundleError):
+        with pytest.raises(BundleError, match="rate"):
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
@@ -765,3 +754,11 @@ class TestTheKeysCannotDrift:
     def test_a_masked_value_is_the_one_the_state_module_already_uses(self):
         """One spelling of "not shown", so `token list` and a bundle agree."""
         assert MASKED_TOKEN == "***"
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

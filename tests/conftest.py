@@ -332,3 +332,11 @@ def answer_in_flight(client, recorder, **kwargs):
             yield Held(answer=held, pool=pool)
         finally:
             recorder.gate.set()
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

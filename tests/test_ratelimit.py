@@ -69,11 +69,11 @@ class TestSpendingTheAllowance:
     def test_a_caller_starts_with_a_full_bucket(self):
         """Otherwise the first request after every restart is the refused one."""
         limiter = fresh(1.0, 3.0)
-        assert [take(limiter, CALLER, NOW) for _ in range(3)] == [0.0, 0.0, 0.0]
+        assert [take(limiter, CALLER, NOW) for unused in range(3)] == [0.0, 0.0, 0.0]
 
     def test_and_the_one_after_the_burst_is_refused(self):
         limiter = fresh(1.0, 3.0)
-        for _ in range(3):
+        for unused in range(3):
             take(limiter, CALLER, NOW)
         assert take(limiter, CALLER, NOW) > 0.0
 
@@ -87,10 +87,10 @@ class TestSpendingTheAllowance:
 
     def test_the_allowance_refills_over_time(self):
         limiter = fresh(2.0, 5.0)
-        for _ in range(5):
+        for unused in range(5):
             take(limiter, CALLER, NOW)
         assert take(limiter, CALLER, NOW) > 0.0
-        assert [take(limiter, CALLER, NOW + 1.05) for _ in range(2)] == [0.0, 0.0]
+        assert [take(limiter, CALLER, NOW + 1.05) for unused in range(2)] == [0.0, 0.0]
         assert take(limiter, CALLER, NOW + 1.05) > 0.0
 
     def test_but_never_past_full(self):
@@ -98,7 +98,7 @@ class TestSpendingTheAllowance:
         worth at once, which is the burst the limit exists to bound."""
         limiter = fresh(1.0, 2.0)
         take(limiter, CALLER, NOW)
-        allowed = [take(limiter, CALLER, NOW + 3600) == 0.0 for _ in range(3)]
+        allowed = [take(limiter, CALLER, NOW + 3600) == 0.0 for unused in range(3)]
         assert allowed == [True, True, False]
 
     def test_callers_are_counted_apart(self):
@@ -113,7 +113,7 @@ class TestSpendingTheAllowance:
         away with every attempt, or a busy client can never come back."""
         limiter = fresh(1.0, 1.0)
         take(limiter, CALLER, NOW)
-        waits = [take(limiter, CALLER, NOW) for _ in range(5)]
+        waits = [take(limiter, CALLER, NOW) for unused in range(5)]
         assert waits == [1.0, 1.0, 1.0, 1.0, 1.0]
 
 
@@ -124,8 +124,8 @@ class TestAskingWithoutPaying:
         """Asked ten times and charged none of them, the caller still has its
         whole burst: this is the property a refusal at a later scope relies on."""
         limiter = fresh(1.0, 3.0)
-        assert [limiter.wait_for(CALLER, NOW) for _ in range(10)] == [0.0] * 10
-        assert [take(limiter, CALLER, NOW) for _ in range(3)] == [0.0, 0.0, 0.0]
+        assert [limiter.wait_for(CALLER, NOW) for unused in range(10)] == [0.0] * 10
+        assert [take(limiter, CALLER, NOW) for unused in range(3)] == [0.0, 0.0, 0.0]
 
     def test_and_charging_takes_exactly_one(self):
         limiter = fresh(1.0, 3.0)
@@ -185,7 +185,7 @@ class TestForgettingIdleCallers:
         limiter = fresh(2.0, 5.0)
         take(limiter, CALLER, NOW)
         limiter.sweep(NOW + 3600)
-        assert [take(limiter, CALLER, NOW + 3600) for _ in range(5)] == [0.0] * 5
+        assert [take(limiter, CALLER, NOW + 3600) for unused in range(5)] == [0.0] * 5
 
     def test_the_sweep_does_not_run_on_every_request(self):
         """It rebuilds the whole table, so doing it per request would put the
@@ -224,12 +224,12 @@ class TestTheBucketOneNumberBuys:
         replaced got that wrong in both directions: unset it was a second's
         worth of the rate, and set it was a third number to keep in step."""
         limiter = build_limiter(ScopeLimits(concurrent=10, rate="10/1m"))
-        assert [take(limiter, CALLER, NOW) for _ in range(10)] == [0.0] * 10
+        assert [take(limiter, CALLER, NOW) for unused in range(10)] == [0.0] * 10
         assert take(limiter, CALLER, NOW) > 0.0
 
     def test_and_refills_across_the_period_it_was_given(self):
         limiter = build_limiter(ScopeLimits(concurrent=10, rate="10/1m"))
-        for _ in range(10):
+        for unused in range(10):
             take(limiter, CALLER, NOW)
         assert take(limiter, CALLER, NOW + 6.1) == 0.0
 
@@ -587,7 +587,7 @@ class TestWithAuthOff:
         limits = limits_of(per_token=ScopeLimits(concurrent=1, rate="1/1s"))
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys(None, "10.0.0.1")
-        assert [admit(limiters, limits, counter, keys, NOW)[0] for _ in range(3)] == [None] * 3
+        assert [admit(limiters, limits, counter, keys, NOW)[0] for unused in range(3)] == [None] * 3
 
     def test_and_holds_nothing_against_anyone(self):
         """No bucket created and no slot held, so turning auth on later starts
@@ -616,7 +616,7 @@ class TestEverythingOff:
         limits = default_limits()
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys("tok", "10.0.0.1")
-        assert [admit(limiters, limits, counter, keys, NOW)[0] for _ in range(50)] == [None] * 50
+        assert [admit(limiters, limits, counter, keys, NOW)[0] for unused in range(50)] == [None] * 50
         assert counter.counts == {}
 
 
@@ -643,3 +643,11 @@ class TestSayingWhatALimitIs:
 
     def test_and_an_empty_rate_is_no_rate(self):
         assert describe_scope(ScopeLimits(concurrent=6, rate="")) == "6 at once"
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

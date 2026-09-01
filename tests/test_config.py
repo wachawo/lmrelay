@@ -71,9 +71,8 @@ class TestFindingTheFile:
 
     def test_and_the_error_names_it(self, tmp_path, monkeypatch):
         monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
-        with pytest.raises(ConfigError) as raised:
+        with pytest.raises(ConfigError, match=r"absent\.toml"):
             load_config()
-        assert "absent.toml" in str(raised.value)
 
     def test_no_config_anywhere_is_refused_with_both_places_named(self, tmp_path, monkeypatch):
         """It cannot invent an upstream, and starting empty would produce 404s
@@ -346,24 +345,9 @@ class TestTheThreeScopes:
 
     def test_a_rate_with_no_period_is_refused(self, tmp_path):
         """A count on its own is not a rate, and reading it as one per second
-        would be a limit nobody wrote."""
+        would be a limit nobody wrote. One spelling stands for all of them here:
+        every shape parse_rate refuses, and why, is tests/test_ratelimit.py's."""
         target = write_config(tmp_path, '[limits.total]\nrate = "30"\n' + MINIMAL)
-        with pytest.raises(ConfigError, match="a count, a slash and a period"):
-            load_config(target)
-
-    @pytest.mark.parametrize(
-        "spelling", ["10/30", "nan", "inf", "10/1.5m", "10/1d", "10/-5m", "-10/30m", "10/0s"],
-    )
-    def test_and_so_is_every_other_thing_that_is_not_a_rate(self, tmp_path, spelling):
-        """`10/30` names no unit, which is half an hour to whoever wrote it
-        about as often as it is half a minute. nan is the one that mattered
-        while a period was a number: it is not negative, so it walked past the
-        only guard there was, and then compared false against every threshold. A
-        limiter was built for it and swept for the life of the process, and it
-        refused nobody, while `status` printed the scope as off. `10/0s` is the
-        newest: it has the shape, and dividing by it is a limit of infinity,
-        which "off" already spells as an empty rate."""
-        target = write_config(tmp_path, f'[limits.total]\nrate = "{spelling}"\n' + MINIMAL)
         with pytest.raises(ConfigError, match="a count, a slash and a period"):
             load_config(target)
 
@@ -372,9 +356,8 @@ class TestTheThreeScopes:
         error naming the wrong one sends an operator to edit a key that is not
         there."""
         target = write_config(tmp_path, '[limits.per_address]\nconcurrent = "fast"\n' + MINIMAL)
-        with pytest.raises(ConfigError) as raised:
+        with pytest.raises(ConfigError, match=r"\[limits\.per_address\] concurrent"):
             load_config(target)
-        assert "[limits.per_address] concurrent" in str(raised.value)
 
     def test_a_misspelt_scope_is_refused_by_name(self, tmp_path):
         """Ignored, it would leave an operator believing a limit is on when it
@@ -553,3 +536,11 @@ class TestARelayWithNoFileAtAll:
         message = str(raised.value)
         assert "lmrelay init" in message
         assert "lmrelay.toml" in message and "x.toml" in message
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

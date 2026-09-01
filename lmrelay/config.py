@@ -452,7 +452,7 @@ def rewrite_key_line(line: str, rendered: str) -> str:
     The trailing comment survives because it is the operator's, and a number
     changed by a command is exactly the number somebody wrote a reason beside.
     """
-    head, _, remainder = line.partition("=")
+    head, unused_separator, remainder = line.partition("=")
     ending = "\n" if line.endswith("\n") else ""
     body = remainder.rstrip("\n")
     comment = ""

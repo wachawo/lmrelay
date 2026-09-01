@@ -263,11 +263,10 @@ class TestProvidersSpelledOut:
             add_provider(fresh(tmp_path), "acme", "tok", base_url="acme.test")
 
     def test_a_dialect_nobody_speaks_is_refused(self, tmp_path):
-        with pytest.raises(StateError) as raised:
+        with pytest.raises(StateError, match="llama-ish"):
             add_provider(
                 fresh(tmp_path), "acme", "tok", base_url="https://acme.test", dialect="llama-ish"
             )
-        assert "llama-ish" in str(raised.value)
 
     @pytest.mark.parametrize("reserved", ["api", "v1"])
     def test_a_name_that_would_shadow_the_path_root_is_refused(self, tmp_path, reserved):
@@ -285,9 +284,8 @@ class TestProvidersSpelledOut:
         assert headers["Authorization"] == "Bearer sk-test"
 
     def test_deleting_an_unknown_provider_is_refused_by_name(self, tmp_path):
-        with pytest.raises(StateError) as raised:
+        with pytest.raises(StateError, match="openai"):
             delete_provider(fresh(tmp_path), "openai")
-        assert "openai" in str(raised.value)
 
     def test_deleting_one_leaves_the_others(self, tmp_path):
         state = add_provider(fresh(tmp_path), "openai", "sk-a")
@@ -401,3 +399,11 @@ class TestRefusingAStateItCannotUse:
         target.write_text(json.dumps({"version": STATE_VERSION + 1}), encoding="utf-8")
         with pytest.raises(StateError):
             load_state(target)
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

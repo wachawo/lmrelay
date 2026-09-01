@@ -10,7 +10,6 @@ under uvicorn against an upstream that answers slowly, and reads it with an
 ordinary HTTP client.
 """
 
-import os
 import threading
 import time
 
@@ -23,12 +22,9 @@ from starlette.responses import StreamingResponse
 from starlette.routing import Route
 
 # Local imports
+from lmrelay.config import CONFIG_ENV_VAR
+from lmrelay.state import STATE_ENV_VAR
 from tests.conftest import free_port
-
-# Set and restored together. LMRELAY_STATE and LMRELAY_TOKEN are cleared beside
-# the config because a state file or token in the developer's environment would
-# switch auth on for a relay this module reaches with no credential.
-RELAY_ENV = ("LMRELAY_CONFIG", "LMRELAY_STATE", "LMRELAY_TOKEN")
 
 CHUNKS = [b"first\n", b"second\n", b"third\n"]
 # Long enough that "the whole answer was written before anything was sent" and
@@ -85,12 +81,14 @@ def relay_url(tmp_path_factory):
         encoding="utf-8",
     )
 
-    # The app reads the config at startup, from the environment. Set here rather
-    # than through monkeypatch: this fixture outlives a single test.
-    previous = {name: os.environ.get(name) for name in RELAY_ENV}
-    os.environ["LMRELAY_CONFIG"] = str(config)
-    os.environ.pop("LMRELAY_STATE", None)
-    os.environ.pop("LMRELAY_TOKEN", None)
+    # The app reads the config at startup, from the environment. A MonkeyPatch
+    # of this fixture's own rather than the function-scoped one, because this
+    # fixture outlives a single test. The state variable goes too: conftest's
+    # sweep runs per test, after this, and a state file in the developer's
+    # environment would switch auth on for a relay reached with no credential.
+    patch = pytest.MonkeyPatch()
+    patch.setenv(CONFIG_ENV_VAR, str(config))
+    patch.delenv(STATE_ENV_VAR, raising=False)
     try:
         from lmrelay.app import app
 
@@ -101,41 +99,48 @@ def relay_url(tmp_path_factory):
         upstream.should_exit = True
         relay_thread.join(timeout=10)
         upstream_thread.join(timeout=10)
-        for name, value in previous.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+        patch.undo()
 
 
-def test_the_first_chunk_arrives_before_the_upstream_has_written_the_last(relay_url):
-    """A token that only arrives once the whole answer is written arrived late.
+class TestStreamingOverASocket:
+    """What only a real socket can show."""
 
-    The upstream holds for CHUNK_DELAY between chunks, so a relay that read the
-    answer whole before sending could not deliver line one until every line
-    existed, which is the arithmetic the assertion rests on.
-    """
-    started = time.monotonic()
-    with (
-        httpx.Client(timeout=30) as client,
-        client.stream("POST", f"{relay_url}/api/generate", json={"stream": True}) as response,
-    ):
-        assert response.status_code == 200
-        lines = response.iter_lines()
-        first = next(lines)
-        first_at = time.monotonic() - started
-        rest = list(lines)
-        whole_at = time.monotonic() - started
+    def test_the_first_chunk_arrives_before_the_upstream_has_written_the_last(self, relay_url):
+        """A token that only arrives once the whole answer is written arrived late.
 
-    assert first == "first"
-    assert rest == ["second", "third"]
-    # The first line beat the second chunk being written at all.
-    assert first_at < CHUNK_DELAY, f"the first line took {first_at:.2f}s"
-    # And the answer really was spread out, so the check above means something.
-    assert whole_at >= CHUNK_DELAY * (len(CHUNKS) - 1)
+        The upstream holds for CHUNK_DELAY between chunks, so a relay that read the
+        answer whole before sending could not deliver line one until every line
+        existed, which is the arithmetic the assertion rests on.
+        """
+        started = time.monotonic()
+        with (
+            httpx.Client(timeout=30) as client,
+            client.stream("POST", f"{relay_url}/api/generate", json={"stream": True}) as response,
+        ):
+            assert response.status_code == 200
+            lines = response.iter_lines()
+            first = next(lines)
+            first_at = time.monotonic() - started
+            rest = list(lines)
+            whole_at = time.monotonic() - started
+
+        assert first == "first"
+        assert rest == ["second", "third"]
+        # The first line beat the second chunk being written at all.
+        assert first_at < CHUNK_DELAY, f"the first line took {first_at:.2f}s"
+        # And the answer really was spread out, so the check above means something.
+        assert whole_at >= CHUNK_DELAY * (len(CHUNKS) - 1)
 
 
-def test_every_byte_arrives_and_in_order(relay_url):
-    with httpx.Client(timeout=30) as client:
-        response = client.post(f"{relay_url}/api/generate", json={})
-    assert response.content == b"".join(CHUNKS)
+    def test_every_byte_arrives_and_in_order(self, relay_url):
+        with httpx.Client(timeout=30) as client:
+            response = client.post(f"{relay_url}/api/generate", json={})
+        assert response.content == b"".join(CHUNKS)
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

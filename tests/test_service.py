@@ -195,9 +195,8 @@ class TestRegisteringForAutostart:
 
     def test_a_platform_with_no_manager_says_what_to_use_instead(self, tmp_path, monkeypatch):
         monkeypatch.setattr(service, "detect_manager", lambda: "none")
-        with pytest.raises(LmrelayError) as raised:
+        with pytest.raises(LmrelayError, match="lmrelay serve"):
             enable_autostart(tmp_path / "lmrelay.toml")
-        assert "lmrelay serve" in str(raised.value)
 
     def test_enabling_writes_the_unit(self, tmp_path, monkeypatch):
         unit = self.as_systemd(tmp_path, monkeypatch)
@@ -235,9 +234,8 @@ class TestRegisteringForAutostart:
         monkeypatch.setattr(
             service.subprocess, "run", recording_run([], 1, "Failed to connect to bus")
         )
-        with pytest.raises(LmrelayError) as raised:
+        with pytest.raises(LmrelayError, match="Failed to connect to bus"):
             enable_autostart(tmp_path / "lmrelay.toml")
-        assert "Failed to connect to bus" in str(raised.value)
 
     def test_disabling_takes_the_unit_away(self, tmp_path, monkeypatch):
         unit = self.as_systemd(tmp_path, monkeypatch)
@@ -298,3 +296,11 @@ class TestReportingAutostart:
             service.subprocess, "run", systemctl_run({"is-enabled": 0, "is-active": 0})
         )
         assert service_is_active() is False
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

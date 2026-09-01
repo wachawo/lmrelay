@@ -222,9 +222,8 @@ class TestAPidWeMayNotSignal:
     def test_stopping_it_says_whose_it_is_rather_than_raising_permission_error(self, tmp_path):
         config = write_config_on_port(tmp_path, 11435)
         write_pid(pid_file(config), FOREIGN_PID)
-        with pytest.raises(LmrelayError) as raised:
+        with pytest.raises(LmrelayError, match="another user"):
             stop_daemon(config)
-        assert "another user" in str(raised.value)
         # And the pidfile is left alone: removing it would only hide the state
         # the operator has to act on.
         assert pid_file(config).exists()
@@ -232,9 +231,8 @@ class TestAPidWeMayNotSignal:
     def test_and_so_does_reloading_it(self, tmp_path):
         config = write_config_on_port(tmp_path, 11435)
         write_pid(pid_file(config), FOREIGN_PID)
-        with pytest.raises(LmrelayError) as raised:
+        with pytest.raises(LmrelayError, match="another user"):
             reload_daemon(config)
-        assert "another user" in str(raised.value)
 
 
 class TestStoppingSomethingThatWillNotGo:
@@ -456,9 +454,8 @@ class TestWaitingForTheRelayWeStarted:
         """The config is parsed and the port bound in the child, so a fork that
         worked proves nothing. Sitting out the full start timeout to then say
         nothing appeared would bury the reason."""
-        with pytest.raises(LmrelayError) as raised:
+        with pytest.raises(LmrelayError, match="exited during startup"):
             wait_for_relay(dead_pid(), tmp_path / PID_NAME, tmp_path / LOG_NAME)
-        assert "exited during startup" in str(raised.value)
 
     def test_and_the_pid_that_recorded_itself_is_the_one_returned(self, tmp_path):
         target = tmp_path / PID_NAME
@@ -501,3 +498,11 @@ class TestARealDetachedRelay:
         with pytest.raises(LmrelayError):
             start_detached(config, "127.0.0.1", 11435)
         assert read_pid(pid_file(config)) == os.getpid()
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

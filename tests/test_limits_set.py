@@ -227,17 +227,14 @@ class TestWhatItRefuses:
         ["total", "1.5"],
         ["total", "5", "3"],
         ["total", "5", "10/30"],
-        ["total", "5", "10/1d"],
-        ["total", "5", "nan"],
         ["total", "10/0s"],
     ])
     def test_a_value_the_file_would_refuse(self, config_path, words):
         """Read by the config's own readers, so a value is refused in the same
         words whether it was typed into the file or onto the command line."""
         before = config_path.read_text(encoding="utf-8")
-        with pytest.raises(ConfigError) as raised:
+        with pytest.raises(ConfigError, match=r"\[limits\.total\]"):
             set_limit(config_path, *words)
-        assert "[limits.total]" in str(raised.value)
         assert config_path.read_text(encoding="utf-8") == before
 
     def test_and_a_rate_refusal_shows_the_shape(self, config_path):
@@ -277,17 +274,15 @@ class TestWhatItRefuses:
             '[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"\n'
         )
         target.write_text(body, encoding="utf-8")
-        with pytest.raises(ConfigError) as raised:
+        with pytest.raises(ConfigError, match="nothing has been written"):
             set_limit(target, "total", "4")
-        assert "nothing has been written" in str(raised.value)
         assert target.read_text(encoding="utf-8") == body
 
     def test_no_config_to_edit_points_at_init(self, tmp_path):
         """Writing one would produce a config with limits and no upstream, which
         is a file the relay refuses to start from."""
-        with pytest.raises(ConfigError) as raised:
+        with pytest.raises(ConfigError, match="lmrelay init"):
             set_limit(tmp_path / "absent.toml", "total", "4")
-        assert "lmrelay init" in str(raised.value)
 
 
 class TestWhatItSays:

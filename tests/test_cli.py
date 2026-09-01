@@ -138,9 +138,8 @@ class TestTurningAuthOn:
 
     def test_with_no_tokens_it_is_refused(self, config_path):
         """It would 401 every request, including the operator's own."""
-        with pytest.raises(LmrelayError) as raised:
+        with pytest.raises(LmrelayError, match="token gen"):
             run_command(["auth", "true", "--config", str(config_path)])
-        assert "token gen" in str(raised.value)
 
     def test_and_the_command_exits_non_zero(self, config_path, monkeypatch):
         monkeypatch.setattr(
@@ -254,9 +253,8 @@ class TestProviders:
     def test_a_hand_written_upstream_is_refused_and_the_file_is_named(self, config_path):
         """It is visible in `provider list`, so a silent no-op would read as a
         bug. The operator is told which file to edit instead."""
-        with pytest.raises(LmrelayError) as raised:
+        with pytest.raises(LmrelayError, match=r"lmrelay\.toml"):
             run_command(["provider", "delete", "ollama", "--config", str(config_path)])
-        assert "lmrelay.toml" in str(raised.value)
 
 
 class TestHandingOverToTheServiceManager:
@@ -408,3 +406,11 @@ class TestSayingWhatAReloadCannotApply:
         with caplog.at_level(logging.WARNING):
             run_command(["reload", "--config", str(config_path)])
         assert "restart to apply" not in caplog.text
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

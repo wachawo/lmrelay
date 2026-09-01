@@ -294,3 +294,11 @@ class TestWhetherThereIsABody:
 
     def test_and_so_is_a_chunked_one(self):
         assert has_request_body({"transfer-encoding": "chunked"})
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

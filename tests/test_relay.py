@@ -459,13 +459,13 @@ class TestHowOftenACallerMayAsk:
     """`period`, which makes `requests` a how-often as well, in each scope."""
 
     def test_the_allowance_gets_through_and_the_next_one_does_not(self, limited):
-        codes = [limited.get("/api/tags").status_code for _ in range(4)]
+        codes = [limited.get("/api/tags").status_code for unused in range(4)]
         assert codes == [200, 200, 200, 429]
 
     def test_the_refusal_names_the_scope_and_the_number(self, limited):
         """`429` on its own leaves an operator guessing which of six numbers to
         raise, and the message has to be distinguishable from a provider's."""
-        for _ in range(3):
+        for unused in range(3):
             limited.get("/api/tags")
         error = limited.get("/api/tags").json()["error"]
         assert error == (
@@ -473,7 +473,7 @@ class TestHowOftenACallerMayAsk:
         )
 
     def test_the_token_scope_says_it_is_your_token(self, limited_by_token):
-        for _ in range(3):
+        for unused in range(3):
             limited_by_token.get("/api/tags", headers=bearer(TOKEN))
         error = limited_by_token.get("/api/tags", headers=bearer(TOKEN)).json()["error"]
         assert "your token" in error and "[limits.per_token]" in error
@@ -482,7 +482,7 @@ class TestHowOftenACallerMayAsk:
         """Not "yours": at this scope the allowance being spent is everybody's,
         and a caller told to slow down when they have sent one request would go
         looking for a limit of their own that is not set."""
-        for _ in range(3):
+        for unused in range(3):
             limited_in_total.get("/api/tags", headers=bearer(TOKEN))
         error = limited_in_total.get("/api/tags", headers=bearer(OTHER_TOKEN)).json()["error"]
         assert "the relay's rate limit" in error and "[limits.total]" in error
@@ -497,7 +497,7 @@ class TestHowOftenACallerMayAsk:
             tmp_path, monkeypatch, recorder,
             config_limits(per_address='concurrent = 3\nrate = "3/60s"'),
         ):
-            assert [client.get("/api/tags").status_code for _ in range(3)] == [200] * 3
+            assert [client.get("/api/tags").status_code for unused in range(3)] == [200] * 3
             refusal = client.get("/api/tags")
             assert refusal.status_code == 429
             assert "3/60s" in refusal.json()["error"]
@@ -507,14 +507,14 @@ class TestHowOftenACallerMayAsk:
         one token has refilled. Whole seconds, because the header takes no
         fraction, and rounded up because rounding down invites a retry that is
         refused again."""
-        for _ in range(3):
+        for unused in range(3):
             limited.get("/api/tags")
         assert limited.get("/api/tags").headers["retry-after"] == "1"
 
     def test_a_refused_request_reaches_no_upstream(self, limited, recorder):
         """The limit exists to keep work off the upstream, so nothing is
         forwarded before the whole admission decision has been made."""
-        for _ in range(3):
+        for unused in range(3):
             limited.get("/api/tags")
         assert limited.get("/api/tags").status_code == 429
         assert len(recorder.requests) == 3
@@ -524,15 +524,15 @@ class TestHowOftenACallerMayAsk:
         would report the relay dead for being polled. Structural now: the
         decision lives in the relay route, so /healthz never reaches it and
         needs no path-and-method exemption of its own."""
-        for _ in range(3):
+        for unused in range(3):
             limited.get("/api/tags")
         assert limited.get("/api/tags").status_code == 429
-        assert [limited.get("/healthz").status_code for _ in range(5)] == [200] * 5
+        assert [limited.get("/healthz").status_code for unused in range(5)] == [200] * 5
 
     def test_callers_do_not_share_an_allowance_at_the_token_scope(self, limited_by_token):
         """One caller spending its burst must not refuse everybody else, which
         is the whole argument for having a scope narrower than the total."""
-        for _ in range(3):
+        for unused in range(3):
             limited_by_token.get("/api/tags", headers=bearer(TOKEN))
         assert limited_by_token.get("/api/tags", headers=bearer(TOKEN)).status_code == 429
         assert limited_by_token.get(
@@ -542,7 +542,7 @@ class TestHowOftenACallerMayAsk:
     def test_but_they_do_share_the_total(self, limited_in_total):
         """Which is the point of it: ten callers each inside their own limit
         still arrive together, and only this scope sees that."""
-        for _ in range(3):
+        for unused in range(3):
             limited_in_total.get("/api/tags", headers=bearer(TOKEN))
         assert limited_in_total.get(
             "/api/tags", headers=bearer(OTHER_TOKEN)
@@ -554,13 +554,13 @@ class TestHowOftenACallerMayAsk:
         """The reason the limits are charged after the credential is checked.
         Charged before, anyone could exhaust a token's allowance by guessing at
         it, which turns a rate limit into a way to deny service to its owner."""
-        for _ in range(10):
+        for unused in range(10):
             assert limited_by_token.get(
                 "/api/tags", headers=bearer("not-a-token")
             ).status_code == 401
         codes = [
             limited_by_token.get("/api/tags", headers=bearer(TOKEN)).status_code
-            for _ in range(4)
+            for unused in range(4)
         ]
         assert codes == [200, 200, 200, 429]
 
@@ -568,7 +568,7 @@ class TestHowOftenACallerMayAsk:
         """It used to say `-> -`, because the limit was charged before an
         upstream had been selected. One decision made in the route means every
         refusal can say which upstream it was headed for."""
-        for _ in range(3):
+        for unused in range(3):
             limited.get("/api/tags")
         with caplog.at_level(logging.INFO):
             limited.get("/api/tags")
@@ -580,7 +580,7 @@ class TestHowOftenACallerMayAsk:
         from lmrelay.app import app
 
         assert set(app.state.limiters.values()) == {None}
-        assert [authed.get("/api/tags").status_code for _ in range(20)] == [200] * 20
+        assert [authed.get("/api/tags").status_code for unused in range(20)] == [200] * 20
 
 
 class TestPassingEveryScopeOrNone:
@@ -608,7 +608,7 @@ class TestPassingEveryScopeOrNone:
         from lmrelay.app import app
 
         limited_everywhere.get("/api/tags", headers=bearer(TOKEN))
-        for _ in range(5):
+        for unused in range(5):
             assert limited_everywhere.get(
                 "/api/tags", headers=bearer(TOKEN)
             ).status_code == 429
@@ -618,7 +618,7 @@ class TestPassingEveryScopeOrNone:
         assert app.state.limiters["per_address"].buckets["addr:testclient"].tokens == 3.0
 
     def test_and_the_other_caller_is_untouched_by_all_of_it(self, limited_everywhere):
-        for _ in range(6):
+        for unused in range(6):
             limited_everywhere.get("/api/tags", headers=bearer(TOKEN))
         assert limited_everywhere.get(
             "/api/tags", headers=bearer(OTHER_TOKEN)
@@ -825,9 +825,9 @@ class TestGivingTheSlotBackWhenThereIsNoAnswer:
         wrong-dialect path is no longer rate limited. It costs microseconds per
         400 and cannot touch a model, and fail2ban is the answer if it matters.
         """
-        for _ in range(10):
+        for unused in range(10):
             assert limited.post("/anthropic/api/chat", json={}).status_code == 400
-        assert [limited.get("/api/tags").status_code for _ in range(3)] == [200] * 3
+        assert [limited.get("/api/tags").status_code for unused in range(3)] == [200] * 3
 
     def test_an_unreachable_upstream_gives_it_back(self, capped, recorder):
         from lmrelay.app import app
@@ -1115,7 +1115,7 @@ class TestReloadingInPlace:
         from lmrelay.app import app, reload_config
 
         before = app.state.limiters["per_address"]
-        for _ in range(3):
+        for unused in range(3):
             limited.get("/api/tags")
         assert limited.get("/api/tags").status_code == 429
 
@@ -1146,7 +1146,7 @@ class TestReloadingInPlace:
         from lmrelay.app import app, reload_config
 
         before = app.state.limiters["per_address"]
-        for _ in range(3):
+        for unused in range(3):
             limited.get("/api/tags")
         assert limited.get("/api/tags").status_code == 429
 
@@ -1309,3 +1309,11 @@ class TestReloadingARelayAnyoneCanReach:
         with caplog.at_level(logging.WARNING):
             reload_config(app)
         assert "caller that can reach this port" in caplog.text
+
+
+def main():
+    pass
+
+
+if __name__ == "__main__":
+    main()

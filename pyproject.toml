@@ -87,7 +87,7 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # Project style forbids underscore-prefixed identifiers, so deliberately
 # discarded slots are named `unused...` instead of `_`.
-dummy-variable-rgx = "^(_[a-zA-Z0-9_]*|unused[a-zA-Z0-9_]*)$"
+dummy-variable-rgx = "^unused[a-zA-Z0-9_]*$"
 ignore = [
   "E501",   # line too long: the wide constant blocks read better aligned
   "UP009",  # UTF-8 coding declaration: required by project style guide
