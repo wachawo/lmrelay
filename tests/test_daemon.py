@@ -11,7 +11,7 @@ import time
 import pytest
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR, TOKEN_ENV_VAR, load_config
+from lmrelay.config import CONFIG_ENV_VAR, load_config
 from lmrelay.daemon import (
     LOG_NAME,
     PID_NAME,
@@ -68,7 +68,6 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
     monkeypatch.delenv(STATE_ENV_VAR, raising=False)
-    monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
 
 
 def write_config(tmp_path, port: int):

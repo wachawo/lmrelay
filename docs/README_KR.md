@@ -90,7 +90,7 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 
 ```bash
 curl http://127.0.0.1:11435/api/tags \
-  -H "Authorization: Bearer $LMRELAY_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 실제로 운용하기
@@ -152,10 +152,6 @@ autostart    systemd: enabled, active
 명령이 받습니다. 즉 `init`과 `disable`을 뺀 모든 명령이며, `init`은 언제나
 `~/.lmrelay/lmrelay.toml`에 쓰고 `disable`은 둘 다 읽지 않습니다.
 
-설정 파일의 모든 키에는 환경 변수 표기도 있습니다. `LMRELAY_` 뒤에 그 키까지의 경로를 붙인
-것이라, `[limits.total] concurrent`는 `LMRELAY_LIMITS_TOTAL_CONCURRENT`입니다. 환경 변수가
-파일보다 우선하고, 업스트림을 그렇게 지정하는 컨테이너에는 설정 파일이 아예 필요 없습니다.
-
 ### 업스트림 선택
 
 첫 번째 경로 세그먼트가 `[upstream]`의 키와 정확히 일치할 때에만 그 세그먼트가 업스트림을
@@ -184,7 +180,7 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 
 ```bash
 curl http://127.0.0.1:11435/api/chat \
-  -H "Authorization: Bearer $LMRELAY_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
   "model": "llama3",
   "messages": [{"role": "user", "content": "hi"}]

@@ -95,7 +95,7 @@ auth चालू होने पर इनमें से हर अनुर
 
 ```bash
 curl http://127.0.0.1:11435/api/tags \
-  -H "Authorization: Bearer $LMRELAY_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### असल में चलाना
@@ -156,10 +156,6 @@ autostart    systemd: enabled, active
 commands में चलता है जो config या state पढ़ती हैं, यानी `init` और `disable` को छोड़कर हर command
 में। `init` हमेशा `~/.lmrelay/lmrelay.toml` ही लिखती है, और `disable` इनमें से कुछ नहीं पढ़ती।
 
-config फ़ाइल की हर key का एक environment वाला रूप भी है: `LMRELAY_` के बाद उस key तक का रास्ता,
-यानी `[limits.total] concurrent` का मतलब `LMRELAY_LIMITS_TOTAL_CONCURRENT`। environment फ़ाइल पर
-भारी पड़ता है, और जो container अपने upstreams ऐसे तय करता है उसे config फ़ाइल चाहिए ही नहीं।
-
 ### upstream चुनना
 
 path का पहला segment upstream तभी चुनता है जब वह `[upstream]` की किसी key से हूबहू मेल खाए। वरना
@@ -188,7 +184,7 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 
 ```bash
 curl http://127.0.0.1:11435/api/chat \
-  -H "Authorization: Bearer $LMRELAY_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
   "model": "llama3",
   "messages": [{"role": "user", "content": "hi"}]

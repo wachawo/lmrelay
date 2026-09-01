@@ -88,7 +88,7 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 
 ```bash
 curl http://127.0.0.1:11435/api/tags \
-  -H "Authorization: Bearer $LMRELAY_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 正式运行
@@ -150,10 +150,6 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 的命令都接受 `--config PATH`，也就是除 `init` 和 `disable` 以外的全部命令；`init` 始终写入
 `~/.lmrelay/lmrelay.toml`，而 `disable` 两者都不读。
 
-配置文件里的每个键还有一种环境变量写法：`LMRELAY_` 加上到该键的路径，也就是
-`[limits.total] concurrent` 写作 `LMRELAY_LIMITS_TOTAL_CONCURRENT`。环境变量优先于文件，
-而这样设置上游的容器根本不需要配置文件。
-
 ### 选择上游
 
 当且仅当第一个路径段与 `[upstream]` 中的某个键完全一致时，它才用于选择上游。否则由
@@ -181,7 +177,7 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 
 ```bash
 curl http://127.0.0.1:11435/api/chat \
-  -H "Authorization: Bearer $LMRELAY_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
   "model": "llama3",
   "messages": [{"role": "user", "content": "hi"}]

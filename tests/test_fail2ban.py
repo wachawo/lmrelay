@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR, TOKEN_ENV_VAR
+from lmrelay.config import CONFIG_ENV_VAR
 from lmrelay.logging_setup import LOG_DATEFMT, LOG_FORMAT
 from tests.conftest import CONFIG_TEMPLATE, TOKEN, build_relay, write_config, write_state
 
@@ -90,7 +90,6 @@ def rate_limited(tmp_path, monkeypatch, recorder):
     """
     body = CONFIG_TEMPLATE.format(token=TOKEN) + "\n[limits.per_address]\nrate = 1\nburst = 1\n"
     monkeypatch.setenv(CONFIG_ENV_VAR, write_config(tmp_path, body))
-    monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
     write_state(tmp_path, auth_enabled=False)
     yield from build_relay(recorder)
 

@@ -29,7 +29,6 @@ from lmrelay.config import (
     CONFIG_ENV_VAR,
     DEFAULT_LOG_LEVEL,
     HOME_CONFIG_PATH,
-    TOKEN_ENV_VAR,
     ConfigError,
     RelayConfig,
     check_exposure,
@@ -333,10 +332,11 @@ def disable_service(unused_args: argparse.Namespace) -> None:
 def acceptable_token_count(config_path: Path, state: RelayState) -> int:
     """How many credentials a caller could actually present.
 
-    Not just the ones the CLI stored: `[auth] token` and $LMRELAY_TOKEN are
-    equally valid, and they are how a container install gets one. Counting only
-    the state would refuse to turn auth on in exactly the setup load_config
-    warns about, telling the operator to run the command that just refused.
+    Not just the ones the CLI stored: an `[auth] token` written into the config
+    file is equally valid, and it is how an install that never runs `token gen`
+    gets one. Counting only the state would refuse to turn auth on in exactly
+    the setup load_config warns about, telling the operator to run the command
+    that just refused.
     """
     try:
         return len(load_config(config_path).auth_tokens)
@@ -514,12 +514,10 @@ def config_export(args: argparse.Namespace) -> None:
     state = load_state(config.state_path)
     check_export_destination(args.path, config, args.force)
     keep_secrets = not args.no_secrets
-    # The effective configuration, not the two files: a bundle that reproduced
-    # the relay only on a machine with the same environment would fail at
-    # exactly the thing that is guaranteed to differ.
-    bundle = build_bundle(
-        config, state, keep_secrets=keep_secrets, environment_token=os.getenv(TOKEN_ENV_VAR)
-    )
+    # The configuration in effect, not the two files verbatim: an upstream whose
+    # header is written ${OPENAI_API_KEY} is exported expanded, because a bundle
+    # reproduces the relay rather than the machine it ran on.
+    bundle = build_bundle(config, state, keep_secrets=keep_secrets)
     write_bundle(bundle, args.path)
 
     tokens, keyed = count_secrets(bundle)

@@ -90,7 +90,7 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 
 ```bash
 curl http://127.0.0.1:11435/api/tags \
-  -H "Authorization: Bearer $LMRELAY_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 実運用で動かす
@@ -151,11 +151,6 @@ autostart    systemd: enabled, active
 または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。
 `init` は常に `~/.lmrelay/lmrelay.toml` を書き、`disable` はどちらも読まない。
 
-設定ファイルのどのキーにも環境変数としての綴りがある。`LMRELAY_` にそのキーまでのパスを
-足したもので、`[limits.total] concurrent` は `LMRELAY_LIMITS_TOTAL_CONCURRENT` になる。
-環境変数はファイルより優先され、アップストリームをそう指定するコンテナには設定ファイル
-そのものが要らない。
-
 ### アップストリームの選択
 
 パスの最初のセグメントがアップストリームを選ぶのは、それが `[upstream]` のキーと完全に一致する
@@ -183,7 +178,7 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 
 ```bash
 curl http://127.0.0.1:11435/api/chat \
-  -H "Authorization: Bearer $LMRELAY_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
   "model": "llama3",
   "messages": [{"role": "user", "content": "hi"}]

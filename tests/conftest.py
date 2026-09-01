@@ -12,11 +12,17 @@ import pytest
 from starlette.testclient import TestClient
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR, ENV_PREFIX, TOKEN_ENV_VAR
+from lmrelay.config import CONFIG_ENV_VAR
 from lmrelay.state import STATE_NAME, CallerToken, RelayState, save_state
 
 TOKEN = "caller-token-value"
 CREATED_AT = "2026-01-01T00:00:00Z"
+
+# Spelled out here rather than imported: the package no longer has a prefix
+# constant to import, because settings no longer come from the environment. What
+# is left under it are paths and the CLI's own plumbing, and the suite still has
+# to be sure none of them arrived from the developer's shell.
+ENV_PREFIX = "LMRELAY_"
 
 # Two upstreams pointed at hosts nothing resolves: every request in these tests
 # is answered by the recording transport below, so a test that accidentally
@@ -54,11 +60,10 @@ def isolated_home(tmp_path, monkeypatch):
     real tokens and a real auth switch through $LMRELAY_STATE, and anything that
     resolves `~` at call time, `lmrelay init` above all, would write there.
 
-    Every LMRELAY_ name goes, not just that one: the environment is now a
-    config source of its own, so a developer who exports LMRELAY_LIMITS_TOTAL_RATE
-    or LMRELAY_AUTH_ENABLED in their own shell would otherwise be running a
-    different suite from CI, and the difference would show up as a limit test
-    failing for a reason nothing in the file explains.
+    Every LMRELAY_ name goes, not just that one. $LMRELAY_CONFIG points the
+    whole suite at another file, and $LMRELAY_BIND and $LMRELAY_SERVICE are read
+    by the process-control tests, so a developer with any of them exported in
+    their own shell would be running a different suite from CI.
     """
     for name in [name for name in os.environ if name.startswith(ENV_PREFIX)]:
         monkeypatch.delenv(name, raising=False)
@@ -152,7 +157,6 @@ def recorder() -> Recorder:
 def relay(tmp_path, monkeypatch, recorder):
     """A running relay whose upstream is the recorder, with the standard config."""
     monkeypatch.setenv(CONFIG_ENV_VAR, write_config(tmp_path, CONFIG_TEMPLATE.format(token=TOKEN)))
-    monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
     # The switch lives in the state, so the [auth] token above is only a
     # credential that gets checked once something turns checking on.
     write_state(tmp_path, auth_enabled=True)

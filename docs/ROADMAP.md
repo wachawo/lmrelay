@@ -22,8 +22,6 @@ section is the point of this file: a decision that is not written down gets made
 - [ ] **Limits in three scopes.** Per token, per address, and for the relay as a whole. A
       per-caller cap does not protect the upstream, since callers each inside their own
       limit still arrive together; the global scope is the one that does.
-- [ ] **Every setting readable from the environment.** So a container or a unit file
-      configures the relay without a config file at all.
 - [ ] **`config export` and `config import`.** One file that reproduces a relay elsewhere,
       written 0600 because it carries tokens and provider keys.
 
@@ -67,6 +65,27 @@ section is the point of this file: a decision that is not written down gets made
 Nothing agreed. Everything that was is in the section above, built and not yet released.
 
 ## Considered and declined
+
+- **Every setting readable from the environment.** Built, and then removed before it was
+  released: `LMRELAY_` plus the path to a key, for `[server]`, `[limits.*]`, `[auth]` and
+  the upstreams, winning over the file so a container needed no config file at all.
+
+  What it cost was the one property this relay had that is worth more than that
+  convenience: **the file says what the relay does.** With the overlay in place an operator
+  could edit `lmrelay.toml`, reload, watch nothing change, and have no way to tell that from
+  a broken reload. There was a warning line naming every shadowed key, and it was not
+  enough, because the operator who needs it is the one not reading the log. The same shape
+  had already bitten once inside the feature itself: `LMRELAY_AUTH_ENABLE`, one keystroke
+  from the real name, was read by nothing and left authentication off on a relay whose
+  operator had just turned it on. That was patched by refusing unknown names under the
+  checked prefixes, which is a fix for the typo and not for the design.
+
+  Three settings sources for one number is two too many. The file and `state.json` remain,
+  they are split by owner rather than by precedence, and neither hides the other:
+  `lmrelay provider add` shadowing an `[upstream.*]` is the one overlap left, and it is
+  announced by name at every start. `$LMRELAY_CONFIG` stays, because it names which file to
+  read rather than what is in it, and `${VAR}` in a header value stays, because it predates
+  all of this and is how a provider key stays out of the file.
 
 - **A model-aware queue, to stop Ollama thrashing between models.** Measured, and it is not
   a fix. Two models alternating strictly serially, which is a semaphore of one, still paid a

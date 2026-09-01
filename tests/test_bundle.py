@@ -10,7 +10,7 @@ import pytest
 # Local imports
 from lmrelay.bundle import BUNDLE_VERSION, LIMIT_TYPES, SERVER_TYPES, STDIO_PATH
 from lmrelay.cli import build_parser
-from lmrelay.config import CONFIG_ENV_VAR, SERVER_KEYS, TOKEN_ENV_VAR, RelayConfig, load_config
+from lmrelay.config import CONFIG_ENV_VAR, SERVER_KEYS, RelayConfig, load_config
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.ratelimit import LIMIT_KEYS, SCOPES
 from lmrelay.state import MASKED_TOKEN, STATE_ENV_VAR, load_state, state_path_for
@@ -58,7 +58,6 @@ dialect  = "ollama"
 
 PROVIDER_KEY = "sk-openai-live"
 FILE_TOKEN   = "token-from-the-file"
-ENV_TOKEN    = "token-from-the-environment"
 # A $ in it on purpose: a key run back through Template would come out as an
 # environment variable's value, and that value would go to the provider.
 ANTHROPIC_KEY = "sk-ant-with-a-$dollar-in-it"
@@ -71,7 +70,6 @@ def isolated_environment(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv(CONFIG_ENV_VAR, raising=False)
     monkeypatch.delenv(STATE_ENV_VAR, raising=False)
-    monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
 
 
 def run_command(argv: list[str]) -> None:
@@ -90,10 +88,9 @@ def write_config(directory, body: str):
 
 @pytest.fixture
 def source(tmp_path, monkeypatch):
-    """A configured relay: three credentials, a CLI-added provider, limits set."""
+    """A configured relay: two credentials, a CLI-added provider, limits set."""
     config_path = write_config(tmp_path / "source", SOURCE_CONFIG)
     monkeypatch.setenv("ANTHROPIC_KEY", ANTHROPIC_KEY)
-    monkeypatch.setenv(TOKEN_ENV_VAR, ENV_TOKEN)
     run_command(["provider", "add", "openai", PROVIDER_KEY, "--config", str(config_path)])
     run_command(["token", "add", "lmr_generated", "--label", "laptop",
                  "--config", str(config_path)])
@@ -125,11 +122,10 @@ def leave_the_source_machine(monkeypatch) -> None:
     """Drop the environment the exported relay ran with.
 
     An import happens somewhere else, and somewhere else is exactly where
-    ${ANTHROPIC_KEY} and $LMRELAY_TOKEN are not set. A bundle that reproduced
-    the relay only with them is a bundle that reproduces nothing.
+    ${ANTHROPIC_KEY} is not set. A bundle that reproduced the relay only with
+    it is a bundle that reproduces nothing.
     """
     monkeypatch.delenv("ANTHROPIC_KEY", raising=False)
-    monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
 
 
 def effective(config: RelayConfig) -> dict:
@@ -201,13 +197,13 @@ class TestTheRoundTrip:
     def test_a_credential_from_the_file_still_works_after_the_move(
         self, source, bundle_path, target, monkeypatch
     ):
-        """[auth] token and $LMRELAY_TOKEN have no token record, and leaving them
-        out would import a relay that refuses a caller the exported one served."""
+        """[auth] token has no token record, and leaving it out would import a
+        relay that refuses a caller the exported one served."""
         export(source, bundle_path)
         leave_the_source_machine(monkeypatch)
         run_command(["config", "import", str(bundle_path), "--config", str(target)])
         tokens = load_config(target).auth_tokens
-        assert FILE_TOKEN in tokens and ENV_TOKEN in tokens
+        assert FILE_TOKEN in tokens
 
     def test_a_token_keeps_the_id_that_was_printed_for_it(
         self, source, bundle_path, target, monkeypatch
@@ -355,7 +351,7 @@ class TestLeavingTheSecretsOut:
         """The difference between a shareable config and a leaked key."""
         export(source, bundle_path, "--no-secrets")
         written = bundle_path.read_text(encoding="utf-8")
-        for secret in (PROVIDER_KEY, ANTHROPIC_KEY, FILE_TOKEN, ENV_TOKEN, "lmr_generated"):
+        for secret in (PROVIDER_KEY, ANTHROPIC_KEY, FILE_TOKEN, "lmr_generated"):
             assert secret not in written
 
     def test_everything_that_is_not_a_secret_still_is(self, source, bundle_path):

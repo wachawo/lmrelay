@@ -97,7 +97,7 @@ Bei eingeschalteter Authentifizierung braucht jede dieser Anfragen die Zugangsda
 
 ```bash
 curl http://127.0.0.1:11435/api/tags \
-  -H "Authorization: Bearer $LMRELAY_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Produktiver Betrieb
@@ -161,11 +161,6 @@ benutzen.
 jeder Befehl außer `init`, das immer `~/.lmrelay/lmrelay.toml` schreibt, und `disable`, das
 weder das eine noch das andere liest.
 
-Jeder Schlüssel der Konfigurationsdatei hat auch eine Schreibweise als Umgebungsvariable,
-`LMRELAY_` plus der Pfad zum Schlüssel: `[limits.total] concurrent` ist
-`LMRELAY_LIMITS_TOTAL_CONCURRENT`. Die Umgebung gewinnt gegen die Datei, und ein Container,
-der seine Upstreams so setzt, braucht überhaupt keine Konfigurationsdatei.
-
 ### Auswahl des Upstreams
 
 Das erste Pfadsegment wählt den Upstream genau dann, wenn es exakt einem Schlüssel in
@@ -195,7 +190,7 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 
 ```bash
 curl http://127.0.0.1:11435/api/chat \
-  -H "Authorization: Bearer $LMRELAY_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
   "model": "llama3",
   "messages": [{"role": "user", "content": "hi"}]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Where the config is found, what the environment and the state add, and every refusal."""
+"""Where the config is found, what the state adds, and every refusal."""
 
 import logging
 
@@ -9,9 +9,7 @@ import pytest
 # Local imports
 from lmrelay import config as config_module
 from lmrelay.config import (
-    AUTH_ENABLED_ENV_VAR,
     CONFIG_ENV_VAR,
-    TOKEN_ENV_VAR,
     ConfigError,
     check_exposure,
     find_config_path,
@@ -193,22 +191,15 @@ headers  = { Authorization = "Bearer sk-literal" }
         loaded = load_config(target)
         assert loaded.upstreams["openai"].headers["Authorization"] == "Bearer sk-literal"
 
-    def test_the_token_environment_variable_joins_the_one_in_the_file(self, tmp_path, monkeypatch):
-        """Additional, not an override: a container can inject a credential
-        without invalidating the one the operator wrote down."""
-        monkeypatch.setenv(TOKEN_ENV_VAR, "from-env")
-        target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
-        assert load_config(target).auth_tokens == ("from-file", "from-env")
-
-    def test_and_the_file_is_used_when_it_does_not(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
+    def test_the_token_in_the_file_is_a_credential(self, tmp_path):
+        """How an install that never runs the CLI gets one. It joins the tokens
+        in state.json rather than replacing them."""
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
         assert load_config(target).auth_tokens == ("from-file",)
 
-    def test_an_empty_token_is_no_token(self, tmp_path, monkeypatch):
+    def test_an_empty_token_is_no_token(self, tmp_path):
         """Otherwise an empty string would be a credential every caller could
         guess, while the exposure warning stayed silent."""
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = ""\n')
         assert load_config(target).auth_tokens == ()
 
@@ -265,33 +256,29 @@ class TestWhatTheStateAdds:
         loaded = load_config(write(tmp_path, MINIMAL))
         assert loaded.upstreams["openai"].headers["Authorization"] == "Bearer sk-live-9f$1abc"
 
-    def test_a_state_token_leads_and_the_other_two_join_it(self, tmp_path, monkeypatch):
-        monkeypatch.setenv(TOKEN_ENV_VAR, "from-env")
+    def test_a_state_token_leads_and_the_file_one_joins_it(self, tmp_path):
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
         write_state(tmp_path, auth_enabled=True, tokens=("from-state",))
         loaded = load_config(target)
-        assert loaded.auth_tokens == ("from-state", "from-file", "from-env")
+        assert loaded.auth_tokens == ("from-state", "from-file")
         assert loaded.auth_enabled is True
 
-    def test_the_same_token_from_two_places_is_one_token(self, tmp_path, monkeypatch):
-        monkeypatch.setenv(TOKEN_ENV_VAR, "shared")
+    def test_the_same_token_from_two_places_is_one_token(self, tmp_path):
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "shared"\n')
         write_state(tmp_path, tokens=("shared",))
         assert load_config(target).auth_tokens == ("shared",)
 
-    def test_a_token_in_the_file_does_not_turn_checking_on(self, tmp_path, monkeypatch):
+    def test_a_token_in_the_file_does_not_turn_checking_on(self, tmp_path):
         """The switch is one thing in one place. A token is a credential, not a
         decision to start refusing everyone who has not got it."""
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
         loaded = load_config(target)
         assert loaded.auth_enabled is False
         assert loaded.auth_tokens == ("from-file",)
 
-    def test_a_fresh_install_has_auth_off(self, tmp_path, monkeypatch):
+    def test_a_fresh_install_has_auth_off(self, tmp_path):
         """No state file at all: a relay on loopback in front of the operator's
         own Ollama must not lock them out before they have a token."""
-        monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
         loaded = load_config(write(tmp_path, MINIMAL))
         assert loaded.auth_enabled is False
         assert loaded.auth_tokens == ()
@@ -483,321 +470,72 @@ class TestSayingWhenThePortIsOpen:
         assert check_exposure(self.make(tmp_path, "0.0.0.0", auth_enabled=True)) is None
 
 
-class TestTheEnvironmentAsASource:
-    """LMRELAY_ plus the path to the key, and the environment wins."""
+class TestTheEnvironmentIsNotASource:
+    """Settings come from the file and from state.json, and from nowhere else.
 
-    def test_it_sets_a_key_the_file_never_mentions(self, tmp_path, monkeypatch):
+    There was briefly an environment spelling for every key. It is gone, and
+    these tests are what keeps it gone: a name under one of the old prefixes is
+    now ordinary shell furniture, so it must neither be read nor refused.
+    """
+
+    def test_a_setting_shaped_name_is_not_read(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LMRELAY_SERVER_PORT", "11440")
-        assert load_config(write(tmp_path, MINIMAL)).port == 11440
-
-    def test_and_overrides_one_the_file_does(self, tmp_path, monkeypatch):
-        """The file is the shared, checked-in thing and the environment is the
-        deployment. The other way round makes an environment variable a silent
-        no-op whenever the file happens to mention the key."""
-        monkeypatch.setenv("LMRELAY_SERVER_PORT", "11440")
-        assert load_config(write(tmp_path, "[server]\nport = 11435\n" + MINIMAL)).port == 11440
-
-    def test_the_path_is_the_whole_of_the_name(self, tmp_path, monkeypatch):
-        """No abbreviations and no special cases, so the name is derivable from
-        the file without a table."""
-        monkeypatch.setenv("LMRELAY_LIMITS_PER_TOKEN_RATE", "2")
-        monkeypatch.setenv("LMRELAY_LIMITS_PER_TOKEN_BURST", "5")
-        monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_CONCURRENT", "6")
-        loaded = load_config(write(tmp_path, MINIMAL))
-        assert loaded.limits["per_token"] == ScopeLimits(rate=2.0, burst=5.0)
-        assert loaded.limits["total"] == ScopeLimits(concurrent=6)
-
-    def test_a_value_it_cannot_read_is_refused_in_the_files_own_words(
-        self, tmp_path, monkeypatch
-    ):
-        """One validator for both sources, so an operator who has learnt what a
-        bad port looks like in the file recognises it from the environment."""
-        monkeypatch.setenv("LMRELAY_SERVER_PORT", "eleven")
-        with pytest.raises(ConfigError, match="whole number"):
-            load_config(write(tmp_path, MINIMAL))
-
-    def test_an_empty_value_is_unset_rather_than_zero(self, tmp_path, monkeypatch):
-        """`Environment="LMRELAY_SERVER_PORT="` in a unit file and
-        `LMRELAY_SERVER_PORT:` in a compose file are how people write "I am not
-        setting this", and reading either as port 0 would bind something
-        absurd."""
-        monkeypatch.setenv("LMRELAY_SERVER_PORT", "")
         assert load_config(write(tmp_path, MINIMAL)).port == 11435
 
-    def test_but_zero_itself_is_a_value(self, tmp_path, monkeypatch):
-        """It is how a limit is turned off, so it cannot be a spelling of unset."""
-        monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_RATE", "0")
-        assert load_config(write(tmp_path, LIMITS + MINIMAL)).limits["total"].rate == 0.0
+    def test_nor_is_a_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_CONCURRENT", "6")
+        assert load_config(write(tmp_path, MINIMAL)).limits["total"].concurrent == 0
 
-    def test_a_variable_under_a_known_prefix_that_names_nothing_is_refused(
-        self, tmp_path, monkeypatch
-    ):
-        """A typo silently ignored leaves an operator believing a limit is on."""
-        monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_CONCURENT", "6")
-        with pytest.raises(ConfigError) as raised:
-            load_config(write(tmp_path, MINIMAL))
-        assert "LMRELAY_LIMITS_TOTAL_CONCURENT" in str(raised.value)
-
-    def test_while_the_names_that_are_not_settings_are_left_alone(
-        self, tmp_path, monkeypatch
-    ):
-        """LMRELAY_CONFIG and LMRELAY_STATE say where the files are, which
-        cannot itself live in a file, and the CLI sets two of its own. A blanket
-        refusal would break the next one to be added."""
-        target = write(tmp_path, MINIMAL)
-        monkeypatch.setenv("LMRELAY_BIND", "127.0.0.1:11435")
-        monkeypatch.setenv("LMRELAY_SERVICE", "lmrelay")
-        assert load_config(target).port == 11435
-
-
-class TestSayingWhatTheEnvironmentIsOverriding:
-    """The price of environment precedence: an operator edits the file, reloads,
-    and nothing changes."""
-
-    def test_a_genuine_shadow_is_named(self, tmp_path, monkeypatch, caplog):
-        monkeypatch.setenv("LMRELAY_SERVER_PORT", "11440")
-        target = write(tmp_path, "[server]\nport = 11435\n" + MINIMAL)
-        with caplog.at_level(logging.WARNING):
-            load_config(target)
-        assert f"the environment sets server.port, overriding {target}" in caplog.text
-
-    def test_a_key_the_file_omits_is_not(self, tmp_path, monkeypatch, caplog):
-        """It overrides nothing, so naming it would make the line noise and the
-        genuine shadows harder to see."""
-        monkeypatch.setenv("LMRELAY_SERVER_PORT", "11440")
-        with caplog.at_level(logging.WARNING):
-            load_config(write(tmp_path, MINIMAL))
-        assert "the environment sets" not in caplog.text
-
-    def test_several_shadows_are_named_in_the_order_the_file_lists_them(
-        self, tmp_path, monkeypatch, caplog
-    ):
-        """Sorted by the environment instead, two relays with identical settings
-        would print different lines."""
-        monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_CONCURRENT", "9")
-        monkeypatch.setenv("LMRELAY_SERVER_PORT", "11440")
-        with caplog.at_level(logging.WARNING):
-            load_config(write(tmp_path, "[server]\nport = 11435\n" + LIMITS + MINIMAL))
-        assert "sets server.port, limits.total.concurrent," in caplog.text
-
-
-class TestTheAuthSwitchFromTheEnvironment:
-    """It lives in the state, and a container needs it without running the CLI."""
-
-    def test_it_turns_auth_on_over_a_state_that_says_off(self, tmp_path, monkeypatch):
-        monkeypatch.setenv(AUTH_ENABLED_ENV_VAR, "true")
-        write_state(tmp_path, auth_enabled=False, tokens=("a-token",))
-        assert load_config(write(tmp_path, MINIMAL)).auth_enabled is True
-
-    def test_and_off_over_a_state_that_says_on(self, tmp_path, monkeypatch):
-        monkeypatch.setenv(AUTH_ENABLED_ENV_VAR, "0")
-        write_state(tmp_path, auth_enabled=True, tokens=("a-token",))
+    def test_nor_the_auth_switch(self, tmp_path, monkeypatch):
+        """The switch is state.json's, and `lmrelay auth true` is what moves it.
+        Read from the environment it could turn checking off on a relay whose
+        operator had just turned it on."""
+        monkeypatch.setenv("LMRELAY_AUTH_ENABLED", "true")
+        write_state(tmp_path, auth_enabled=False)
         assert load_config(write(tmp_path, MINIMAL)).auth_enabled is False
 
-    def test_unset_leaves_the_state_to_decide(self, tmp_path, monkeypatch):
-        monkeypatch.delenv(AUTH_ENABLED_ENV_VAR, raising=False)
-        write_state(tmp_path, auth_enabled=True, tokens=("a-token",))
-        assert load_config(write(tmp_path, MINIMAL)).auth_enabled is True
-
-    @pytest.mark.parametrize("spelling", ["1", "TRUE", "Yes", "on"])
-    def test_the_spellings_people_write(self, tmp_path, monkeypatch, spelling):
-        monkeypatch.setenv(AUTH_ENABLED_ENV_VAR, spelling)
-        write_state(tmp_path, tokens=("a-token",))
-        assert load_config(write(tmp_path, MINIMAL)).auth_enabled is True
-
-    def test_and_anything_else_is_refused_by_name(self, tmp_path, monkeypatch):
-        """The one place liberality is dangerous: a typo read as false is auth
-        turned off, on a relay whose operator believes it is on."""
-        monkeypatch.setenv(AUTH_ENABLED_ENV_VAR, "ture")
-        with pytest.raises(ConfigError) as raised:
-            load_config(write(tmp_path, MINIMAL))
-        assert AUTH_ENABLED_ENV_VAR in str(raised.value) and "ture" in str(raised.value)
-
-    @pytest.mark.parametrize("name", ["LMRELAY_AUTH_ENABLE", "LMRELAY_AUTH_ENABLD"])
-    def test_and_so_is_a_typo_in_the_name_of_the_switch(self, tmp_path, monkeypatch, name):
-        """The value was strict and the name was not, so the same outcome stayed
-        one keystroke away: LMRELAY_AUTH_ENABLE=true was read by nothing, the
-        relay kept the state's own answer of off, and every anonymous caller was
-        served with the configured upstream credentials. Every other prefix
-        already refused its typos by name; this was the one that did not."""
-        monkeypatch.setenv(name, "true")
-        write_state(tmp_path, auth_enabled=False, tokens=("a-token",))
-        with pytest.raises(ConfigError) as raised:
-            load_config(write(tmp_path, MINIMAL))
-        assert name in str(raised.value)
-
-    def test_and_the_token_list_nobody_implemented(self, tmp_path, monkeypatch):
-        """There is deliberately no LMRELAY_AUTH_TOKENS taking a delimited list,
-        and a variable that names nothing is now told so rather than ignored."""
-        monkeypatch.setenv("LMRELAY_AUTH_TOKENS", "one,two")
-        with pytest.raises(ConfigError, match="LMRELAY_AUTH_TOKENS"):
-            load_config(write(tmp_path, MINIMAL))
-
-    def test_while_the_two_real_auth_variables_still_carry(self, tmp_path, monkeypatch):
-        """The prefix is checked, not closed: both documented names go through."""
-        monkeypatch.setenv(AUTH_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv("LMRELAY_AUTH_TOKEN", "from-the-environment")
-        loaded = load_config(write(tmp_path, MINIMAL))
-        assert loaded.auth_enabled is True and "from-the-environment" in loaded.auth_tokens
-
-
-class TestCredentialsFromTheEnvironment:
-    """LMRELAY_AUTH_TOKEN by the rule, LMRELAY_TOKEN as the older spelling."""
-
-    def test_the_rule_shaped_name_sets_the_auth_token(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LMRELAY_AUTH_TOKEN", "from-env")
-        assert load_config(write(tmp_path, MINIMAL)).auth_tokens == ("from-env",)
-
-    def test_and_it_overrides_the_one_in_the_file(self, tmp_path, monkeypatch):
-        """[auth] token is an ordinary setting, so it takes the ordinary
-        precedence rather than a rule of its own."""
-        monkeypatch.setenv("LMRELAY_AUTH_TOKEN", "from-env")
+    def test_nor_a_credential(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LMRELAY_TOKEN", "from-env")
         target = write(tmp_path, MINIMAL + '\n[auth]\ntoken = "from-file"\n')
-        assert load_config(target).auth_tokens == ("from-env",)
+        assert load_config(target).auth_tokens == ("from-file",)
 
-    def test_both_spellings_at_once_are_two_credentials_rather_than_a_conflict(
-        self, tmp_path, monkeypatch
-    ):
-        """Each of them means "this is a valid credential" on its own, and
-        collect_auth_tokens is additive, so there is nothing to resolve."""
-        monkeypatch.setenv("LMRELAY_AUTH_TOKEN", "the-new-spelling")
-        monkeypatch.setenv(TOKEN_ENV_VAR, "the-old-spelling")
-        loaded = load_config(write(tmp_path, MINIMAL))
-        assert loaded.auth_tokens == ("the-new-spelling", "the-old-spelling")
-
-
-class TestUpstreamsFromTheEnvironment:
-    """Scalars by the rule, and the credential by the shortcut the CLI has."""
-
-    def test_a_base_url_and_a_dialect_define_one(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LMRELAY_UPSTREAM_LOCAL_BASE_URL", "http://ollama:11434")
-        monkeypatch.setenv("LMRELAY_UPSTREAM_LOCAL_DIALECT", "ollama")
-        local = load_config(write(tmp_path, MINIMAL)).upstreams["local"]
-        assert (local.base_url, local.dialect) == ("http://ollama:11434", "ollama")
-
-    def test_and_a_base_url_overrides_the_file_table_of_the_same_name(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("LMRELAY_UPSTREAM_OLLAMA_BASE_URL", "http://ollama:11434")
-        loaded = load_config(write(tmp_path, MINIMAL))
-        assert loaded.upstreams["ollama"].base_url == "http://ollama:11434"
-        # And keeps the dialect the file gave it: a path overrides its own key.
-        assert loaded.upstreams["ollama"].dialect == "ollama"
-
-    def test_a_key_takes_the_preset_a_provider_add_would(self, tmp_path, monkeypatch):
-        """It routes through add_provider, so an environment-configured provider
-        fails in exactly the ways a CLI-added one fails."""
+    def test_nor_an_upstream(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LMRELAY_UPSTREAM_OPENAI_KEY", "sk-from-env")
-        openai = load_config(write(tmp_path, MINIMAL)).upstreams["openai"]
-        assert openai.base_url == "https://api.openai.com"
-        assert openai.headers == {"Authorization": "Bearer sk-from-env"}
+        assert sorted(load_config(write(tmp_path, MINIMAL)).upstreams) == ["ollama"]
 
-    def test_including_a_header_shape_no_variable_could_spell(self, tmp_path, monkeypatch):
-        """x-api-key and anthropic-version contain hyphens, which an environment
-        variable name cannot carry, and mapping - to _ is not reversible. The
-        preset is how they arrive instead."""
-        monkeypatch.setenv("LMRELAY_UPSTREAM_ANTHROPIC_KEY", "sk-ant-from-env")
-        anthropic = load_config(write(tmp_path, MINIMAL)).upstreams["anthropic"]
-        assert anthropic.headers == {
-            "x-api-key": "sk-ant-from-env", "anthropic-version": "2023-06-01"
-        }
+    def test_and_none_of_them_is_refused_either(self, tmp_path, monkeypatch):
+        """Refusing would be the other way to have an opinion about a name the
+        relay no longer owns, and LMRELAY_ is a prefix somebody else's script
+        may reasonably use."""
+        monkeypatch.setenv("LMRELAY_SERVER_PROT", "11440")
+        monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_CONCURENT", "6")
+        assert load_config(write(tmp_path, MINIMAL)).port == 11435
 
-    def test_a_name_no_preset_knows_needs_a_base_url(self, tmp_path, monkeypatch):
-        """And the refusal names the variable to set, not the CLI flag: an
-        operator in a compose file has no --base-url to pass."""
-        monkeypatch.setenv("LMRELAY_UPSTREAM_HOUSE_KEY", "sk-house")
-        with pytest.raises(ConfigError) as raised:
-            load_config(write(tmp_path, MINIMAL))
-        assert "LMRELAY_UPSTREAM_HOUSE_BASE_URL" in str(raised.value)
-
-    def test_and_with_one_it_gets_a_bearer(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LMRELAY_UPSTREAM_HOUSE_KEY", "sk-house")
-        monkeypatch.setenv("LMRELAY_UPSTREAM_HOUSE_BASE_URL", "https://llm.house.invalid")
-        house = load_config(write(tmp_path, MINIMAL)).upstreams["house"]
-        assert house.base_url == "https://llm.house.invalid"
-        assert house.headers == {"Authorization": "Bearer sk-house"}
-
-    def test_a_stored_key_is_not_run_through_env_expansion(self, tmp_path, monkeypatch):
-        """It arrives through the state, like a CLI-added one, so a key holding
-        a $ is not rewritten with the value of an environment variable and sent
-        to the provider."""
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("LMRELAY_UPSTREAM_OPENAI_KEY", "sk-live-ab$HOME-cd")
-        openai = load_config(write(tmp_path, MINIMAL)).upstreams["openai"]
-        assert openai.headers["Authorization"] == "Bearer sk-live-ab$HOME-cd"
-
-    def test_an_underscore_in_the_name_is_part_of_the_name(self, tmp_path, monkeypatch):
-        """The field suffix set is closed and matched longest first, so
-        MY_LLM_BASE_URL is my_llm and BASE_URL rather than my and LLM_BASE_URL."""
-        monkeypatch.setenv("LMRELAY_UPSTREAM_MY_LLM_BASE_URL", "http://my-llm.invalid")
-        assert "my_llm" in load_config(write(tmp_path, MINIMAL)).upstreams
-
-    def test_even_when_it_looks_like_another_field(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LMRELAY_UPSTREAM_FOO_BASE_KEY", "sk-foo")
-        monkeypatch.setenv("LMRELAY_UPSTREAM_FOO_BASE_BASE_URL", "https://foo.invalid")
-        assert "foo_base" in load_config(write(tmp_path, MINIMAL)).upstreams
-
-    def test_a_field_it_does_not_know_is_refused_rather_than_ignored(
+    def test_but_the_config_path_still_comes_from_the_environment(
         self, tmp_path, monkeypatch
     ):
-        """A variable nobody reads leaves an operator believing a provider is
-        configured while the relay has never heard of it."""
-        monkeypatch.setenv("LMRELAY_UPSTREAM_OPENAI_TIMEOUT", "30")
-        with pytest.raises(ConfigError) as raised:
-            load_config(write(tmp_path, MINIMAL))
-        assert "LMRELAY_UPSTREAM_OPENAI_TIMEOUT" in str(raised.value)
-
-    def test_a_reserved_name_is_refused_here_too(self, tmp_path, monkeypatch):
-        """It would swallow the path root every Ollama and OpenAI client sends
-        to, whichever source names it."""
-        monkeypatch.setenv("LMRELAY_UPSTREAM_V1_BASE_URL", "http://x.invalid")
-        with pytest.raises(ConfigError, match="reserved"):
-            load_config(write(tmp_path, MINIMAL))
+        """The one variable that survived, and it names a file rather than a
+        setting: `--config` publishes it so the app, which loads the config
+        again from scratch under uvicorn, reads the file the command chose."""
+        chosen = write(tmp_path, MINIMAL)
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(chosen))
+        assert load_config().config_path == chosen
 
 
 class TestARelayWithNoFileAtAll:
-    """A container where the environment carries the whole configuration."""
+    """There is no such relay: with no file there is nothing to configure it."""
 
-    def empty_cwd(self, tmp_path, monkeypatch):
-        """A working directory and a home with no lmrelay.toml in either."""
-        elsewhere = tmp_path / "elsewhere"
-        elsewhere.mkdir()
-        monkeypatch.chdir(elsewhere)
-        monkeypatch.setattr(config_module, "HOME_CONFIG_PATH", tmp_path / ".lmrelay" / "x.toml")
-
-    def test_the_environment_alone_is_a_working_relay(self, tmp_path, monkeypatch):
-        self.empty_cwd(tmp_path, monkeypatch)
-        monkeypatch.setenv("LMRELAY_UPSTREAM_OLLAMA_BASE_URL", "http://ollama:11434")
-        monkeypatch.setenv("LMRELAY_UPSTREAM_OPENAI_KEY", "sk-from-env")
-        monkeypatch.setenv("LMRELAY_AUTH_ENABLED", "true")
-        monkeypatch.setenv(TOKEN_ENV_VAR, "lmr-from-env")
-        monkeypatch.setenv("LMRELAY_LIMITS_TOTAL_CONCURRENT", "6")
-
-        loaded = load_config()
-        assert sorted(loaded.upstreams) == ["ollama", "openai"]
-        assert loaded.default_upstream == "ollama"
-        assert loaded.auth_enabled is True
-        assert loaded.auth_tokens == ("lmr-from-env",)
-        assert loaded.limits["total"].concurrent == 6
-
-    def test_and_the_state_still_sits_where_the_file_would_have(
-        self, tmp_path, monkeypatch
-    ):
-        """The pidfile and state.json are located beside the config, so the
-        path has to name somewhere even when nothing is there to read."""
-        self.empty_cwd(tmp_path, monkeypatch)
-        monkeypatch.setenv("LMRELAY_UPSTREAM_OLLAMA_BASE_URL", "http://ollama:11434")
-        loaded = load_config()
-        assert loaded.config_path == tmp_path / ".lmrelay" / "x.toml"
-        assert loaded.state_path == tmp_path / ".lmrelay" / "state.json"
-
-    def test_but_no_file_and_no_upstream_anywhere_is_still_refused(
+    def test_no_file_anywhere_is_refused_and_names_both_places_looked(
         self, tmp_path, monkeypatch
     ):
         """It cannot invent an upstream, and starting empty would produce 404s
         the operator would have to debug."""
-        self.empty_cwd(tmp_path, monkeypatch)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        monkeypatch.setattr(config_module, "HOME_CONFIG_PATH", tmp_path / ".lmrelay" / "x.toml")
         with pytest.raises(ConfigError) as raised:
             load_config()
         message = str(raised.value)
-        assert "lmrelay init" in message and "environment names no upstream" in message
+        assert "lmrelay init" in message
+        assert "lmrelay.toml" in message and "x.toml" in message

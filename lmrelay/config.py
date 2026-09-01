@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Discovery, parsing and validation of lmrelay.toml, merged with the environment and the state."""
+"""Discovery, parsing and validation of lmrelay.toml, merged with the state."""
 
-import copy
 import ipaddress
 import logging
 import math
 import os
-import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
 # Local imports
-from lmrelay.errors import ConfigError, StateError
+from lmrelay.errors import ConfigError
 from lmrelay.ratelimit import LIMIT_KEYS, SCOPES, ScopeLimits
 from lmrelay.state import (
     DIALECTS,
-    PROVIDER_PRESETS,
     RESERVED_UPSTREAM_NAMES,
     RelayState,
-    add_provider,
     load_state,
     state_path_for,
 )
@@ -32,15 +28,11 @@ logger = logging.getLogger(__name__)
 CONFIG_NAME       = "lmrelay.toml"
 HOME_CONFIG_PATH  = Path.home() / ".lmrelay" / CONFIG_NAME
 
-# Environment. Every setting is LMRELAY_ plus the path to its key, uppercased,
-# segments joined by underscores: [limits.per_token] rate is
-# LMRELAY_LIMITS_PER_TOKEN_RATE. No abbreviations and no special cases, so the
-# name is derivable from the file without a table.
-ENV_PREFIX           = "LMRELAY_"
-CONFIG_ENV_VAR       = ENV_PREFIX + "CONFIG"
-TOKEN_ENV_VAR        = ENV_PREFIX + "TOKEN"
-AUTH_ENABLED_ENV_VAR = ENV_PREFIX + "AUTH_ENABLED"
-UPSTREAM_ENV_PREFIX  = ENV_PREFIX + "UPSTREAM_"
+# The one environment variable that configures anything, and it names a path
+# rather than a setting: which file to read. Settings themselves are in that
+# file and in state.json, and nowhere else. There was briefly an environment
+# spelling for every key, and what it cost is written up in docs/ROADMAP.md.
+CONFIG_ENV_VAR = "LMRELAY_CONFIG"
 
 # Re-exported from the modules that own them so `from lmrelay.config import ...`
 # keeps working: state.py and ratelimit.py cannot import config.py without a
@@ -71,46 +63,6 @@ DEFAULT_LOG_LEVEL       = "INFO"
 
 # Every [server] key, in the order the documented file lists them.
 SERVER_KEYS = ("host", "port", "default_upstream", "connect_timeout", "log_level")
-
-# Every file key the environment can name, as the path it sets. Upstreams are
-# not here: their names are not known in advance, so they are matched by prefix.
-SETTING_PATHS = (
-    *(("server", key) for key in SERVER_KEYS),
-    *(("limits", scope, key) for scope in SCOPES for key in LIMIT_KEYS),
-    ("auth", "token"),
-)
-ENV_NAMES = {ENV_PREFIX + "_".join(path).upper(): path for path in SETTING_PATHS}
-
-# The prefixes under which an unrecognised variable is a typo rather than a
-# name this version has not heard of. Everything outside them, LMRELAY_CONFIG
-# and LMRELAY_STATE and LMRELAY_TOKEN and the CLI's own, is left alone.
-#
-# LMRELAY_AUTH_ is in the list for the reason the strict value list below
-# exists, and it was the one prefix missing from it: LMRELAY_AUTH_ENABLE, one
-# keystroke from the real name, was read by nothing and left auth off on a relay
-# whose operator had just turned it on, with the container's own credentials
-# behind it. A typo silently ignored is the same outcome as a typo read as
-# false, and both of them are an open relay.
-CHECKED_ENV_PREFIXES = (
-    ENV_PREFIX + "SERVER_", ENV_PREFIX + "LIMITS_", ENV_PREFIX + "AUTH_", UPSTREAM_ENV_PREFIX
-)
-# The switch is not in SETTING_PATHS, since it lives in the state rather than in
-# the file, so check_env_names has to be told its name is a real one.
-KNOWN_ENV_NAMES = frozenset(ENV_NAMES) | {AUTH_ENABLED_ENV_VAR}
-
-# The closed set of upstream fields the environment can set, longest first so
-# that LMRELAY_UPSTREAM_MY_LLM_BASE_URL is my_llm and BASE_URL rather than a
-# name ending in _BASE with a field of URL.
-UPSTREAM_ENV_FIELDS = ("BASE_URL", "DIALECT", "KEY")
-UPSTREAM_ENV_ORDER  = sorted(UPSTREAM_ENV_FIELDS, key=len, reverse=True)
-# An upstream named from the environment is limited to what an environment
-# variable name can carry. A hyphenated name needs the file.
-UPSTREAM_ENV_NAME   = re.compile(r"^[a-z0-9_]+$")
-
-# Strict on purpose, and refusing anything else by name. This is the one place
-# liberality is dangerous: a typo silently read as false is auth turned off.
-TRUE_VALUES  = ("1", "true", "yes", "on")
-FALSE_VALUES = ("0", "false", "no", "off")
 
 # The per-caller keys 0.0.4 shipped without, which now have three scopes each.
 # Refused rather than ignored, for one release: a silently ignored key leaves an
@@ -162,158 +114,6 @@ def find_config_path() -> Path | None:
     if HOME_CONFIG_PATH.exists():
         return HOME_CONFIG_PATH
     return None
-
-
-def env_value(name: str) -> str:
-    """One environment variable, with absent and empty meaning the same thing.
-
-    Empty has to mean unset because `Environment="LMRELAY_SERVER_PORT="` in a
-    unit file and `LMRELAY_SERVER_PORT:` in a compose file are how people write
-    "I am not setting this", and reading that as port 0 would bind something
-    absurd. A value, including 0, is a value.
-    """
-    return (os.getenv(name) or "").strip()
-
-
-def env_flag(name: str, default: bool) -> bool:
-    """One boolean environment variable, refusing anything ambiguous by name."""
-    value = env_value(name).lower()
-    if not value:
-        return default
-    if value in TRUE_VALUES:
-        return True
-    if value in FALSE_VALUES:
-        return False
-    raise ConfigError(
-        f"lmrelay: ${name} is '{value}'; expected one of "
-        f"{', '.join(TRUE_VALUES + FALSE_VALUES)}"
-    )
-
-
-def split_upstream_var(name: str) -> tuple[str, str] | None:
-    """The upstream and the field one LMRELAY_UPSTREAM_* variable names, or None."""
-    remainder = name[len(UPSTREAM_ENV_PREFIX):]
-    for field_name in UPSTREAM_ENV_ORDER:
-        suffix = "_" + field_name
-        if remainder.endswith(suffix) and len(remainder) > len(suffix):
-            return remainder[: -len(suffix)].lower(), field_name
-    return None
-
-
-def read_env_upstreams() -> dict[str, dict[str, str]]:
-    """Every upstream the environment names, as its fields.
-
-    An unrecognised LMRELAY_UPSTREAM_* is refused rather than ignored, for the
-    same reason the old [server] limit keys are: a variable nobody reads leaves
-    an operator believing a provider is configured while the relay has never
-    heard of it.
-    """
-    found: dict[str, dict[str, str]] = {}
-    for name in sorted(os.environ):
-        if not name.startswith(UPSTREAM_ENV_PREFIX):
-            continue
-        split = split_upstream_var(name)
-        if split is None:
-            raise ConfigError(
-                f"lmrelay: ${name} names no upstream setting; expected "
-                f"{UPSTREAM_ENV_PREFIX}<NAME>_"
-                f"{f', {UPSTREAM_ENV_PREFIX}<NAME>_'.join(UPSTREAM_ENV_FIELDS)}"
-            )
-        upstream_name, field_name = split
-        if not UPSTREAM_ENV_NAME.match(upstream_name):
-            raise ConfigError(
-                f"lmrelay: ${name} names upstream '{upstream_name}', which is not "
-                f"letters, digits and underscores; name it in the config file instead"
-            )
-        value = env_value(name)
-        if value:
-            found.setdefault(upstream_name, {})[field_name] = value
-    return found
-
-
-def check_env_names() -> None:
-    """Refuse a variable under a structured prefix that names no setting.
-
-    read_env_upstreams has already refused the upstream ones by the time this
-    runs, so what is left is a misspelt [server], [limits] or auth key. Only
-    these prefixes are checked: the names outside them are the documented
-    carve-outs, LMRELAY_CONFIG and LMRELAY_STATE and LMRELAY_TOKEN and the CLI's
-    own, and a blanket refusal would break the next one to be added.
-    """
-    for name in sorted(os.environ):
-        if not name.startswith(CHECKED_ENV_PREFIXES):
-            continue
-        if name in KNOWN_ENV_NAMES or name.startswith(UPSTREAM_ENV_PREFIX):
-            continue
-        raise ConfigError(
-            f"lmrelay: ${name} names no setting. Every setting is LMRELAY_ plus the "
-            f"path to its key: [limits.per_token] rate is LMRELAY_LIMITS_PER_TOKEN_RATE."
-        )
-
-
-def read_env_settings() -> dict[tuple[str, ...], str]:
-    """Every environment variable that names a file key, as its path and raw value."""
-    found = {}
-    for name, path in ENV_NAMES.items():
-        value = env_value(name)
-        if value:
-            found[path] = value
-    return found
-
-
-def path_in_file(data: dict, path: tuple[str, ...]) -> bool:
-    """Whether the parsed file already carries this key, for the shadow warning."""
-    table: object = data
-    for segment in path[:-1]:
-        if not isinstance(table, dict):
-            return False
-        table = table.get(segment)
-    return isinstance(table, dict) and path[-1] in table
-
-
-def apply_env_settings(data: dict, settings: dict[tuple[str, ...], str]) -> dict:
-    """Lay the environment over the file and return the result: the specific wins.
-
-    The file is the shared, checked-in thing and the environment is the
-    deployment, which is what every operator already expects. The alternative
-    makes an environment variable a silent no-op whenever the file happens to
-    mention the key.
-
-    Values land as strings and are validated by the same readers the file goes
-    through, so `LMRELAY_SERVER_PORT=eleven` is refused in the words a quoted
-    port in the file is refused in.
-    """
-    merged = copy.deepcopy(data)
-    for path, value in settings.items():
-        table = merged
-        for segment in path[:-1]:
-            existing = table.get(segment)
-            table[segment] = existing if isinstance(existing, dict) else {}
-            table = table[segment]
-        table[path[-1]] = value
-    return merged
-
-
-def warn_about_shadows(data: dict, settings: dict[tuple[str, ...], str], target: Path) -> None:
-    """Name the keys the environment is overriding, and only those.
-
-    The risk environment precedence creates is real: an operator edits the file,
-    reloads, and nothing changes. Naming only genuine shadows keeps the line
-    short and about the actual confusion.
-
-    Ordered by the documented file rather than by the environment, so two relays
-    with the same settings print the same line. Upstream keys are not in that
-    list, since their names are not known in advance, so they follow sorted.
-    """
-    documented = [path for path in SETTING_PATHS if path in settings]
-    rest = sorted(path for path in settings if path not in set(SETTING_PATHS))
-    shadowed = [
-        ".".join(path) for path in documented + rest if path_in_file(data, path)
-    ]
-    if shadowed:
-        logger.warning(
-            f"lmrelay: the environment sets {', '.join(shadowed)}, overriding {target}"
-        )
 
 
 def expand_env_value(value: str, upstream_name: str, header_name: str) -> str:
@@ -406,38 +206,6 @@ def state_upstreams(providers: dict[str, dict]) -> dict[str, Upstream]:
     }
 
 
-def env_providers(state: RelayState, env_upstreams: dict[str, dict[str, str]]) -> RelayState:
-    """Add the providers LMRELAY_UPSTREAM_<NAME>_KEY names, as `provider add` would.
-
-    A header cannot be spelled in the environment at all: `x-api-key` and
-    `anthropic-version` contain hyphens, which are not usable in a variable
-    name, and mapping `-` to `_` is not reversible. So the credential gets the
-    shortcut the CLI already has, and it routes through add_provider, which
-    makes an environment-configured provider fail in exactly the ways a
-    CLI-added one fails.
-    """
-    for name in sorted(env_upstreams):
-        fields = env_upstreams[name]
-        if "KEY" not in fields:
-            continue
-        variable = f"{UPSTREAM_ENV_PREFIX}{name.upper()}_KEY"
-        if "BASE_URL" not in fields and name not in PROVIDER_PRESETS:
-            raise ConfigError(
-                f"lmrelay: ${variable} names no known provider; set "
-                f"{UPSTREAM_ENV_PREFIX}{name.upper()}_BASE_URL as well. "
-                f"Known providers: {', '.join(sorted(PROVIDER_PRESETS))}"
-            )
-        try:
-            state = add_provider(
-                state, name, fields["KEY"],
-                base_url=fields.get("BASE_URL"),
-                dialect=fields.get("DIALECT"),
-            )
-        except StateError as exc:
-            raise ConfigError(f"lmrelay: ${variable}: {exc}")
-    return state
-
-
 def merge_upstreams(
     from_file: dict[str, Upstream],
     from_state: dict[str, Upstream],
@@ -456,18 +224,14 @@ def merge_upstreams(
 def collect_auth_tokens(state: RelayState, data: dict) -> tuple[str, ...]:
     """Every credential a caller may present, in the order they were configured.
 
-    The TOML token and $LMRELAY_TOKEN are additional valid tokens rather than
-    overrides: a container can inject one without invalidating the tokens the
-    operator generated. $LMRELAY_AUTH_TOKEN is not here because it is an
-    ordinary setting and has already been laid over [auth] token by the time
-    this runs; $LMRELAY_TOKEN is the older spelling of the same thing and stays
-    additive, so setting both and having them differ makes two credentials
-    rather than a conflict.
+    The `[auth] token` in the file is an additional valid token rather than an
+    override: it is how an install that never runs the CLI gets a credential,
+    and it must not invalidate the tokens an operator generated on the same
+    relay. It does not turn checking on; only `lmrelay auth true` does.
     """
     auth = data.get("auth") or {}
     candidates = [record.token for record in state.tokens]
     candidates.append(str(auth.get("token") or ""))
-    candidates.append(os.getenv(TOKEN_ENV_VAR) or "")
     return tuple(dict.fromkeys(token for token in candidates if token))
 
 
@@ -615,40 +379,16 @@ def read_config_file(target: Path) -> dict:
 
 def load_config(path: Path | None = None) -> RelayConfig:
     """Read and validate the config. Raises ConfigError with an operator-facing message."""
-    env_upstreams = read_env_upstreams()
-    check_env_names()
-
     target = path or find_config_path()
     if target is None:
-        if not env_upstreams:
-            raise ConfigError(
-                f"lmrelay: no config found; looked at ./{CONFIG_NAME} and {HOME_CONFIG_PATH}, "
-                f"and the environment names no upstream. Run 'lmrelay init'."
-            )
-        # A fileless container: the environment carries a whole relay, so the
-        # config path names only where the file would have been, which is what
-        # the pidfile and state.json are still located beside.
-        target, data = HOME_CONFIG_PATH, {}
-    else:
-        data = read_config_file(target)
-
-    # An upstream the environment names without a key is an ordinary setting and
-    # goes through the same overlay, so an env base_url over a file table is
-    # announced like any other shadow. The ones with a key do not: they route
-    # through add_provider into the state, which shadows the file already and
-    # says so in its own words.
-    env_settings = read_env_settings()
-    for name in sorted(env_upstreams):
-        fields = env_upstreams[name]
-        if "KEY" in fields:
-            continue
-        for field_name in sorted(fields):
-            env_settings[("upstream", name, field_name.lower())] = fields[field_name]
-    warn_about_shadows(data, env_settings, target)
-    data = apply_env_settings(data, env_settings)
+        raise ConfigError(
+            f"lmrelay: no config found; looked at ./{CONFIG_NAME} and {HOME_CONFIG_PATH}. "
+            f"Run 'lmrelay init'."
+        )
+    data = read_config_file(target)
 
     state_file = state_path_for(target)
-    state = env_providers(load_state(state_file), env_upstreams)
+    state = load_state(state_file)
     upstreams = merge_upstreams(
         parse_upstreams(data), state_upstreams(state.providers), target
     )
@@ -668,9 +408,7 @@ def load_config(path: Path | None = None) -> RelayConfig:
         )
 
     limits = parse_limits(data)
-    # The switch lives in the state, but a container needs it without running
-    # the CLI, so the environment can set it and wins like every other setting.
-    auth_enabled = env_flag(AUTH_ENABLED_ENV_VAR, state.auth_enabled)
+    auth_enabled = state.auth_enabled
     auth_tokens = collect_auth_tokens(state, data)
     if auth_tokens and not auth_enabled:
         logger.warning(

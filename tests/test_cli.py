@@ -11,7 +11,7 @@ import pytest
 # Local imports
 from lmrelay import cli, service
 from lmrelay.cli import build_parser
-from lmrelay.config import CONFIG_ENV_VAR, TOKEN_ENV_VAR
+from lmrelay.config import CONFIG_ENV_VAR
 from lmrelay.errors import LmrelayError
 from lmrelay.service import LAUNCHD_PLIST_PATH
 from lmrelay.state import STATE_ENV_VAR, TOKEN_PREFIX, load_state, state_path_for
@@ -79,7 +79,6 @@ def isolated_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "absent.toml"))
     monkeypatch.delenv(STATE_ENV_VAR, raising=False)
-    monkeypatch.delenv(TOKEN_ENV_VAR, raising=False)
     monkeypatch.setattr(service, "detect_manager", lambda: "none")
 
     def refuse(argv, **unused_kwargs):
@@ -157,13 +156,6 @@ class TestTurningAuthOn:
         does not 401 everybody, and load_config warns about exactly this setup
         by telling the operator to run the command that used to refuse it."""
         config_path.write_text(CONFIG_BODY + '\n[auth]\ntoken = "from-the-toml"\n', encoding="utf-8")
-        run_command(["auth", "true", "--config", str(config_path)])
-        assert state_for(config_path).auth_enabled is True
-
-    def test_and_so_does_one_injected_through_the_environment(self, config_path, monkeypatch):
-        """The non-interactive install this switch exists for: a container gets
-        its credential from $LMRELAY_TOKEN and never runs `token gen`."""
-        monkeypatch.setenv(TOKEN_ENV_VAR, "injected-by-the-orchestrator")
         run_command(["auth", "true", "--config", str(config_path)])
         assert state_for(config_path).auth_enabled is True
 

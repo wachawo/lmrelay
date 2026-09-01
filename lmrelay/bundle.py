@@ -13,7 +13,6 @@ from lmrelay import __version__
 from lmrelay.config import (
     DEFAULT_UPSTREAM,
     SERVER_KEYS,
-    TOKEN_ENV_VAR,
     RelayConfig,
     is_log_level,
     parse_upstream,
@@ -27,11 +26,11 @@ BUNDLE_VERSION = 1
 # The path that means the terminal rather than a file, for both verbs.
 STDIO_PATH = "-"
 
-# A setting is a path, and the bundle spells it the third way: [limits.total]
-# concurrent in the file is LMRELAY_LIMITS_TOTAL_CONCURRENT in the environment
-# and limits.total.concurrent here. The key names are taken from the config and
-# the limiter rather than restated, so a scope or a [server] key added there
-# arrives here without an edit and cannot come to mean something else.
+# A setting is a path, and the bundle spells it flat: [limits.total] concurrent
+# in the file is limits.total.concurrent here. The key names are taken from the
+# config and the limiter rather than restated, so a scope or a [server] key
+# added there arrives here without an edit and cannot come to mean something
+# else.
 #
 # The type is what an import checks a value against, and is the one thing this
 # module has to say for itself: a config written with port = "eleven" parses as
@@ -64,10 +63,9 @@ AUTH_KEYS      = ("enabled", "tokens")
 TOKEN_KEYS     = ("id", "token", "label", "created_at")
 UPSTREAM_KEYS  = ("base_url", "dialect", "headers")
 
-# What a credential that reached the relay through the file or the environment
-# is labelled once the bundle turns it into a stored token.
+# What a credential that reached the relay through the file is labelled once
+# the bundle turns it into a stored token.
 FILE_TOKEN_LABEL = "from [auth] token"
-ENV_TOKEN_LABEL  = f"from ${TOKEN_ENV_VAR}"
 
 CONFIG_HEADER = """\
 # Written by 'lmrelay config import' from {source}.
@@ -110,21 +108,14 @@ def describe_source(path: str) -> str:
     return "standard input" if path == STDIO_PATH else path
 
 
-def token_source_label(token: str, environment_token: str | None) -> str:
-    """Say where a credential that has no token record came from."""
-    return ENV_TOKEN_LABEL if token == environment_token else FILE_TOKEN_LABEL
-
-
-def bundle_tokens(
-    config: RelayConfig, state: RelayState, keep_secrets: bool, environment_token: str | None
-) -> list[dict]:
+def bundle_tokens(config: RelayConfig, state: RelayState, keep_secrets: bool) -> list[dict]:
     """Every credential a caller may present, as records that keep their ids.
 
     The state's tokens keep the ids `token list` prints, which is what makes an
     imported relay the same relay. A credential that arrived through
-    [auth] token or $LMRELAY_TOKEN has no record at all, and leaving it out
-    would export a relay that refuses a caller the exported one served, so it
-    is given the next free id and a label saying where it was.
+    [auth] token has no record at all, and leaving it out would export a relay
+    that refuses a caller the exported one served, so it is given the next free
+    id and a label saying where it was.
     """
     records = list(state.tokens)
     known = {record.token for record in records}
@@ -135,7 +126,7 @@ def bundle_tokens(
         records.append(CallerToken(
             id=next_id,
             token=token,
-            label=token_source_label(token, environment_token),
+            label=FILE_TOKEN_LABEL,
             created_at=utc_now(),
         ))
         known.add(token)
@@ -167,13 +158,8 @@ def bundle_upstreams(config: RelayConfig, keep_secrets: bool) -> dict:
     }
 
 
-def build_bundle(
-    config: RelayConfig,
-    state: RelayState,
-    keep_secrets: bool = True,
-    environment_token: str | None = None,
-) -> dict:
-    """Assemble the bundle for this relay, from the effective configuration."""
+def build_bundle(config: RelayConfig, state: RelayState, keep_secrets: bool = True) -> dict:
+    """Assemble the bundle for this relay, from the configuration in effect."""
     return {
         "bundle_version": BUNDLE_VERSION,
         # Two version fields doing two jobs: bundle_version is load bearing,
@@ -187,7 +173,7 @@ def build_bundle(
         },
         "auth": {
             "enabled": config.auth_enabled,
-            "tokens": bundle_tokens(config, state, keep_secrets, environment_token),
+            "tokens": bundle_tokens(config, state, keep_secrets),
         },
         "upstreams": bundle_upstreams(config, keep_secrets),
     }

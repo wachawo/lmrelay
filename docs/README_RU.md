@@ -95,7 +95,7 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 
 ```bash
 curl http://127.0.0.1:11435/api/tags \
-  -H "Authorization: Bearer $LMRELAY_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Запуск всерьёз
@@ -157,11 +157,6 @@ autostart    systemd: enabled, active
 `init`, которая всегда пишет `~/.lmrelay/lmrelay.toml`, и `disable`, которая не читает ни
 того ни другого.
 
-У каждого ключа в конфиге есть ещё написание в виде переменной окружения: `LMRELAY_` плюс
-путь до ключа, то есть `[limits.total] concurrent` это `LMRELAY_LIMITS_TOTAL_CONCURRENT`.
-Окружение выигрывает у файла, а контейнеру, который задаёт так свои апстримы, файл конфига
-вообще не нужен.
-
 ### Выбор апстрима
 
 Первый сегмент пути выбирает апстрим тогда и только тогда, когда он в точности совпадает с
@@ -190,7 +185,7 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 
 ```bash
 curl http://127.0.0.1:11435/api/chat \
-  -H "Authorization: Bearer $LMRELAY_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
   "model": "llama3",
   "messages": [{"role": "user", "content": "hi"}]

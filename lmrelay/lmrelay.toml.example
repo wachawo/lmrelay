@@ -8,14 +8,9 @@
 # state.json beside it, which is machine-owned. 'lmrelay config import'
 # is the one exception, and it backs this file up before replacing it.
 #
-# Every key here also has an environment spelling: LMRELAY_ plus the path to
-# the key, uppercased, joined by underscores. [server] port is
-# LMRELAY_SERVER_PORT; [limits.total] concurrent is
-# LMRELAY_LIMITS_TOTAL_CONCURRENT. No abbreviations and no table to look it up
-# in. The environment wins over this file, because the file is the shared
-# checked-in thing and the environment is the deployment. Every key it shadows
-# is named at startup and on every reload, so an edit here that changed nothing
-# says why in the log.
+# Settings are here and in state.json, and nowhere else. There is no
+# environment spelling for any of them: $LMRELAY_CONFIG names which file to
+# read, and that is the whole of what the environment decides.
 #
 # ${VAR} in any header value is read from the process environment, so API
 # keys can stay out of this file.
@@ -96,16 +91,12 @@ concurrent = 0
 #   lmrelay auth true | false   the switch; with auth off lmrelay is a plain
 #                               transparent proxy in front of Ollama
 #
-# The switch lives in state.json rather than here, and $LMRELAY_AUTH_ENABLED
-# overrides it, so a container can require a credential without running the
-# CLI. It takes true/false/1/0/yes/no/on/off and refuses anything else by
-# name, because a typo read as false is authentication turned off.
+# The switch lives in state.json rather than here, because it is a decision the
+# CLI makes and this file is yours.
 #
-# A token written below is still accepted as one extra valid credential, which
-# is how a non-interactive install injects one without running the CLI.
-# $LMRELAY_AUTH_TOKEN is its environment spelling and $LMRELAY_TOKEN is the
-# older name for the same thing; both are accepted, and setting both just
-# makes both valid. None of them turns checking on.
+# A token written below is accepted as one extra valid credential, which is how
+# an install that never runs the CLI injects one. It does not turn checking on;
+# only 'lmrelay auth true' does.
 #
 # [auth]
 # token = "CHANGE-ME"
@@ -119,21 +110,13 @@ dialect  = "ollama"
 
 # The hosted providers below are the long form. 'lmrelay provider add openai
 # sk-...' writes the same three fields into state.json in four words. Keep an
-# upstream here when you want its key read from the environment at startup.
+# upstream here when you want its key read from the environment at startup,
+# which is what the ${VAR} in each header does.
 #
 # They ship commented out so that a freshly written config starts: an unset
 # ${VAR} is a startup error, and every one of them would be unset on a machine
 # that has just run 'lmrelay init'. Uncomment a block once its variable is
 # exported.
-#
-# From the environment an upstream is LMRELAY_UPSTREAM_<NAME>_BASE_URL and
-# _DIALECT, plus LMRELAY_UPSTREAM_<NAME>_KEY, which means exactly what
-# 'lmrelay provider add NAME KEY' means: the preset base URL, dialect and
-# header shape with the key substituted. Headers themselves have no
-# environment spelling, because a header name may contain a hyphen and an
-# environment variable name may not, and mapping - to _ would not survive the
-# trip back. A relay with no config file at all is legal once the environment
-# defines at least one upstream.
 
 # OpenAI. Wants a bearer token.
 # [upstream.openai]

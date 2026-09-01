@@ -93,7 +93,7 @@ With auth on, every one of these needs the credential:
 
 ```bash
 curl http://127.0.0.1:11435/api/tags \
-  -H "Authorization: Bearer $LMRELAY_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Running it for real
@@ -154,10 +154,6 @@ either accepts `-` in place of a path to use the terminal. `--config PATH` is ac
 every command that reads the config or the state, which is every command except `init`,
 which always writes `~/.lmrelay/lmrelay.toml`, and `disable`, which reads neither.
 
-Every key in the config file also has an environment spelling, `LMRELAY_` plus the path to the
-key: `[limits.total] concurrent` is `LMRELAY_LIMITS_TOTAL_CONCURRENT`. The environment wins
-over the file, and a container that sets its upstreams that way needs no config file at all.
-
 ### Choosing an upstream
 
 The first path segment selects the upstream if and only if it exactly matches a key in
@@ -186,7 +182,7 @@ Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
 
 ```bash
 curl http://127.0.0.1:11435/api/chat \
-  -H "Authorization: Bearer $LMRELAY_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
   "model": "llama3",
   "messages": [{"role": "user", "content": "hi"}]

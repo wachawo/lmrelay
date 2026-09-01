@@ -1,15 +1,18 @@
 # Configuration and Errors
 
 The [README](https://github.com/wachawo/lmrelay/blob/main/README.md) covers installation and
-usage. This document covers the config file, the environment, the state file, autostart, the
-limits, moving a whole configuration between machines, what a Prometheus scrape of `/metrics`
+usage. This document covers the config file, the state file, autostart, the limits,
+moving a whole configuration between machines, what a Prometheus scrape of `/metrics`
 holds, how to read `lmrelay.log`, the behaviour that is not obvious from the outside, what
 every message the relay prints means, and how to have fail2ban act on refused credentials.
 
-**A setting is a path, and a path has three spellings.** `limits.total.concurrent` is
-`[limits.total] concurrent` in the file, `LMRELAY_LIMITS_TOTAL_CONCURRENT` in the environment,
-and `"limits": {"total": {"concurrent": …}}` in an export. Learn the path once and the three
-spellings follow from it.
+**A setting is a path, and a path has two spellings.** `limits.total.concurrent` is
+`[limits.total] concurrent` in the file and `"limits": {"total": {"concurrent": …}}` in an
+export. Learn the path once and both follow from it.
+
+**There is no third spelling in the environment.** Settings come from `lmrelay.toml` and
+from `state.json`, and from nowhere else. `$LMRELAY_CONFIG` names which file to read, and
+that is the whole of what the environment decides.
 
 ## Files on disk
 
@@ -39,11 +42,8 @@ The config is looked for in three places, first hit wins, no merging:
 `$LMRELAY_CONFIG` (also what a command's `--config PATH` sets), then `./lmrelay.toml`,
 then `~/.lmrelay/lmrelay.toml`.
 
-If none exists, the relay looks at the environment: a relay whose upstreams come from
-`LMRELAY_UPSTREAM_*` needs no file at all, and `~/.lmrelay/lmrelay.toml` is then only the path
-that `state.json`, the pidfile and the log sit beside. With neither a file nor an upstream in
-the environment, the relay refuses to start rather than serving 404s from an empty
-configuration.
+If none exists the relay refuses to start, rather than serving 404s from an empty
+configuration. Run `lmrelay init`.
 
 `state.json` is looked for beside whichever config was found, or at `$LMRELAY_STATE` when that
 is set.
@@ -54,11 +54,11 @@ is set.
 # host, port and connect_timeout are read at startup only; changing any of them
 # needs 'lmrelay restart'. Everything else is picked up by 'lmrelay reload'.
 [server]
-host             = "127.0.0.1"        # LMRELAY_SERVER_HOST
-port             = 11435              # LMRELAY_SERVER_PORT
-default_upstream = "ollama"           # LMRELAY_SERVER_DEFAULT_UPSTREAM
-connect_timeout  = 10                 # LMRELAY_SERVER_CONNECT_TIMEOUT
-log_level        = "INFO"             # LMRELAY_SERVER_LOG_LEVEL
+host             = "127.0.0.1"
+port             = 11435
+default_upstream = "ollama"
+connect_timeout  = 10
+log_level        = "INFO"
 
 # Three scopes, the same three keys in each, every one 0 (off) by default.
 # A request must pass every scope you set, and is charged to all of them or to
@@ -66,28 +66,28 @@ log_level        = "INFO"             # LMRELAY_SERVER_LOG_LEVEL
 
 # Per credential. Skipped entirely with auth off, since there is no credential.
 [limits.per_token]
-rate       = 2                        # LMRELAY_LIMITS_PER_TOKEN_RATE
-burst      = 5                        # LMRELAY_LIMITS_PER_TOKEN_BURST
-concurrent = 2                        # LMRELAY_LIMITS_PER_TOKEN_CONCURRENT
+rate       = 2
+burst      = 5
+concurrent = 2
 
 # Per client address. The only scope that identifies anyone with auth off, and
 # only as trustworthy as whatever sets X-Forwarded-For in front of the relay.
 [limits.per_address]
-rate       = 5                        # LMRELAY_LIMITS_PER_ADDRESS_RATE
-burst      = 10                       # LMRELAY_LIMITS_PER_ADDRESS_BURST
-concurrent = 4                        # LMRELAY_LIMITS_PER_ADDRESS_CONCURRENT
+rate       = 5
+burst      = 10
+concurrent = 4
 
 # The relay as a whole, whoever is asking. This is the one that protects the
 # upstream: ten callers each inside their own limit still arrive together.
 [limits.total]
-rate       = 20                       # LMRELAY_LIMITS_TOTAL_RATE
-burst      = 40                       # LMRELAY_LIMITS_TOTAL_BURST
-concurrent = 6                        # LMRELAY_LIMITS_TOTAL_CONCURRENT
+rate       = 20
+burst      = 40
+concurrent = 6
 
 # One extra valid caller credential, for a non-interactive install. It does not
-# turn checking on; only 'lmrelay auth true' or LMRELAY_AUTH_ENABLED does.
+# turn checking on; only 'lmrelay auth true' does.
 [auth]
-token = "CHANGE-ME"                   # LMRELAY_AUTH_TOKEN, or LMRELAY_TOKEN
+token = "CHANGE-ME"
 
 # Local Ollama, exactly where it already listens. Needs no credential, so it
 # has no headers at all.
@@ -118,9 +118,8 @@ headers  = { Authorization = "Bearer ${DEEPSEEK_API_KEY}" }
 base_url = "https://api.x.ai"
 dialect  = "openai"
 headers  = { Authorization = "Bearer ${XAI_API_KEY}" }
-# Headers have no environment spelling: a header name may contain a hyphen and
-# an environment variable name may not. LMRELAY_UPSTREAM_OPENAI_KEY sets the
-# preset header instead, exactly as 'lmrelay provider add openai sk-...' does.
+# 'lmrelay provider add openai sk-...' writes these same three fields into
+# state.json, with the preset base URL, dialect and header shape.
 ```
 
 The complete commented file ships as
@@ -149,11 +148,10 @@ hosted block once its variable is exported; an unset `${VAR}` is a startup error
   while `Authorization` is not. That is not a typo.
 - An upstream may not be named `api` or `v1`; either would shadow the path root every
   Ollama and OpenAI client already sends to, and the breakage would be hard to diagnose.
-- There is no auth switch in this file. A `[auth] token`, and `$LMRELAY_AUTH_TOKEN` or its
-  older spelling `$LMRELAY_TOKEN`, are each accepted as one *additional* valid caller
-  credential, so a container can inject one without invalidating yours; none of them turns
-  checking on. Caller tokens are otherwise `lmrelay token …`, and the switch is
-  `lmrelay auth true|false` or `$LMRELAY_AUTH_ENABLED`.
+- There is no auth switch in this file. An `[auth] token` is accepted as one *additional*
+  valid caller credential, so an install that never runs the CLI can write one down without
+  invalidating the tokens in `state.json`; it does not turn checking on. Caller tokens are
+  otherwise `lmrelay token …`, and the switch is `lmrelay auth true|false`.
 - A provider added with `lmrelay provider add` wins over an `[upstream.<name>]` of the same
   name. The startup log names any upstream that was overridden, since this file is hand-written
   and its author deserves to hear that a command shadowed it.
@@ -161,172 +159,6 @@ hosted block once its variable is exported; an unset `${VAR}` is a startup error
   three scopes, `per_token`, `per_address` and `total`. Uniform on purpose: a table with a
   rate in one scope and a count in another is a second thing to learn and the first thing to
   get wrong. One sentence covers it, and it is in the [Limits](#limits) section below.
-- Every key above has an environment spelling, and the environment wins. That rule and its
-  two carve-outs are in [The environment](#the-environment) below.
-
-## The environment
-
-Every key in the config file has an environment spelling, and it is derivable from the file
-without a table: **`LMRELAY_` plus the path to the key, uppercased, with the segments joined
-by `_`.**
-
-| In the file | In the environment |
-|---|---|
-| `[server] port` | `LMRELAY_SERVER_PORT` |
-| `[server] default_upstream` | `LMRELAY_SERVER_DEFAULT_UPSTREAM` |
-| `[limits.per_token] rate` | `LMRELAY_LIMITS_PER_TOKEN_RATE` |
-| `[limits.total] concurrent` | `LMRELAY_LIMITS_TOTAL_CONCURRENT` |
-| `[auth] token` | `LMRELAY_AUTH_TOKEN` |
-| `[upstream.openai] base_url` | `LMRELAY_UPSTREAM_OPENAI_BASE_URL` |
-
-No abbreviations and no special cases, so the name is derivable from the file without
-consulting a table. A variable under `LMRELAY_SERVER_`, `LMRELAY_LIMITS_`, `LMRELAY_AUTH_` or
-`LMRELAY_UPSTREAM_` that names no setting is **refused and named**, because a misspelt
-variable that does nothing quietly is how an operator comes to believe a setting is applied
-when it is not. Anything outside those four prefixes is left alone.
-
-`LMRELAY_AUTH_` is in that list for the same reason the value of `LMRELAY_AUTH_ENABLED` is
-strict: the two failures have one outcome. A value read as false turns authentication off, and
-so does a name nothing reads. `LMRELAY_AUTH_ENABLE=true`, one keystroke short, used to leave
-the relay serving every anonymous caller with the configured upstream credentials, and the
-only trace was the pre-existing line about tokens configured while auth is off.
-
-There are two carve-outs, and both are carve-outs rather than exceptions to the rule:
-
-- **Locations are not settings.** `LMRELAY_CONFIG` says where `lmrelay.toml` is and
-  `LMRELAY_STATE` says where `state.json` is, and neither can live in a file that has not
-  been found yet. Their meanings are unchanged. `LMRELAY_BIND` and `LMRELAY_SERVICE` are
-  internal: they are set by the CLI and by the installed unit, and by nothing else.
-- **`LMRELAY_TOKEN` keeps its meaning.** Under the rule, `[auth] token` is
-  `LMRELAY_AUTH_TOKEN`; `LMRELAY_TOKEN` remains accepted as the older spelling of the same
-  thing. Setting both, to different values, conflicts with nothing: both become valid caller
-  credentials, which is exactly what each of them means on its own.
-
-### The environment wins over the file
-
-The file is the shared, checked-in thing; the environment is the deployment. The specific
-overrides the general, which is what every operator already expects, and the alternative
-would make an environment variable a silent no-op whenever the file happened to mention the
-key.
-
-A value from the environment is laid over the parsed file and then validated by the readers
-the file's own values go through, so `LMRELAY_SERVER_PORT=eleven` is refused in the same
-words `port = "eleven"` is refused in, and a limit set from the environment cannot be
-negative any more than one set in the file can.
-
-The risk that creates is real: an operator edits the file, reloads, and nothing changes. What
-pays for it is one line at startup and on every reload, naming only genuine shadows, so it
-stays short and is about the actual confusion:
-
-```text
-lmrelay: the environment sets server.port, limits.total.concurrent, overriding /home/u/.lmrelay/lmrelay.toml
-```
-
-Only keys the file also carries are named. A variable setting something the file leaves out is
-shadowing nothing, so saying so would bury the two lines that matter in a list of the ones that
-do not. That line is the answer to "why did my edit do nothing", and it is written whether or
-not anybody was there to read it: `lmrelay.log` has it from the last reload.
-
-The environment is re-read on SIGHUP along with everything else, so `lmrelay reload` is still
-"re-read every source". A variable exported in your shell after the relay started is not in
-the relay's environment and a reload will not find it; that takes a restart, under the
-manager that owns the process.
-
-### Absent or empty is unset; `0` is a value
-
-An unset variable and an empty one both mean "not set", and the file's value, or the default,
-applies. `Environment="LMRELAY_SERVER_PORT="` in a systemd unit and `LMRELAY_SERVER_PORT:` in
-a compose file are how people write "I am not setting this", and reading either as port `0`
-would bind something absurd.
-
-For the limits the distinction happens not to bite, since unset and `0` both mean off. It
-bites on `port`, `connect_timeout` and `log_level`, which is why the rule is stated generally
-rather than per key.
-
-### Booleans are strict
-
-`LMRELAY_AUTH_ENABLED` accepts `true`, `false`, `1`, `0`, `yes`, `no`, `on` and `off`, in any
-case, and **refuses anything else by name**. This is the one place where being liberal is
-dangerous: a typo read as false is authentication turned off.
-
-### `LMRELAY_AUTH_ENABLED` overrides the state file
-
-`auth_enabled` lives in `state.json` rather than in `lmrelay.toml`, and its switch is
-`lmrelay auth true|false`. A container needs it without running the CLI, so the environment
-can set it, and it wins like everything else.
-
-That makes `lmrelay auth false` a command that can write state nobody reads. It writes the
-state and reports what it wrote, and it does not look at the environment: with
-`$LMRELAY_AUTH_ENABLED` set in the relay's environment, the switch the command just moved is
-the one nothing consults. **Pick one of the two.** If `lmrelay auth` is meant to be the
-switch, leave the variable unset; if the variable is the switch, the command is not.
-
-### Upstreams from the environment
-
-Scalars work: `LMRELAY_UPSTREAM_<NAME>_BASE_URL` and `LMRELAY_UPSTREAM_<NAME>_DIALECT`.
-
-**Arbitrary headers do not, and cannot.** `x-api-key` and `anthropic-version` contain
-hyphens, which are not usable in environment variable names in practice, and mapping `-` to
-`_` is not reversible: `x_api_key` could be either spelling. Rather than half-support it with
-a lossy mapping, headers have no environment spelling at all.
-
-The credential gets the shortcut that already exists in the CLI instead.
-**`LMRELAY_UPSTREAM_<NAME>_KEY` means exactly what `lmrelay provider add NAME KEY` means:**
-the preset base URL, dialect and header shape with the key substituted, and for a name no
-preset knows, a bearer over a `LMRELAY_UPSTREAM_<NAME>_BASE_URL` that is then required. It
-goes through the same code path a CLI-added provider does, so it fails in exactly the same
-ways.
-
-That makes a relay with no config file at all real for the common case:
-
-```bash
-LMRELAY_UPSTREAM_OLLAMA_BASE_URL=http://ollama:11434
-LMRELAY_UPSTREAM_OPENAI_KEY=sk-...
-LMRELAY_SERVER_DEFAULT_UPSTREAM=ollama
-LMRELAY_AUTH_ENABLED=true
-LMRELAY_TOKEN=lmr_...
-LMRELAY_LIMITS_TOTAL_CONCURRENT=6
-```
-
-**No config file is no longer an error when the environment defines at least one upstream.**
-The "no config found, run `lmrelay init`" message still applies when neither source has
-anything, and it names the environment as well as the two paths.
-
-With no file, `~/.lmrelay/lmrelay.toml` is still the path everything else is placed beside:
-`state.json`, the pidfile and the log. `LMRELAY_STATE` moves the state file if that
-directory is not writable in your image, and it is a location rather than a setting for the
-same reason `LMRELAY_CONFIG` is.
-
-The name is split off the variable by matching the field suffix, longest first, and the
-suffix set is closed, so the split is unambiguous:
-
-| Variable | Upstream | Field |
-|---|---|---|
-| `LMRELAY_UPSTREAM_OPENAI_KEY` | `openai` | `KEY` |
-| `LMRELAY_UPSTREAM_MY_LLM_BASE_URL` | `my_llm` | `BASE_URL` |
-| `LMRELAY_UPSTREAM_FOO_BASE_KEY` | `foo_base` | `KEY` |
-| `LMRELAY_UPSTREAM_OPENAI_TIMEOUT` | refused, and named | |
-
-An upstream named from the environment is limited to letters, digits and underscores; a
-hyphenated name needs the file. An unrecognised `LMRELAY_UPSTREAM_*` variable is refused
-rather than ignored, for the same reason the old `[server]` limit keys are: a variable that
-does nothing quietly leaves an operator believing they configured something.
-
-### Environment names with no file key
-
-| Variable | Means |
-|---|---|
-| `LMRELAY_CONFIG` | where `lmrelay.toml` is. A location, not a setting. Unchanged. |
-| `LMRELAY_STATE` | where `state.json` is. Unchanged. |
-| `LMRELAY_AUTH_ENABLED` | the auth switch, which lives in state. Overrides `lmrelay auth`. |
-| `LMRELAY_UPSTREAM_<NAME>_KEY` | the provider key, applied to the preset header shape. |
-| `LMRELAY_BIND`, `LMRELAY_SERVICE` | internal. Set by the CLI and the installed unit, by nothing else. |
-
-There is deliberately no `LMRELAY_AUTH_TOKENS` taking a delimited list. A delimited secret
-list is a footgun, and more than one token is what `lmrelay config import` is for. Setting it
-is refused by name, like any other variable under a checked prefix that spells no setting,
-rather than accepted and ignored.
-
 ## Caller tokens and the auth switch
 
 Auth is off in a fresh state, so on loopback a new install is a transparent proxy in front
@@ -348,26 +180,21 @@ itself. The config loader repeats that warning on every start for as long as tok
 and none of them is required. `auth true` with no tokens is refused the other way round,
 because it would 401 every request including yours.
 
-`[auth] token`, its environment spelling `$LMRELAY_AUTH_TOKEN`, and the older `$LMRELAY_TOKEN`
-are each accepted as one *additional* valid caller credential, so a container can inject one
-without invalidating yours; none of them turns checking on. They all count towards the token
-set that `auth true` requires. `$LMRELAY_AUTH_TOKEN` is an ordinary setting and overrides
-`[auth] token`; `$LMRELAY_TOKEN` is additive to both, so setting all three with three different
-values makes three credentials rather than a conflict.
+`[auth] token` is accepted as one *additional* valid caller credential, so an install that
+never runs the CLI can write one down without invalidating the tokens in `state.json`. It
+does not turn checking on, and it counts towards the token set that `auth true` requires.
 
-The switch itself is `lmrelay auth true|false`, or `$LMRELAY_AUTH_ENABLED`, which lives in the
-environment and wins over the state file like every other setting. A relay whose switch is set
-that way will not be moved by `lmrelay auth`, which writes the state the environment is
-overriding.
+The switch itself is `lmrelay auth true|false`, and it lives in `state.json`. Nothing in
+`lmrelay.toml` moves it.
 
 `token list` masks tokens unless `--show` is passed. Token ids are monotonic, so an id keeps
 meaning the same token after an unrelated delete.
 
 ## Limits
 
-A setting is a path, and a path has three spellings. `limits.total.concurrent` is
-`[limits.total] concurrent` in the file, `LMRELAY_LIMITS_TOTAL_CONCURRENT` in the
-environment, and `"limits": {"total": {"concurrent": …}}` in an export. Learn the path once.
+A setting is a path, and a path has two spellings. `limits.total.concurrent` is
+`[limits.total] concurrent` in the file and `"limits": {"total": {"concurrent": …}}` in an
+export. Learn the path once.
 
 Three scopes, the same three keys in each, every one `0` (off) by default.
 
@@ -807,11 +634,10 @@ The state file holds the caller tokens, the auth switch and the CLI-added provid
 bundle without them would reproduce a relay that refuses every caller or has no providers at
 all. The bundle is therefore both files in one.
 
-It holds the **effective** configuration, after the environment overlay and after `${VAR}`
-expansion, because "export, then import on a clean machine, and get the relay that was
-exported" is only true of the effective values. Exporting the sources instead would produce a
-bundle that reproduces the relay only if the target machine happens to have the same
-environment, which is the one thing guaranteed to differ.
+It holds the **effective** configuration, after `${VAR}` expansion in header values, because
+"export, then import on a clean machine, and get the relay that was exported" is only true of
+the effective values. Exporting `${OPENAI_API_KEY}` verbatim would produce a bundle that
+reproduces the relay only on a machine that exports the same variable.
 
 Export moves and deletes nothing, and writes only the path it was given. What it will not do
 is write that path over something, which used to be the one thing in this command set that
@@ -986,8 +812,8 @@ ssh other-host 'lmrelay config import relay.json'
 
 Export, import into an empty config directory, and the relay is identical in behaviour: same
 bind, same limits, same upstreams with the same headers, same caller tokens with the same
-ids, same auth switch. That is one test in the suite, and it is what keeps the file, the
-environment and the bundle honest against each other as they change.
+ids, same auth switch. That is one test in the suite, and it is what keeps the two files and
+the bundle honest against each other as they change.
 
 ## Autostart
 
@@ -1000,15 +826,15 @@ so the two cannot disagree about who owns the process; each command says which p
 
 ## Reload
 
-`lmrelay reload` sends the running relay a SIGHUP, and it re-reads every source in place:
-`lmrelay.toml`, `state.json` and the environment. Nothing in flight is disturbed: connections
-stay open and a stream already being relayed runs to its end. Every command that writes a
-change, whether `token gen`, `auth true`, `provider add`, `config import` or the rest, signals
-the relay for you, so an explicit reload is what you run after editing `lmrelay.toml` by hand.
+`lmrelay reload` sends the running relay a SIGHUP, and it re-reads both sources in place:
+`lmrelay.toml` and `state.json`. Nothing in flight is disturbed: connections stay open and a
+stream already being relayed runs to its end. Every command that writes a change, whether
+`token gen`, `auth true`, `provider add`, `config import` or the rest, signals the relay for
+you, so an explicit reload is what you run after editing `lmrelay.toml` by hand.
 
-A variable exported in your shell after the relay started is not in the relay's environment,
-and no reload will find it. Changing what the relay sees means restarting it, under whatever
-manager owns it.
+A `${VAR}` in a header value is read when the relay reads the file, so a key exported in your
+shell after the relay started is not in the relay's environment and no reload will find it.
+That one needs a restart, under whatever manager owns the process.
 
 | Key | Applied by | Why |
 |---|---|---|
@@ -1062,8 +888,8 @@ served as `text/plain; version=0.0.4; charset=utf-8`. That `0.0.4` is the versio
 exposition format, which Prometheus parses by, and not lmrelay's own; the two are the same
 number today by coincidence and will diverge.
 
-Nothing configures it. There is no key in `lmrelay.toml`, and none in the environment, to
-turn it on, turn it off or move it. It is one route, written by hand rather than with
+Nothing configures it. There is no key in `lmrelay.toml` to turn it on, turn it off or move
+it. It is one route, written by hand rather than with
 `prometheus_client`, because the dependency count is a documented property of this project
 and there are still four.
 
@@ -1253,7 +1079,7 @@ way every other caller reaches it.
 Check it by hand first, which is also how you read these numbers when there is no Prometheus:
 
 ```bash
-curl http://127.0.0.1:11435/metrics -H "Authorization: Bearer $LMRELAY_TOKEN"
+curl http://127.0.0.1:11435/metrics -H "Authorization: Bearer $TOKEN"
 ```
 
 Two scrapes of an unchanged relay are the same bytes, so `diff` between two of them is a
@@ -1410,7 +1236,7 @@ Raised by the relay before it binds, and by every CLI command that loads the con
 
 | Message | Where | Means | Do |
 |---|---|---|---|
-| `lmrelay: no config found; looked at ./lmrelay.toml and <home path>, and the environment names no upstream. Run 'lmrelay init'.` | any command that loads the config | No config file exists at any of the three places, and no `LMRELAY_UPSTREAM_*` variable supplies one either. | Run `lmrelay init`, point `--config PATH` at the file you have, or set `LMRELAY_UPSTREAM_<NAME>_BASE_URL` for a relay that needs no file. |
+| `lmrelay: no config found; looked at ./lmrelay.toml and <home path>. Run 'lmrelay init'.` | any command that loads the config | No config file exists at any of the three places. | Run `lmrelay init`, or point `--config PATH` at the file you have. |
 | `lmrelay: cannot read <path>: <Type>: <detail>` | any command that loads the config | The file could not be opened, or TOML could not parse it. | Fix the syntax the detail names, or the permissions on the path. |
 | `lmrelay: config has no [upstream.*] sections in <config> and no providers in <state>. Run 'lmrelay provider add' or add an [upstream.*] table.` | any command that loads the config | The config parses but defines no upstream at all, and state has none either. | Add an `[upstream.*]` table, or run `lmrelay provider add`. |
 | `lmrelay: default_upstream '<name>' is not defined; known upstreams: <list>` | any command that loads the config | `[server] default_upstream` names an upstream that no source defines. | Set it to one of the names listed, or define the one it names. |
@@ -1435,20 +1261,6 @@ Raised by the relay before it binds, and by every CLI command that loads the con
 | `lmrelay: already running (pid <N>); use 'lmrelay restart' or 'lmrelay stop'` | relay startup, `lmrelay serve` | The pidfile names a live process. | `lmrelay status` to see it, then `lmrelay restart` or `lmrelay stop`. |
 | `lmrelay: the <manager> unit is active and already owns the port; run 'lmrelay stop' first, or 'lmrelay restart'` | `lmrelay run` | A systemd unit or launchd agent is already running the relay. | `lmrelay stop`, then `lmrelay run`; or just `lmrelay restart` to keep it under the manager. |
 | `lmrelay: <path> already exists; not overwriting` | `lmrelay init` | `~/.lmrelay/lmrelay.toml` is already there. | Edit that file. `init` never overwrites a config you may have edited. |
-
-### Environment errors
-
-Also raised by anything that loads the config, and named after the variable rather than after
-the key, because the variable is what the operator has to go and change.
-
-| Message | Where | Means | Do |
-|---|---|---|---|
-| `lmrelay: $<NAME> names no setting. Every setting is LMRELAY_ plus the path to its key: [limits.per_token] rate is LMRELAY_LIMITS_PER_TOKEN_RATE.` | any command that loads the config | A variable under `LMRELAY_SERVER_`, `LMRELAY_LIMITS_` or `LMRELAY_AUTH_` that spells no key. | Fix the spelling. Refused rather than ignored, because a variable that does nothing quietly is how an operator comes to believe a setting is applied when it is not. Under `LMRELAY_AUTH_` it is worse than that: `LMRELAY_AUTH_ENABLE=true` is authentication left off on a relay whose operator has just turned it on. |
-| `lmrelay: $<NAME> names no upstream setting; expected LMRELAY_UPSTREAM_<NAME>_BASE_URL, LMRELAY_UPSTREAM_<NAME>_DIALECT, LMRELAY_UPSTREAM_<NAME>_KEY` | any command that loads the config | An `LMRELAY_UPSTREAM_*` variable ending in something other than those three suffixes. | Use one of the three. The suffix set is closed, which is what makes the upstream name unambiguous. |
-| `lmrelay: $<NAME> names upstream '<name>', which is not letters, digits and underscores; name it in the config file instead` | any command that loads the config | The upstream name taken from the variable carries something a name may not. | Name that upstream in `lmrelay.toml`. A hyphenated upstream cannot be spelled in an environment variable at all. |
-| `lmrelay: $LMRELAY_UPSTREAM_<NAME>_KEY names no known provider; set LMRELAY_UPSTREAM_<NAME>_BASE_URL as well. Known providers: anthropic, deepseek, grok, ollama, openai` | any command that loads the config | A key was given for a name no preset knows, so there is no base URL to attach it to. | Set the base URL too, exactly as `provider add` needs `--base-url` for an unlisted name. |
-| `lmrelay: $<NAME>: <provider error>` | any command that loads the config | An upstream built from the environment failed the same check a `lmrelay provider add` would have failed, and the variable is named in front of it. | Act on the message after the colon. It is the same one the CLI would have printed. |
-| `lmrelay: $LMRELAY_AUTH_ENABLED is '<value>'; expected one of 1, true, yes, on, 0, false, no, off` | any command that loads the config | The auth switch was set to something that is neither true nor false. | Write one of the eight. This is the one place lmrelay refuses to guess: a typo read as false is authentication turned off. |
 
 ### State file errors
 
@@ -1540,7 +1352,6 @@ Logged and then ignored. Nothing is refused and nothing stops.
 | `lmrelay: listening on <host> with auth off. Every caller that can reach this port can use the configured upstream credentials. Run 'lmrelay auth true'.` | relay startup, `lmrelay run --host`, `lmrelay reload` | A non-loopback bind demands no credential. On a reload it is asked about the host the socket is on, since `lmrelay auth false` can create the condition under a relay that is already listening. | Run `lmrelay auth true`, unless something in front of the relay already authenticates. |
 | `lmrelay: <N> caller token(s) configured but auth is off; run 'lmrelay auth true' to require them` | any command that loads the config | Tokens exist but nothing checks them. | Run `lmrelay auth true`, or delete the tokens if the relay is meant to stay open. |
 | `lmrelay: [limits.per_token] is configured but auth is off, so nothing is keyed by a token. [limits.per_address] and [limits.total] still apply. Run 'lmrelay auth true'.` | any command that loads the config | A per-credential limit is set on a relay where there is no credential to key it on. | Nothing, if auth is going on later: the scope becomes live the moment it does. Otherwise move the number to `[limits.per_address]` or `[limits.total]`. |
-| `lmrelay: the environment sets <paths>, overriding <config>` | relay startup, `lmrelay reload`, any command that loads the config | An environment variable and the file both name the same key, and the environment is winning. Only genuine shadows are named, so this line is about the actual confusion rather than about the whole environment. | Nothing, if that was the intent. Otherwise unset the variable. The environment is re-read on every reload, so a shell export made after the relay started is not in it. |
 | `lmrelay: provider(s) <names> from state.json shadow the [upstream.*] of the same name in <config>` | any command that loads the config | A CLI-added provider is winning over a hand-written table. | Nothing, if that was the intent. Otherwise `lmrelay provider delete <name>`. |
 | `lmrelay: <field> <old> -> <new>, ... in <config> but a reload cannot apply that: the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with, e.g. `lmrelay: port 11435 -> 8080, connect_timeout 10 -> 30 in ...`. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout, and each carries both values, because the running relay is the only thing that knows what it bound with. |
 | `<error message>; keeping the running config` | relay log, on reload | The re-read config or state did not parse. The relay is still serving the one it already had. | Fix what the message names, then `lmrelay reload` again. |
@@ -1588,7 +1399,6 @@ Logged and then ignored. Nothing is refused and nothing stops.
 | Requests come back 429 | One of the six limits is set below what this client sends | The message names the scope, the measure and the number being enforced; raise that one, or set it to `0`. The access log line names the same pair, as `(rate, per_token)` |
 | 429 on a relay whose own limits look generous | `[limits.total]` refused it: it is shared, so the traffic that filled it may be somebody else's | Raise `[limits.total]`, up to `OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS` for `concurrent`, or set `[limits.per_token]` so no one caller can fill it |
 | A limit allows about twice what it says | Two relays are running and each counts its own callers | `lmrelay status` on each; every scope is per process, `[limits.total]` included, so put the limit in front of the pair or accept the doubling |
-| An edit to `lmrelay.toml` changes nothing after a reload | An environment variable is shadowing that key, and the environment wins | The startup and reload log name the shadowed keys: `lmrelay: the environment sets ..., overriding ...`. Unset the variable, or set it to what you meant |
 | A limit written as `rate_limit` is refused at startup | That key was replaced by three scopes | The message names all three; put the number in the scope you meant, usually `[limits.total]` |
 | 502 naming `ollama` | Ollama is not running on 11434 | Start Ollama, then `lmrelay status` to confirm the upstream list |
 | An occasional request takes tens of seconds before its first token | Ollama evicted a resident model to load the one this request named | `curl 127.0.0.1:11434/api/ps` first: if only one model stays resident, VRAM binds and `OLLAMA_MAX_LOADED_MODELS` will not help, so cut `num_ctx` or the rotation instead. If several stay but fewer than you rotate through, raise it to cover them. No relay setting affects either |
