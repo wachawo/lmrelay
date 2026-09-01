@@ -23,11 +23,14 @@ from lmrelay.daemon import (
     publish_bind,
     read_bind,
     read_pid,
+    read_startup_settings,
     recorded_bind,
     reload_daemon,
     remove_pid,
+    restart_warning,
     start_detached,
     stop_daemon,
+    unapplied_settings,
     wait_for_relay,
     write_pid,
 )
@@ -357,6 +360,78 @@ class TestTheAddressTheRelayRecorded:
         assert status["healthy"] is True
 
 
+class TestWhatTheRunningRelayStartedWith:
+    """The pidfile is the only record that survives the process that chose it."""
+
+    def test_the_three_settings_a_reload_cannot_apply_are_recorded(self, tmp_path):
+        target = tmp_path / PID_NAME
+        write_pid(target, os.getpid(), "127.0.0.1:11435", 10)
+        assert read_startup_settings(target) == {
+            "host": "127.0.0.1", "port": 11435, "connect_timeout": 10
+        }
+
+    def test_a_pidfile_from_a_build_that_recorded_no_timeout_omits_it(self, tmp_path):
+        """Absent rather than guessed: whoever names what a reload cannot apply
+        then says less rather than something wrong."""
+        target = tmp_path / PID_NAME
+        write_pid(target, os.getpid(), "127.0.0.1:11435")
+        assert read_startup_settings(target) == {"host": "127.0.0.1", "port": 11435}
+
+    def test_and_a_third_line_never_floats_without_a_second(self, tmp_path):
+        """A reader counting lines must not find a timeout where an address
+        should be."""
+        target = tmp_path / PID_NAME
+        write_pid(target, os.getpid(), connect_timeout=10)
+        assert target.read_text(encoding="utf-8") == f"{os.getpid()}\n"
+
+    def test_a_pidfile_with_no_address_at_all_says_nothing(self, tmp_path):
+        target = tmp_path / PID_NAME
+        write_pid(target, os.getpid())
+        assert read_startup_settings(target) == {}
+
+    def test_an_ipv6_literal_survives_the_round_trip(self, tmp_path):
+        """Full of colons, and only the last one separates the port."""
+        target = tmp_path / PID_NAME
+        write_pid(target, os.getpid(), "::1:11435", 10)
+        assert read_startup_settings(target)["host"] == "::1"
+
+
+class TestNamingWhatAReloadCannotApply:
+    """One comparison and one sentence, for the relay's log and the terminal."""
+
+    def started(self, **overrides):
+        return {"host": "127.0.0.1", "port": 11435, "connect_timeout": 10, **overrides}
+
+    def test_nothing_moved_is_nothing_to_say(self, tmp_path):
+        config = load_config(write_config(tmp_path, 11435))
+        assert unapplied_settings(self.started(), config) == []
+
+    def test_a_moved_port_is_named_with_both_values(self, tmp_path):
+        """Naming only the key sends the operator to the file to read the half
+        of the answer the file already has."""
+        config = load_config(write_config(tmp_path, 8080))
+        assert unapplied_settings(self.started(), config) == ["port 11435 -> 8080"]
+
+    def test_each_one_separately_so_a_port_does_not_hide_a_timeout(self, tmp_path):
+        config = load_config(write_config(tmp_path, 8080))
+        assert unapplied_settings(self.started(connect_timeout=30), config) == [
+            "port 11435 -> 8080", "connect_timeout 30 -> 10"
+        ]
+
+    def test_a_key_the_pidfile_did_not_record_is_not_named(self, tmp_path):
+        """It cannot be compared, and inventing a "from" value would put a
+        number in front of the operator that nothing measured."""
+        config = load_config(write_config(tmp_path, 8080))
+        started = {"host": "127.0.0.1", "port": 11435}
+        assert unapplied_settings(started, config) == ["port 11435 -> 8080"]
+
+    def test_the_sentence_names_the_file_and_says_what_to_do(self, tmp_path):
+        message = restart_warning(["port 11435 -> 8080"], tmp_path / "lmrelay.toml")
+        assert "port 11435 -> 8080" in message
+        assert str(tmp_path / "lmrelay.toml") in message
+        assert "restart to apply" in message
+
+
 class TestWaitingForTheRelayWeStarted:
     """Which pid `serve` reports, and what it does when the child does not live."""
 
@@ -399,9 +474,16 @@ class TestARealDetachedRelay:
         try:
             assert process_alive(pid)
             healthy = wait_until(lambda: probe_health("127.0.0.1", port))
+            # Recorded by the process that bound the socket, which is the only
+            # thing that knows what it started with. Asserted here rather than
+            # against write_pid alone, because the call site is what a `reload`
+            # in another process reads to say what it cannot apply, and dropping
+            # an argument there failed nothing.
+            started = read_startup_settings(pid_file(config))
         finally:
             stopped = stop_daemon(config)
         assert healthy, read_log(config)
+        assert started == {"host": "127.0.0.1", "port": port, "connect_timeout": 10}
         assert stopped
         assert read_pid(pid_file(config)) is None
 

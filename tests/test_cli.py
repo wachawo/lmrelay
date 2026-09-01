@@ -3,15 +3,17 @@
 """The command surface, driven through the parser without starting anything."""
 
 import logging
+import os
 import subprocess
 import sys
 
 import pytest
 
 # Local imports
-from lmrelay import cli, service
+from lmrelay import cli, daemon, service
 from lmrelay.cli import build_parser
 from lmrelay.config import CONFIG_ENV_VAR
+from lmrelay.daemon import pid_file, write_pid
 from lmrelay.errors import LmrelayError
 from lmrelay.service import LAUNCHD_PLIST_PATH
 from lmrelay.state import STATE_ENV_VAR, TOKEN_PREFIX, load_state, state_path_for
@@ -341,3 +343,74 @@ class TestReporting:
     ):
         run_command(["provider", "add", "openai", "sk-test", "--config", str(config_path)])
         run_command(["provider", "list", "--config", str(config_path)])
+
+
+class TestSayingWhatAReloadCannotApply:
+    """The warning the relay writes to its log, said in the terminal as well.
+
+    An operator who edits the port and reloads used to get "signalled" and a
+    relay still on the old port, with the reason in lmrelay.log, which is not
+    where somebody who has just typed a command is looking.
+    """
+
+    def running_relay(self, config_path, monkeypatch, port: int, timeout: int = 10):
+        """A pidfile naming this process, and a SIGHUP that goes nowhere.
+
+        Nowhere on purpose: the real one would reach pytest, and SIGHUP ends it.
+        Stubbing `os.kill` also makes every liveness check say yes, which is
+        what makes this pidfile read as a running relay.
+        """
+        write_pid(pid_file(config_path), os.getpid(), f"127.0.0.1:{port}", timeout)
+        monkeypatch.setattr(daemon.os, "kill", lambda *unused_args: None)
+
+    def test_a_changed_port_is_named_in_the_terminal(self, config_path, monkeypatch, caplog):
+        self.running_relay(config_path, monkeypatch, port=9999)
+        with caplog.at_level(logging.WARNING):
+            run_command(["reload", "--config", str(config_path)])
+        assert "port 9999 -> 11435" in caplog.text
+        assert "restart to apply" in caplog.text
+
+    def test_and_so_is_a_changed_timeout(self, config_path, monkeypatch, caplog):
+        self.running_relay(config_path, monkeypatch, port=11435, timeout=30)
+        with caplog.at_level(logging.WARNING):
+            run_command(["reload", "--config", str(config_path)])
+        assert "connect_timeout 30 -> 10" in caplog.text
+
+    def test_but_a_reload_that_applies_cleanly_says_nothing_extra(
+        self, config_path, monkeypatch, caplog
+    ):
+        """Warning on every reload would teach the operator to skip the line
+        that matters."""
+        self.running_relay(config_path, monkeypatch, port=11435)
+        with caplog.at_level(logging.WARNING):
+            run_command(["reload", "--config", str(config_path)])
+        assert "restart to apply" not in caplog.text
+
+    def test_nor_does_a_reload_with_no_relay_running(self, config_path, caplog):
+        """There is nothing bound to a port, so nothing is stuck on the old one."""
+        with caplog.at_level(logging.INFO):
+            run_command(["reload", "--config", str(config_path)])
+        assert "nothing to reload" in caplog.text
+        assert "restart to apply" not in caplog.text
+
+    def test_a_config_that_will_not_load_is_left_to_the_relay_to_report(
+        self, config_path, monkeypatch, caplog
+    ):
+        """It keeps the config it had and says why in its log, and a second
+        opinion from here would be about a file the relay is not running."""
+        self.running_relay(config_path, monkeypatch, port=9999)
+        config_path.write_text("this is not = = toml", encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            run_command(["reload", "--config", str(config_path)])
+        assert "restart to apply" not in caplog.text
+
+    def test_a_pidfile_that_recorded_no_address_says_nothing(
+        self, config_path, monkeypatch, caplog
+    ):
+        """Nothing to compare against, and a warning built on a guess would put
+        a number in front of the operator that nothing measured."""
+        write_pid(pid_file(config_path), os.getpid())
+        monkeypatch.setattr(daemon.os, "kill", lambda *unused_args: None)
+        with caplog.at_level(logging.WARNING):
+            run_command(["reload", "--config", str(config_path)])
+        assert "restart to apply" not in caplog.text

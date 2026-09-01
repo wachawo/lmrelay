@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{"error": "lmrelay: method not allowed for TRACE /api/tags"}`, like every other refusal.
 - **The reload log gives old and new values** for the settings a reload cannot apply:
   `port 11435 -> 8080, connect_timeout 10 -> 30`.
+- **`lmrelay reload` names in the terminal what a reload cannot apply.** Editing `port` and
+  reloading printed `signalled` and left the relay on the old port, with the reason in
+  `lmrelay.log`. It now says `port 11435 -> 8080 ... restart to apply` where you typed the
+  command. The pidfile records the `connect_timeout` the process started with, alongside the
+  address it bound, so all three can be named.
 - **The shipped fail2ban filter matches the request id** that log lines now carry. An
   installed copy from 0.0.2 or later stops matching after this upgrade and bans nobody.
   Copy `contrib/fail2ban/filter.d/lmrelay-auth.conf` over your own and reload fail2ban.

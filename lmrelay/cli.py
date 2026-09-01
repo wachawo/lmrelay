@@ -43,10 +43,14 @@ from lmrelay.config import (
 from lmrelay.daemon import (
     daemon_status,
     log_file,
+    pid_file,
     publish_bind,
+    read_startup_settings,
     reload_daemon,
+    restart_warning,
     start_detached,
     stop_daemon,
+    unapplied_settings,
 )
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.logging_setup import setup_logging
@@ -273,17 +277,46 @@ def restart_relay(args: argparse.Namespace) -> None:
     serve_relay(args)
 
 
+def warn_about_settings_a_reload_cannot_apply(config_path: Path) -> None:
+    """Say in the terminal what the relay would otherwise say only in its log.
+
+    An operator who edits the port and reloads gets "signalled" and a relay
+    still on the old port. The relay does warn, but into lmrelay.log, which is
+    not where somebody who has just typed a command is looking.
+
+    Worked out here rather than reported back by the relay. SIGHUP is delivered,
+    not acknowledged, so asking it would mean polling for an answer that may not
+    have been written yet and deciding what its absence meant. Both halves are
+    already on this side: the pidfile records what the process started with,
+    which is the only record that survives the process that chose it, and the
+    config on disk is what it is being asked to move to. Same comparison, same
+    sentence, no round trip.
+    """
+    try:
+        config = load_config()
+    except LmrelayError:
+        # A config the relay will refuse is the relay's own to report, in its
+        # log, where the reason it kept the old one also is.
+        return
+    started = read_startup_settings(pid_file(config_path))
+    unapplied = unapplied_settings(started, config)
+    if unapplied:
+        logger.warning(restart_warning(unapplied, config.config_path))
+
+
 def reload_relay(args: argparse.Namespace) -> None:
     """Re-read the config in the running relay without dropping connections."""
     config_path = config_path_from(args)
     if service_is_active():
         logger.info(service_control("reload", config_path))
+        warn_about_settings_a_reload_cannot_apply(config_path)
         return
     if reload_daemon(config_path):
         # "Signalled", not "reloaded", for the reason spelled out at
         # reload_running_relay: a relay that cannot parse what it re-reads keeps
         # the config it had, and this command exits 0 either way.
         logger.info("lmrelay: signalled the running relay to re-read its config (SIGHUP).")
+        warn_about_settings_a_reload_cannot_apply(config_path)
     else:
         logger.info("lmrelay: not running; nothing to reload.")
 

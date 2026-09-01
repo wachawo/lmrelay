@@ -28,6 +28,11 @@ KILL_TIMEOUT  = 5.0     # seconds to wait for the kernel to finish a SIGKILL
 START_TIMEOUT = 10.0    # seconds to wait for a detached child to appear
 POLL_INTERVAL = 0.1
 
+# The three [server] keys a reload cannot apply: by the time one arrives the
+# socket is bound and the httpx client is open, and neither can be moved under a
+# live process without dropping what is running through it.
+STARTUP_KEYS = ("host", "port", "connect_timeout")
+
 
 def pid_file(config_path: Path) -> Path:
     """Where the running relay records its pid."""
@@ -106,15 +111,67 @@ def read_bind(path: Path) -> tuple[str, int] | None:
         return None
 
 
-def write_pid(path: Path, pid: int, bind: str = "") -> None:
+def read_startup_settings(path: Path) -> dict:
+    """What the running relay started with, as far as the pidfile recorded it.
+
+    Partial on purpose. A pidfile written by an older build carries no
+    connect_timeout, so the key is absent rather than guessed, and whoever names
+    what a reload cannot apply then says less rather than something wrong.
+    """
+    bind = read_bind(path)
+    if bind is None:
+        return {}
+    started = {"host": bind[0], "port": bind[1]}
+    with suppress(OSError, ValueError, IndexError):
+        started["connect_timeout"] = int(path.read_text(encoding="utf-8").splitlines()[2])
+    return started
+
+
+def unapplied_settings(started: dict, config: RelayConfig) -> list[str]:
+    """`port 11435 -> 8080` for each startup-only key the config has moved.
+
+    Both values, not just the name: the running process is the only thing that
+    knows what it started with, and naming only the key sends the operator to
+    the file to read the half of the answer the file already has.
+    """
+    return [
+        f"{name} {started[name]} -> {getattr(config, name)}"
+        for name in STARTUP_KEYS
+        if name in started and started[name] != getattr(config, name)
+    ]
+
+
+def restart_warning(unapplied: list[str], config_path: Path) -> str:
+    """The one sentence the relay's log and the CLI's terminal both say.
+
+    One renderer, because the two are read by the same person minutes apart and
+    a second wording would be a second thing to recognise.
+    """
+    return (
+        f"lmrelay: {', '.join(unapplied)} in {config_path} but a reload cannot apply "
+        f"that: the socket is already bound and the client already open; restart to apply"
+    )
+
+
+def write_pid(path: Path, pid: int, bind: str = "", connect_timeout: int | None = None) -> None:
     """Write the pidfile atomically, so no reader ever sees half a number.
 
-    The bind address goes on a second line, because it is the only record of
-    where the relay actually listens once the process that chose it has exited.
+    The bind address goes on a second line and connect_timeout on a third,
+    because the three of them are the settings a reload cannot apply and the
+    running process is the only thing that knows what it started with. Once the
+    process that chose them has exited, this file is the whole record.
+
+    connect_timeout is written only beside a bind, so a third line never floats
+    without a second one for a reader counting lines.
     """
+    lines = [str(pid)]
+    if bind:
+        lines.append(bind)
+        if connect_timeout is not None:
+            lines.append(str(connect_timeout))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.parent / f"{path.name}.{pid}.tmp"
-    tmp_path.write_text(f"{pid}\n{bind}\n" if bind else f"{pid}\n", encoding="utf-8")
+    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.replace(tmp_path, path)
 
 

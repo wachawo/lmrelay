@@ -22,7 +22,7 @@ Four files live in that config's directory:
 |---|---|---|
 | [`lmrelay.toml`](https://github.com/wachawo/lmrelay/blob/main/lmrelay/lmrelay.toml.example) | you | server settings, limits and hand-written upstreams |
 | `state.json` | the CLI | caller tokens, the auth switch, CLI-added providers |
-| `lmrelay.pid` | the relay | the pid of the running process |
+| `lmrelay.pid` | the relay | the pid, the address it bound, and its `connect_timeout` |
 | `lmrelay.log` | the relay | stdout and stderr of a detached relay |
 
 The split exists so that the CLI never has to rewrite a file you are editing: your comments
@@ -934,17 +934,31 @@ That one needs a restart, under whatever manager owns the process.
 | `host`, `port` | `lmrelay restart` | The socket is already bound, and a running server cannot move it. |
 | `connect_timeout` | `lmrelay restart` | The shared httpx client is already open and carries the timeout; closing it to re-time would abort every stream being relayed through it. |
 
-The reload log names whichever of `host`, `port` and `connect_timeout` differs from what the
-running relay started with, gives the old value and the new one, and says a restart applies
-them. They are named individually, so a changed port does not hide an unchanged timeout:
+**`lmrelay reload` says this in your terminal**, and the relay says it again in
+`lmrelay.log`. It names whichever of `host`, `port` and `connect_timeout` differs from what
+the running relay started with, gives the old value and the new one, and says a restart
+applies them. They are named individually, so a changed port does not hide an unchanged
+timeout:
 
-```text
+```console
+$ lmrelay reload
+lmrelay: signalled the running relay to re-read its config (SIGHUP).
 lmrelay: port 11435 -> 8080, connect_timeout 10 -> 30 in /home/u/.lmrelay/lmrelay.toml but a reload cannot apply that: the socket is already bound and the client already open; restart to apply
 ```
 
-Both values, because the running relay is the only thing that knows what it bound with. The
-file has the new number, so a warning naming only the key would send you to the file to read
-the half of the answer the file already has.
+Both values, because the process that bound the socket is the only thing that knows what it
+started with. The file has the new number, so a warning naming only the key would send you
+to the file to read the half of the answer the file already has.
+
+The terminal line is worked out by the CLI rather than reported back by the relay. SIGHUP is
+delivered, not acknowledged, so asking would mean polling for an answer that may not have
+been written yet and deciding what its absence meant. Both halves are already on that side:
+`lmrelay.pid` records what the process started with, and the config on disk is what it is
+being asked to move to. One comparison, one sentence, and the same one in both places.
+
+A pidfile written by a relay that predates this records no `connect_timeout`, so a `reload`
+across an upgrade names the port and the host and stays quiet about the timeout rather than
+inventing a value to compare against. A restart records all three.
 
 The keys above them are applied without comment, except the three that say what they moved
 from and to, so that a reload can be read back afterwards:

@@ -23,7 +23,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 # Local imports
 from lmrelay import __version__
 from lmrelay.config import ConfigError, check_exposure, describe_upstreams, load_config
-from lmrelay.daemon import pid_file, read_pid, recorded_bind, remove_pid, write_pid
+from lmrelay.daemon import (
+    STARTUP_KEYS,
+    pid_file,
+    read_pid,
+    recorded_bind,
+    remove_pid,
+    restart_warning,
+    unapplied_settings,
+    write_pid,
+)
 from lmrelay.errors import LmrelayError
 from lmrelay.logging_setup import NO_REQUEST, new_request_id, setup_logging
 from lmrelay.metrics import (
@@ -186,17 +195,11 @@ def reload_config(app: FastAPI) -> None:
     # knows what it bound with, and a warning that says the port changed sends
     # the operator to the file to read the half of the answer the file has.
     started = app.state.startup_config
-    unapplied = [
-        f"{name} {getattr(started, name)} -> {getattr(config, name)}"
-        for name in ("host", "port", "connect_timeout")
-        if getattr(config, name) != getattr(started, name)
-    ]
+    unapplied = unapplied_settings(
+        {name: getattr(started, name) for name in STARTUP_KEYS}, config
+    )
     if unapplied:
-        logger.warning(
-            f"lmrelay: {', '.join(unapplied)} in {config.config_path} but a reload "
-            f"cannot apply that: the socket is already bound and the client already open; "
-            f"restart to apply"
-        )
+        logger.warning(restart_warning(unapplied, config.config_path))
 
     # Re-checked because a reload is one of the ways to create the condition it
     # warns about: `lmrelay auth false` opens a relay that is already listening.
@@ -276,7 +279,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     # Written by the relay itself rather than by whatever started it, so `run`,
     # `serve` and a service manager all leave the same file for `status` to read.
-    write_pid(pidfile, os.getpid(), recorded_bind(config))
+    write_pid(pidfile, os.getpid(), recorded_bind(config), config.connect_timeout)
 
     app.state.config = config
     # Kept alongside it as the baseline a reload measures host, port and
