@@ -69,12 +69,21 @@ jobs:
       - name: Install
         run: pip install -e '.[test]'
 
+      # The legacy junit family is the one Codecov's test analytics reads.
       - name: Test
-        run: pytest --cov=lmrelay --cov-report=xml
+        run: pytest --cov=lmrelay --cov-report=xml --junitxml=junit.xml -o junit_family=legacy
 
       # Every leg uploads; Codecov merges them into one report, so a line only
       # one interpreter reaches still counts as covered.
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # Not skipped on a red run: a failed test is exactly what test analytics
+      # is for, so the results go up whether or not the step above did.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

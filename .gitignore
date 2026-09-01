@@ -23,6 +23,7 @@ build/
 .pytest_cache/
 .coverage
 coverage.xml
+junit.xml
 htmlcov/
 .mypy_cache/
 .ruff_cache/
