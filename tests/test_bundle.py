@@ -28,14 +28,12 @@ connect_timeout  = 25
 log_level        = "DEBUG"
 
 [limits.per_token]
-rate       = 2
-burst      = 5
-concurrent = 2
+requests = 2
+period   = "120s"
 
 [limits.total]
-rate       = 20
-burst      = 40
-concurrent = 6
+requests = 6
+period   = "30m"
 
 [auth]
 token = "token-from-the-file"
@@ -524,7 +522,7 @@ class TestRefusingABundleItCannotApply:
 
     def test_an_unknown_limit_scope(self, source, bundle_path, target):
         data = export(source, bundle_path)
-        data["limits"]["per_model"] = {"rate": 1}
+        data["limits"]["per_model"] = {"requests": 1}
         with pytest.raises(BundleError, match="per_model"):
             run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
@@ -541,21 +539,25 @@ class TestRefusingABundleItCannotApply:
                          "--config", str(target)])
 
     def test_a_whole_number_key_holding_a_fraction(self, source, bundle_path, target):
-        """concurrent = 2.5 is a JSON number and not a count of requests."""
+        """requests = 2.5 is a JSON number and not a count of requests."""
         data = export(source, bundle_path)
-        data["limits"]["total"]["concurrent"] = 2.5
+        data["limits"]["total"]["requests"] = 2.5
         with pytest.raises(BundleError, match="not a whole number"):
             run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
-    @pytest.mark.parametrize("value", [float("nan"), float("inf")])
-    def test_a_limit_that_is_not_a_finite_number(self, source, bundle_path, target, value):
-        """json.loads reads NaN and Infinity, TOML spells both, and neither is a
-        rate: nan compares false against every threshold, so the limiter would be
-        built and would refuse nobody while everything printed said off."""
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), 30, "1d", "1.5m", ""])
+    def test_a_period_that_is_not_a_duration(self, source, bundle_path, target, value):
+        """The second value validator, beside log_level's, and for the same
+        reason: each of these is the right JSON type or close enough to pass one,
+        and each writes a pair of files the relay then refuses to start from, on
+        a machine whose working config the import has already moved aside.
+
+        `30` matters most: read as seconds it would be a limit nobody wrote, and
+        half an hour to whoever did write it about as often as half a minute."""
         data = export(source, bundle_path)
-        data["limits"]["total"]["rate"] = value
-        with pytest.raises(BundleError, match="not a number"):
+        data["limits"]["total"]["period"] = value
+        with pytest.raises(BundleError):
             run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
@@ -589,7 +591,7 @@ class TestRefusingABundleItCannotApply:
         """0 is off, so a negative is a mistake rather than another spelling of
         it, and config.py refuses one for the same reason."""
         data = export(source, bundle_path)
-        data["limits"]["total"]["concurrent"] = -1
+        data["limits"]["total"]["requests"] = -1
         with pytest.raises(BundleError, match="negative"):
             run_command(["config", "import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
@@ -648,7 +650,7 @@ class TestRefusingABundleItCannotApply:
         {"limitz": {}},
         {"upstreams": {}},
         {"server": {"log_level": "VERBOSE"}},
-        {"limits": {"total": {"rate": float("nan")}}},
+        {"limits": {"total": {"period": "1d"}}},
     ])
     def test_and_none_of_them_writes_anything_at_all(
         self, source, bundle_path, target, change

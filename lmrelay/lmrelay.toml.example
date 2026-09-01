@@ -26,42 +26,47 @@ connect_timeout  = 10            # seconds to reach the upstream; there is
                                  # deliberately no read timeout (see README)
 log_level        = "INFO"
 
-# Limits. Three scopes, the same three keys in each, every one 0 (off) by
-# default: a relay in front of one operator's own Ollama has nobody to limit,
-# and a limit nobody chose is a refusal nobody expects.
+# Limits. Three scopes, one number each, every one 0 (off) by default: a relay
+# in front of one operator's own Ollama has nobody to limit, and a limit nobody
+# chose is a refusal nobody expects.
+#
+#   requests  how many a caller may have in flight at once, 0 off. A streamed
+#             answer holds its slot until its last byte, and there is no read
+#             timeout, so one slow generation can hold one for minutes
+#   period    add one and the same number is also how many they may START in
+#             that long: requests = 10 with period = "30m" is ten every half
+#             hour, of which ten may arrive together. "0s" is no such limit
+#
+# One number rather than three. "Ten at a time" and "ten every half hour" are
+# the same operator saying how much of this machine one caller gets, and the
+# separate burst this replaced was a third number whose only job was to be
+# wrong. A period is a whole number and a unit, one of s, m or h; a bare number
+# is refused, because "30" is half an hour to whoever wrote it about as often
+# as it is half a minute.
 #
 # Editable here, or from the command line, which writes into these same tables
 # and signals a running relay:
 #
-#   lmrelay limits set total --concurrent 6
-#   lmrelay limits set per_token --rate 2 --burst 5
-#   lmrelay status                  what is in force right now
+#   lmrelay limits set total 1              one at a time
+#   lmrelay limits set total 1 60s          one a minute, and one at a time
+#   lmrelay limits set per_address 10 30m   ten every half hour
+#   lmrelay limits set total 0              off
+#   lmrelay status                          what is in force right now
 #
-# It replaces the value on one line and leaves the rest of this file alone,
-# these comments included.
+# It replaces the values on their own lines and leaves the rest of this file
+# alone, these comments included.
 #
 # A request must pass every scope you set, and is charged to all of them or to
 # none of them, so a refusal costs nothing anywhere: being turned away by one
 # scope does not also drain the allowance of the others. They are not
 # alternatives; leave the ones you do not want at 0.
 #
-# If you set exactly one number, set [limits.total] concurrent. That is the one
-# that protects the machine; the other two apportion what it admits.
-#
-#   rate        requests per second, 0 off. A fraction is allowed, so 0.5 is
-#               one request every two seconds rather than a limit a whole
-#               number would have rounded to off
-#   burst       how many may arrive at once before the rate bites. Unset is one
-#               second's worth of rate, floored at 1, so `rate = 20` alone
-#               means twenty a second of which twenty may arrive together,
-#               which is what it reads as. Does nothing while rate is 0
-#   concurrent  how many requests may be in flight at once, 0 off. A streamed
-#               answer holds its slot until its last byte, and there is no read
-#               timeout, so one slow generation can hold one for minutes
+# If you set exactly one number, set [limits.total]. That is the one that
+# protects the machine; the other two apportion what it admits.
 #
 # The counts live in memory in this one process, so a second relay beside this
 # one counts its own callers, and a client reaching both has both allowances.
-# That now includes [limits.total], which is worse, because total is the scope
+# That includes [limits.total], which is worse, because total is the scope
 # protecting the upstream.
 
 # Per credential. Skipped entirely with auth off, since there is then no
@@ -69,18 +74,16 @@ log_level        = "INFO"
 # one allowance. Set this beside total for fairness: total on its own is first
 # come first served, and one client with fifty threads owns all of it.
 [limits.per_token]
-rate       = 0
-burst      = 0
-concurrent = 0
+requests = 0
+period   = "0s"
 
 # Per client address. The only scope that identifies anyone with auth off, and
 # only as trustworthy as whatever sets X-Forwarded-For in front of the relay.
 # An address behind NAT is many callers wearing one number, so this limits the
 # office rather than the offender.
 [limits.per_address]
-rate       = 0
-burst      = 0
-concurrent = 0
+requests = 0
+period   = "0s"
 
 # The relay as a whole, whoever is asking. This is the one that protects the
 # upstream: ten callers each inside their own limit still arrive together, and
@@ -89,9 +92,8 @@ concurrent = 0
 # that point Ollama queues internally and the queued request holds its relay
 # slot the whole time it is receiving nothing.
 [limits.total]
-rate       = 0
-burst      = 0
-concurrent = 0
+requests = 0
+period   = "0s"
 
 # Caller credentials are not configured here. They live in state.json and are
 # managed by the CLI:

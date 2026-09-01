@@ -22,11 +22,26 @@ section is the point of this file: a decision that is not written down gets made
 - [ ] **Limits in three scopes.** Per token, per address, and for the relay as a whole. A
       per-caller cap does not protect the upstream, since callers each inside their own
       limit still arrive together; the global scope is the one that does.
-- [ ] **`lmrelay limits set <scope> [--rate] [--burst] [--concurrent]`.** Writes into
-      `[limits.<scope>]` and signals a running relay. It edits rather than rewrites: only
-      the assignment named changes, and the comments `lmrelay init` ships stay. The edit is
-      parsed and checked to carry the numbers asked for before it reaches the disk, so a
-      spelling a line rewrite cannot reach ends as a refusal with the file untouched.
+- [ ] **One number per scope, and `lmrelay limits set <scope> <requests> [period]`.**
+      `limits set total 1` is one at a time; `limits set total 1 60s` is one a minute and
+      still one at a time; `limits set per_address 10 30m` is ten every half hour.
+
+      `rate`, `burst` and `concurrent` are gone. "Ten at a time" and "ten every half hour"
+      are the same operator saying how much of this machine one caller gets, and three keys
+      for it were three numbers that could disagree with each other. The burst was the worst
+      of them: its only job was to be wrong, unset as a second's worth of the rate and set as
+      a third number to keep in step. The bucket now holds `requests`, which is what "ten a
+      minute" means to the person who wrote it.
+
+      A period is a whole number and a unit. A bare number is refused, because `period = 30`
+      is half an hour to whoever wrote it about as often as it is half a minute. And it is
+      stored as written: `60s` does not come back as `1m`, in the file, in `status`, or in
+      the refusal a caller sees.
+
+      The command edits rather than rewrites: only the two assignments change, and the
+      comments `lmrelay init` ships stay. The edit is parsed and checked to carry what was
+      asked for before it reaches the disk, so a spelling a line rewrite cannot reach ends
+      as a refusal with the file untouched.
 
       No `limits show`, because `status` already prints what is in force, and no writing to
       `state.json`: an override there would be invisible in the file, which is the defect

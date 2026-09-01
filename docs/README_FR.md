@@ -146,7 +146,7 @@ relais en mode détaché.
 | `lmrelay provider add NAME TOKEN` | ajouter un upstream ou en changer la clé |
 | `lmrelay provider list [--show]` | tous les upstreams, ceux du fichier et ceux de l'état |
 | `lmrelay provider delete NAME` | supprimer un fournisseur détenu par l'état |
-| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | écrire les limites d'une portée dans le fichier de configuration |
+| `lmrelay limits set SCOPE N [PERIOD]` | écrire les limites d'une portée dans le fichier de configuration |
 | `lmrelay config export PATH` | écrire tout ce qu'il faut pour reproduire ce relais |
 | `lmrelay config import PATH` | remplacer la configuration et l'état par un paquet |
 

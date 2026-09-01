@@ -86,7 +86,7 @@ def config_limits(**scopes: str) -> str:
     """The standard config with one [limits.<scope>] table per keyword argument.
 
     Appended rather than edited into [server], because a limit is its own table
-    now: `config_limits(total="concurrent = 1")`.
+    now: `config_limits(total="requests = 1")`.
     """
     body = CONFIG_TEMPLATE.format(token=TOKEN)
     return body + "".join(f"\n[limits.{scope}]\n{keys}\n" for scope, keys in scopes.items())
@@ -155,7 +155,7 @@ def relay_with(tmp_path, monkeypatch, recorder, body: str, auth_enabled: bool = 
 def capped(tmp_path, monkeypatch, recorder):
     """A relay that admits one answer at a time from one address."""
     yield from relay_with(
-        tmp_path, monkeypatch, recorder, config_limits(per_address="concurrent = 1")
+        tmp_path, monkeypatch, recorder, config_limits(per_address="requests = 1")
     )
 
 
@@ -164,7 +164,7 @@ def capped_by_token(tmp_path, monkeypatch, recorder):
     """The same cap on the credential rather than the address."""
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(per_token="concurrent = 1"), auth_enabled=True,
+        config_limits(per_token="requests = 1"), auth_enabled=True,
     )
 
 
@@ -173,16 +173,16 @@ def capped_in_total(tmp_path, monkeypatch, recorder):
     """One answer at a time for the whole relay, whoever is asking."""
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(total="concurrent = 1"), auth_enabled=True,
+        config_limits(total="requests = 1"), auth_enabled=True,
     )
 
 
 @pytest.fixture
 def limited(tmp_path, monkeypatch, recorder):
-    """One address allowed 2/s with a burst of 3."""
+    """One address allowed 3 a second, which is also 3 at once."""
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(per_address="rate = 2\nburst = 3"),
+        config_limits(per_address='requests = 3\nperiod = "1s"'),
     )
 
 
@@ -191,7 +191,7 @@ def limited_by_token(tmp_path, monkeypatch, recorder):
     """The same rate on the credential rather than the address."""
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(per_token="rate = 2\nburst = 3"), auth_enabled=True,
+        config_limits(per_token='requests = 3\nperiod = "1s"'), auth_enabled=True,
     )
 
 
@@ -200,7 +200,7 @@ def limited_in_total(tmp_path, monkeypatch, recorder):
     """The same rate for the whole relay, whoever is asking."""
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(total="rate = 2\nburst = 3"), auth_enabled=True,
+        config_limits(total='requests = 3\nperiod = "1s"'), auth_enabled=True,
     )
 
 
@@ -211,9 +211,9 @@ def limited_everywhere(tmp_path, monkeypatch, recorder):
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
         config_limits(
-            per_token="rate = 1\nburst = 1\nconcurrent = 1",
-            per_address="rate = 10\nburst = 10\nconcurrent = 4",
-            total="rate = 20\nburst = 20\nconcurrent = 6",
+            per_token='requests = 1\nperiod = "1s"',
+            per_address='requests = 4\nperiod = "1s"',
+            total='requests = 6\nperiod = "1s"',
         ),
         auth_enabled=True,
     )
@@ -540,9 +540,9 @@ class TestWhenTheUpstreamIsNotThere:
 
 
 class TestHowOftenACallerMayAsk:
-    """`rate` and `burst`, in each of the three scopes."""
+    """`period`, which makes `requests` a how-often as well, in each scope."""
 
-    def test_the_burst_gets_through_and_the_next_one_does_not(self, limited):
+    def test_the_allowance_gets_through_and_the_next_one_does_not(self, limited):
         codes = [limited.get("/api/tags").status_code for _ in range(4)]
         assert codes == [200, 200, 200, 429]
 
@@ -553,7 +553,7 @@ class TestHowOftenACallerMayAsk:
             limited.get("/api/tags")
         error = limited.get("/api/tags").json()["error"]
         assert error == (
-            "lmrelay: rate limit exceeded for your address: 2/s burst 3 ([limits.per_address])"
+            "lmrelay: rate limit exceeded for your address: 3 per 1s ([limits.per_address])"
         )
 
     def test_the_token_scope_says_it_is_your_token(self, limited_by_token):
@@ -571,20 +571,20 @@ class TestHowOftenACallerMayAsk:
         error = limited_in_total.get("/api/tags", headers=bearer(OTHER_TOKEN)).json()["error"]
         assert "the relay's rate limit" in error and "[limits.total]" in error
 
-    def test_it_quotes_the_burst_the_limiter_actually_holds(
+    def test_it_quotes_the_period_the_operator_wrote(
         self, tmp_path, monkeypatch, recorder
     ):
-        """An unset burst is a second's worth of the rate. Read as a flat 1, a
-        relay told "twenty per second" refused the second of two simultaneous
-        requests, and quoting the configured 0 told the caller no request was
-        permitted while one had just been served."""
+        """`60s` and not `1m`. The refusal is the one place a caller ever sees
+        the limit, and quoting it back in a spelling their operator never used
+        sends them asking about a setting nobody can find."""
         for client in relay_with(
-            tmp_path, monkeypatch, recorder, config_limits(per_address="rate = 3")
+            tmp_path, monkeypatch, recorder,
+            config_limits(per_address='requests = 3\nperiod = "60s"'),
         ):
             assert [client.get("/api/tags").status_code for _ in range(3)] == [200] * 3
             refusal = client.get("/api/tags")
             assert refusal.status_code == 429
-            assert "3/s burst 3" in refusal.json()["error"]
+            assert "3 per 60s" in refusal.json()["error"]
 
     def test_the_refusal_carries_a_retry_after_the_caller_can_act_on(self, limited):
         """Unlike a slot refusal, this one is computable: it is the time until
@@ -696,10 +696,10 @@ class TestPassingEveryScopeOrNone:
             assert limited_everywhere.get(
                 "/api/tags", headers=bearer(TOKEN)
             ).status_code == 429
-        # The address scope allows 10 and has been asked seven times; one of
-        # those was served and five were refused by the token scope before this
-        # one was reached, so it must still have nine.
-        assert app.state.limiters["per_address"].buckets["addr:testclient"].tokens == 9.0
+        # The address scope allows 4 and has been asked six times; one of those
+        # was served and five were refused by the token scope before this one
+        # was reached, so it must still have three.
+        assert app.state.limiters["per_address"].buckets["addr:testclient"].tokens == 3.0
 
     def test_and_the_other_caller_is_untouched_by_all_of_it(self, limited_everywhere):
         for _ in range(6):
@@ -841,7 +841,7 @@ class TestHowManyAnswersMayBeOpenAtOnce:
         a slot in a scope that admitted them."""
         from lmrelay.app import app
 
-        body = config_limits(per_token="concurrent = 4", total="concurrent = 1")
+        body = config_limits(per_token="requests = 4", total="requests = 1")
         for client in relay_with(tmp_path, monkeypatch, recorder, body, auth_enabled=True):
             with answer_in_flight(client, recorder, headers=bearer(TOKEN)):
                 assert client.post(
@@ -878,7 +878,7 @@ class TestHowManyAnswersMayBeOpenAtOnce:
         """The default, and what every install that predates these keys gets."""
         from lmrelay.app import app
 
-        assert app.state.config.limits["total"].concurrent == 0
+        assert app.state.config.limits["total"].requests == 0
         with answer_in_flight(authed, recorder) as held:
             second = held.pool.submit(authed.post, "/api/tags")
             wait_until(
@@ -1191,17 +1191,17 @@ class TestReloadingInPlace:
         from lmrelay.app import app, reload_config
 
         assert app.state.limiters["per_address"] is None
-        write_config(tmp_path, config_limits(per_address="rate = 2\nburst = 3"))
+        write_config(tmp_path, config_limits(per_address='requests = 3\nperiod = "1s"'))
         reload_config(app)
         limiter = app.state.limiters["per_address"]
-        assert (limiter.rate, limiter.burst) == (2.0, 3.0)
+        assert (limiter.rate, limiter.burst) == (3.0, 3.0)
 
     def test_and_off_again(self, authed, tmp_path):
         from lmrelay.app import app, reload_config
 
-        write_config(tmp_path, config_limits(per_address="rate = 2\nburst = 3"))
+        write_config(tmp_path, config_limits(per_address='requests = 3\nperiod = "1s"'))
         reload_config(app)
-        write_config(tmp_path, config_limits(per_address="rate = 0"))
+        write_config(tmp_path, config_limits(per_address="requests = 0"))
         reload_config(app)
         assert app.state.limiters["per_address"] is None
 
@@ -1218,7 +1218,7 @@ class TestReloadingInPlace:
         assert limited.get("/api/tags").status_code == 429
 
         write_config(tmp_path, with_setting(
-            config_limits(per_address="rate = 2\nburst = 3"), "log_level", '"INFO"'
+            config_limits(per_address='requests = 3\nperiod = "1s"'), "log_level", '"INFO"'
         ))
         reload_config(app)
         assert app.state.limiters["per_address"] is before
@@ -1230,11 +1230,11 @@ class TestReloadingInPlace:
         from lmrelay.app import app, reload_config
 
         before = app.state.limiters["per_address"]
-        write_config(tmp_path, config_limits(per_address="rate = 5\nburst = 9"))
+        write_config(tmp_path, config_limits(per_address='requests = 9\nperiod = "1s"'))
         reload_config(app)
         limiter = app.state.limiters["per_address"]
         assert limiter is not before
-        assert (limiter.rate, limiter.burst) == (5.0, 9.0)
+        assert (limiter.rate, limiter.burst) == (9.0, 9.0)
 
     def test_and_only_the_scope_whose_number_moved(self, limited, tmp_path, recorder):
         """Three tables, and a caller being limited by one of them has no
@@ -1249,44 +1249,44 @@ class TestReloadingInPlace:
         assert limited.get("/api/tags").status_code == 429
 
         write_config(tmp_path, config_limits(
-            per_address="rate = 2\nburst = 3", total="rate = 50\nburst = 50"
+            per_address='requests = 3\nperiod = "1s"', total='requests = 50\nperiod = "1s"'
         ))
         reload_config(app)
         assert app.state.limiters["per_address"] is before
         assert app.state.limiters["total"] is not None
         assert limited.get("/api/tags").status_code == 429
 
-    def test_the_reload_log_names_the_scope_and_the_effective_burst(
+    def test_the_reload_log_names_the_scope_and_both_halves(
         self, authed, tmp_path, caplog
     ):
-        """Read back afterwards to check what took, so it has to name the number
-        the limiter holds rather than the one the file spells: an unset burst is
-        a second's worth of the rate."""
+        """Read back afterwards to check what took, and one line per scope
+        rather than one per measure: the number is the same number doing two
+        jobs, and two lines about it read as two settings."""
         from lmrelay.app import app, reload_config
 
-        write_config(tmp_path, config_limits(total="rate = 20"))
+        write_config(tmp_path, config_limits(total='requests = 20\nperiod = "1m"'))
         with caplog.at_level(logging.INFO):
             reload_config(app)
-        assert "[limits.total] rate off -> 20/s burst 20" in caplog.text
+        assert "[limits.total] off -> 20 per 1m, 20 at once" in caplog.text
 
     def test_a_changed_cap_is_in_force_without_a_restart(self, authed, tmp_path):
         """Read from the config at every request, like the upstreams and the
         tokens, so a reload is the whole of applying it."""
         from lmrelay.app import app, reload_config
 
-        write_config(tmp_path, config_limits(total="concurrent = 2"))
+        write_config(tmp_path, config_limits(total="requests = 2"))
         reload_config(app)
-        assert app.state.config.limits["total"].concurrent == 2
+        assert app.state.config.limits["total"].requests == 2
 
     def test_and_it_is_not_named_as_needing_one(self, authed, tmp_path, caplog):
         """Listing it beside host and port would send an operator to restart a
         relay that had already done what they asked."""
         from lmrelay.app import app, reload_config
 
-        write_config(tmp_path, config_limits(total="concurrent = 2"))
+        write_config(tmp_path, config_limits(total="requests = 2"))
         with caplog.at_level(logging.WARNING):
             reload_config(app)
-        assert "concurrent" not in caplog.text
+        assert "requests" not in caplog.text
 
     def test_the_counter_survives_the_reload_with_its_live_slots(
         self, capped, recorder, tmp_path
@@ -1299,7 +1299,7 @@ class TestReloadingInPlace:
 
         before = app.state.inflight
         with answer_in_flight(capped, recorder):
-            write_config(tmp_path, config_limits(per_address="concurrent = 4"))
+            write_config(tmp_path, config_limits(per_address="requests = 4"))
             reload_config(app)
             assert app.state.inflight is before
             assert app.state.inflight.counts == {TESTCLIENT_KEY: 1}
@@ -1312,7 +1312,7 @@ class TestReloadingInPlace:
 
         with answer_in_flight(capped, recorder) as held:
             assert capped.post("/api/tags").status_code == 429
-            write_config(tmp_path, config_limits(per_address="concurrent = 2"))
+            write_config(tmp_path, config_limits(per_address="requests = 2"))
             reload_config(app)
             admitted = held.pool.submit(capped.post, "/api/tags")
             wait_until(
@@ -1329,7 +1329,7 @@ class TestReloadingInPlace:
         from lmrelay.app import app, reload_config
 
         with answer_in_flight(capped, recorder):
-            write_config(tmp_path, config_limits(per_address="concurrent = 0"))
+            write_config(tmp_path, config_limits(per_address="requests = 0"))
             reload_config(app)
             assert app.state.inflight.counts == {TESTCLIENT_KEY: 1}
         assert app.state.inflight.counts == {}

@@ -146,7 +146,7 @@ segundo plano.
 | `lmrelay provider add NAME TOKEN` | añade o rota un upstream |
 | `lmrelay provider list [--show]` | todos los upstreams, los del archivo y los del estado |
 | `lmrelay provider delete NAME` | elimina un proveedor que pertenece al estado |
-| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | escribe los límites de un ámbito en el archivo de configuración |
+| `lmrelay limits set SCOPE N [PERIOD]` | escribe los límites de un ámbito en el archivo de configuración |
 | `lmrelay config export PATH` | escribe todo lo necesario para reproducir este relay |
 | `lmrelay config import PATH` | reemplaza la configuración y el estado por un paquete |
 

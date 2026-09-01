@@ -18,7 +18,7 @@ from lmrelay.config import (
     parse_upstream,
 )
 from lmrelay.errors import BundleError
-from lmrelay.ratelimit import LIMIT_KEYS, SCOPES
+from lmrelay.ratelimit import LIMIT_KEYS, NO_PERIOD, PERIOD_UNITS, SCOPES, parse_period
 from lmrelay.state import MASKED_TOKEN, CallerToken, RelayState, utc_now, write_private
 
 BUNDLE_VERSION = 1
@@ -45,9 +45,8 @@ SERVER_TYPES: dict[str, type] = {
     "log_level":        str,
 }
 LIMIT_TYPES: dict[str, type] = {
-    "rate":       float,
-    "burst":      float,
-    "concurrent": int,
+    "requests": int,
+    "period":   str,
 }
 
 # What a refused value is told it should have been, in the words the config's
@@ -80,9 +79,10 @@ CONFIG_HEADER = """\
 """
 
 LIMITS_HEADER = """\
-# Three scopes, the same three keys in each, every one 0 (off). A request must
-# pass every scope you set. If you set one number, set [limits.total]
-# concurrent: that is the one that protects the upstream.
+# Three scopes, one number each, off at 0. 'requests' is how many a caller may
+# have in flight; with a 'period' it is also how many they may start in that
+# long. A request must pass every scope you set. If you set one, set
+# [limits.total]: that is the one that protects the upstream.
 """
 
 
@@ -308,7 +308,7 @@ def parse_server(data: dict, source: str) -> dict:
 
 
 def parse_limits(data: dict, source: str) -> dict:
-    """Validate the [limits.*] half: the three scopes, and the same three keys in each."""
+    """Validate the [limits.*] half: the three scopes, and the same two keys in each."""
     limits = data.get("limits") or {}
     if not isinstance(limits, dict):
         raise BundleError(f"lmrelay: {source} has a limits section that is not an object")
@@ -318,14 +318,24 @@ def parse_limits(data: dict, source: str) -> dict:
             raise BundleError(f"lmrelay: {source} has a limits {scope} that is not an object")
         check_keys(table, LIMIT_KEYS, f"key(s) in limits {scope}", source)
         check_types(table, LIMIT_TYPES, f"limits {scope}", source)
-        for name, value in table.items():
-            # 0 is off, so a negative is a mistake rather than another spelling
-            # of it, and config.py refuses one for the same reason.
-            if value < 0:
-                raise BundleError(
-                    f"lmrelay: {source} has limits {scope} {name} = {value!r}, "
-                    f"and a limit cannot be negative"
-                )
+        # 0 is off, so a negative is a mistake rather than another spelling of
+        # it, and config.py refuses one for the same reason.
+        if table.get("requests", 0) < 0:
+            raise BundleError(
+                f"lmrelay: {source} has limits {scope} requests = {table['requests']!r}, "
+                f"and a limit cannot be negative"
+            )
+        # The second value validator, and it exists for the reason log_level's
+        # does: "1d" is a string, and the pair of files an import writes with it
+        # in them is a relay that refuses to start on every command afterwards,
+        # on a machine whose working config the import has already moved aside.
+        period = table.get("period")
+        if period is not None and parse_period(str(period)) is None:
+            raise BundleError(
+                f"lmrelay: {source} has limits {scope} period = {period!r}, which is not a "
+                f"whole number and a unit, one of {', '.join(PERIOD_UNITS)}: "
+                f'"30s", "5m", "2h", or "{NO_PERIOD}" for no limit on how often'
+            )
     return limits
 
 

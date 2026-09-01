@@ -45,6 +45,7 @@ from lmrelay.ratelimit import (
     build_limiter,
     build_limiters,
     describe_rate,
+    describe_scope,
     scope_keys,
 )
 from lmrelay.upstream import (
@@ -98,12 +99,7 @@ def refusal_message(refusal: Refusal, limits: ScopeLimits) -> str:
     """What the caller is told: which scope refused, and the number it enforced."""
     if refusal.kind == "rate":
         return RATE_REFUSALS[refusal.scope].format(limit=describe_rate(limits))
-    return SLOT_REFUSALS[refusal.scope].format(count=limits.concurrent)
-
-
-def describe_slots(limits: ScopeLimits) -> str:
-    """One scope's cap as a log line names it."""
-    return f"{limits.concurrent} at once" if limits.concurrent > 0 else "off"
+    return SLOT_REFUSALS[refusal.scope].format(count=limits.requests)
 
 
 def log_extra(request: Request) -> dict[str, str]:
@@ -233,26 +229,22 @@ def reload_config(app: FastAPI) -> None:
     # business getting its allowance back because a different number moved.
     for scope in SCOPES:
         before, after = current.limits[scope], config.limits[scope]
-        if (before.rate, before.burst) != (after.rate, after.burst):
-            # Rebuilt only when the numbers move: a new limiter starts every
-            # caller full, so doing this on an unrelated reload would clear the
-            # allowance of whoever was being limited at that moment.
-            app.state.limiters[scope] = build_limiter(after.rate, after.burst)
-            logger.info(
-                f"lmrelay: [limits.{scope}] rate {describe_rate(before)} -> "
-                f"{describe_rate(after)}"
-            )
-        if before.concurrent != after.concurrent:
-            # Nothing is rebuilt here, unlike the limiter above: the counter is
-            # asked for the limit at every acquire, so replacing app.state.config
-            # below is the whole of applying it. A fresh counter would forget the
-            # slots held by every answer still streaming, and each of them would
-            # release one that had never been taken.
-            logger.info(
-                f"lmrelay: [limits.{scope}] concurrent {describe_slots(before)} -> "
-                f"{describe_slots(after)} (from the next request; answers in flight "
-                f"keep the slot they hold)"
-            )
+        if before == after:
+            continue
+        # Rebuilt only when this scope's numbers move: a new limiter starts
+        # every caller full, so doing it on an unrelated reload would clear the
+        # allowance of whoever was being limited at that moment.
+        #
+        # The in-flight counter is not rebuilt at all, here or anywhere: it is
+        # handed the cap at every acquire, so replacing app.state.config below is
+        # the whole of applying a new one. A fresh counter would forget the slots
+        # held by every answer still streaming, and each of those would then
+        # release a slot that had never been taken.
+        app.state.limiters[scope] = build_limiter(after)
+        logger.info(
+            f"lmrelay: [limits.{scope}] {describe_scope(before)} -> {describe_scope(after)} "
+            f"(from the next request; answers in flight keep the slot they hold)"
+        )
 
     app.state.config = config
     logger.info(

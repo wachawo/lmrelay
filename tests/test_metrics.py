@@ -149,7 +149,7 @@ def counted(metrics: Metrics) -> Metrics:
 def limited(tmp_path, monkeypatch, recorder):
     """A relay that admits three from an address and then refuses."""
     yield from relay_with(
-        tmp_path, monkeypatch, recorder, config_limits(per_address="rate = 2\nburst = 3")
+        tmp_path, monkeypatch, recorder, config_limits(per_address='requests = 3\nperiod = "1s"')
     )
 
 

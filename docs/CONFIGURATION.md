@@ -6,8 +6,8 @@ moving a whole configuration between machines, what a Prometheus scrape of `/met
 holds, how to read `lmrelay.log`, the behaviour that is not obvious from the outside, what
 every message the relay prints means, and how to have fail2ban act on refused credentials.
 
-**A setting is a path, and a path has two spellings.** `limits.total.concurrent` is
-`[limits.total] concurrent` in the file and `"limits": {"total": {"concurrent": …}}` in an
+**A setting is a path, and a path has two spellings.** `limits.total.requests` is
+`[limits.total] requests` in the file and `"limits": {"total": {"requests": …}}` in an
 export. Learn the path once and both follow from it.
 
 **There is no third spelling in the environment.** Settings come from `lmrelay.toml` and
@@ -62,29 +62,27 @@ default_upstream = "ollama"
 connect_timeout  = 10
 log_level        = "INFO"
 
-# Three scopes, the same three keys in each, every one 0 (off) by default.
-# A request must pass every scope you set, and is charged to all of them or to
-# none of them. If you set one number, set [limits.total] concurrent.
+# Three scopes, one number each, every one 0 (off) by default. 'requests' is
+# how many at once; with a 'period' it is also how many in that long. A request
+# must pass every scope you set, and is charged to all of them or to none of
+# them. If you set one number, set [limits.total].
 
 # Per credential. Skipped entirely with auth off, since there is no credential.
 [limits.per_token]
-rate       = 2
-burst      = 5
-concurrent = 2
+requests = 2
+period   = "120s"
 
 # Per client address. The only scope that identifies anyone with auth off, and
 # only as trustworthy as whatever sets X-Forwarded-For in front of the relay.
 [limits.per_address]
-rate       = 5
-burst      = 10
-concurrent = 4
+requests = 4
+period   = "60s"
 
 # The relay as a whole, whoever is asking. This is the one that protects the
 # upstream: ten callers each inside their own limit still arrive together.
 [limits.total]
-rate       = 20
-burst      = 40
-concurrent = 6
+requests = 6
+period   = "0s"
 
 # One extra valid caller credential, for a non-interactive install. It does not
 # turn checking on; only 'lmrelay auth true' does.
@@ -157,10 +155,10 @@ hosted block once its variable is exported; an unset `${VAR}` is a startup error
 - A provider added with `lmrelay provider add` wins over an `[upstream.<name>]` of the same
   name. The startup log names any upstream that was overridden, since this file is hand-written
   and its author deserves to hear that a command shadowed it.
-- `[limits.<scope>]` takes exactly three keys, `rate`, `burst` and `concurrent`, in each of
-  three scopes, `per_token`, `per_address` and `total`. Uniform on purpose: a table with a
-  rate in one scope and a count in another is a second thing to learn and the first thing to
-  get wrong. One sentence covers it, and it is in the [Limits](#limits) section below.
+- `[limits.<scope>]` takes exactly two keys, `requests` and `period`, in each of three
+  scopes, `per_token`, `per_address` and `total`. Uniform on purpose: a table with a rate in
+  one scope and a count in another is a second thing to learn and the first thing to get
+  wrong. One sentence covers it, and it is in the [Limits](#limits) section below.
 ## Caller tokens and the auth switch
 
 Auth is off in a fresh state, so on loopback a new install is a transparent proxy in front
@@ -194,74 +192,79 @@ meaning the same token after an unrelated delete.
 
 ## Limits
 
-A setting is a path, and a path has two spellings. `limits.total.concurrent` is
-`[limits.total] concurrent` in the file and `"limits": {"total": {"concurrent": …}}` in an
+A setting is a path, and a path has two spellings. `limits.total.requests` is
+`[limits.total] requests` in the file and `"limits": {"total": {"requests": …}}` in an
 export. Learn the path once.
 
-Three scopes, the same three keys in each, every one `0` (off) by default.
+**Three scopes, one number each, `0` (off) by default.**
 
-| | `rate` | `burst` | `concurrent` |
-|---|---|---|---|
-| `[limits.per_token]` | requests a second for one credential | how much of that allowance may arrive at once | requests in flight for one credential |
-| `[limits.per_address]` | the same, for one client address | the same | the same, for one client address |
-| `[limits.total]` | for the relay as a whole | the same | for the relay as a whole |
+```bash
+lmrelay limits set total 1              # one at a time
+lmrelay limits set total 1 60s          # one a minute, and still one at a time
+lmrelay limits set per_address 10 30m   # ten every half hour
+lmrelay limits set per_token 1 120s
+lmrelay limits set total 0              # off
+```
 
-Symmetric on purpose. A table with a rate in one scope and a count in another is a second
-thing to learn and the first thing to get wrong. Uniform means one sentence covers the
-whole of it: **three scopes, the same three keys, and a request must pass every one you
-set.**
+| | `requests` | `period` |
+|---|---|---|
+| `[limits.per_token]` | in flight at once for one credential, and per period | how long that period is, or `"0s"` |
+| `[limits.per_address]` | the same, for one client address | the same |
+| `[limits.total]` | the same, for the relay as a whole | the same |
 
-`rate` and `burst` are floats, so a limit below one request per second can be written as
-one: `rate = 0.5` is one request every two seconds, where a whole number would have rounded
-it to `0` and turned the limit off. `concurrent` is a whole number, because half a request
-cannot be in flight.
+**`requests` is how many a caller may have in flight at once. Add a `period` and the same
+number is also how many they may start in that long.** `requests = 10` with
+`period = "30m"` is ten every half hour, of which ten may arrive together.
 
-`rate` is a token bucket rather than a counter per fixed window, because a window lets a
-caller spend its whole allowance in the last instant of one window and again in the first
-instant of the next, which is twice the rate across the boundary and exactly the burst a
-limit is meant to prevent.
+One number rather than three. "Ten at a time" and "ten every half hour" are the same
+operator saying how much of this machine one caller gets, and the table that spelled them
+separately, with a burst beside them, was three numbers that could disagree with each other
+and one of them, the burst, whose only job was to be wrong. There is no burst now: the
+bucket holds `requests`, which is what "ten a minute" means to the person who wrote it.
+
+A period is a whole number and a unit, one of `s`, `m` or `h`. A bare number is refused,
+because `period = 30` is half an hour to whoever wrote it about as often as it is half a
+minute, and the unit costs one character.
+
+The rate half is a token bucket rather than a counter per fixed window, because a window
+lets a caller spend its whole allowance in the last instant of one window and again in the
+first instant of the next, which is twice the rate across the boundary and exactly the
+burst a limit is meant to prevent.
 
 ### Setting them from the command line
 
-`lmrelay limits set` writes into `[limits.<scope>]` in the config file and signals a running
-relay, so the change is live without a restart.
-
-```bash
-lmrelay limits set total --concurrent 6
-lmrelay limits set per_token --rate 2 --burst 5
-lmrelay limits set per_address --rate 0.5     # one request every two seconds
-lmrelay limits set total --rate 0             # 0 turns one off
-```
+`lmrelay limits set <scope> <requests> [period]` writes into `[limits.<scope>]` in the
+config file and signals a running relay, so the change is live without a restart.
 
 It reports the scope before and after, in the words `status` prints and the reload log
 uses, so there is nothing to go and check afterwards:
 
 ```
-[limits.total] off -> 6 at once in /home/you/.lmrelay/lmrelay.toml.
+[limits.total] off -> 10 per 30m, 10 at once in /home/you/.lmrelay/lmrelay.toml.
 Signalled the running relay to re-read it (SIGHUP).
 ```
 
-Several keys in one command is one write and one reload. That matters for `rate` and
-`burst`, which are two halves of one decision: setting them in two goes leaves the relay
-running on half of it in between.
+**It sets a scope, not a key.** Running it again without a period clears the period, so the
+same command means the same thing on every machine.
 
-**It edits, it does not rewrite.** Only the assignment named changes; the comments, the
-key order, the alignment and any note you wrote beside a number all stay exactly as they
-were. A key the scope has not got is added to it, and a scope the file has not got is
-appended whole.
+**It edits, it does not rewrite.** Only the two assignments change; the comments, the key
+order, the alignment and any note you wrote beside a number all stay exactly as they were.
+A key the scope has not got is added to it, and a scope the file has not got is appended
+whole. **And the period is written as you typed it**: `60s` does not come back as `1m`, in
+the file or in a refusal a caller sees.
 
 **Nothing is written until the result has been checked.** The edit is made to a string, and
-that string is parsed and confirmed to carry the numbers you asked for before it reaches the
-disk. So a file this cannot edit, `total = { concurrent = 1 }` written as an inline table
+that string is parsed and confirmed to carry the numbers you asked for before it reaches
+the disk. So a file this cannot edit, `total = { requests = 1 }` written as an inline table
 say, ends as a refusal with the file untouched rather than as a config the relay will not
 start from. Edit that one by hand.
 
-Values go through the same readers the file goes through, so `--rate abc` is refused in the
-words a bad `rate` in the TOML is refused in. There is no `limits show`: `lmrelay status`
+Values go through the same readers the file goes through, so a bad number is refused in the
+words the same number in the TOML is refused in. There is no `limits show`: `lmrelay status`
 prints what is in force, which is the same question asked of the relay rather than of the
 file.
 
-### If you set one number, set `[limits.total] concurrent`
+### If you set one number, set `[limits.total]`
 
 That is the one that protects the machine. The other two apportion what it admits.
 
@@ -274,7 +277,7 @@ It evicts a resident model, loads the one this request names, and makes the call
 sending no byte at all, not even response headers, until the model is loaded and the first
 token is produced. Measured here: **0.73s warm against 11.9s cold on a 3B**, and about
 **17s** to swap an 8B in. The [Ollama section](#when-ollama-has-no-room-to-load-a-model)
-below has the full treatment, and the number to size `[limits.total] concurrent` against.
+below has the full treatment, and the number to size `[limits.total] requests` against.
 
 **Without `[limits.per_token]` beside it, `total` is first come first served**, and one
 client with fifty threads owns all of it. That is the whole argument for having more than
@@ -340,13 +343,13 @@ The message names the scope and the key, because `429` on its own leaves an oper
 guessing which of six numbers to raise:
 
 ```json
-{"error": "lmrelay: rate limit exceeded for your token: 2/s burst 5 ([limits.per_token])"}
+{"error": "lmrelay: rate limit exceeded for your token: 2 per 120s ([limits.per_token])"}
 ```
 
 ```text
-lmrelay: rate limit exceeded for your token: 2/s burst 5 ([limits.per_token])
-lmrelay: rate limit exceeded for your address: 5/s burst 10 ([limits.per_address])
-lmrelay: the relay's rate limit is exceeded: 20/s burst 40 ([limits.total])
+lmrelay: rate limit exceeded for your token: 2 per 120s ([limits.per_token])
+lmrelay: rate limit exceeded for your address: 4 per 60s ([limits.per_address])
+lmrelay: the relay's rate limit is exceeded: 6 per 1h ([limits.total])
 lmrelay: your token already has 2 requests in flight ([limits.per_token]); one of yours must finish first
 lmrelay: your address already has 4 requests in flight ([limits.per_address]); one of yours must finish first
 lmrelay: the relay is already carrying 6 requests ([limits.total]); one of them must finish first
@@ -366,24 +369,9 @@ when a model finishes answering, there is no read timeout, and with none the rel
 know when that will be. A guessed number would be a lie, and three scopes cannot guess it
 any better than one could.
 
-The numbers quoted are the ones being **enforced**, not the ones in the file. See the next
-section.
-
-### An unset `burst` is one second's worth of `rate`
-
-A bucket too small to hold one request would refuse every request, so the floor is `1`,
-whether the burst was left unset or written below one.
-
-Unset is not the floor, though. **An unset `burst` is one second's worth of `rate`**, floored
-at 1: `rate = 20` on its own means twenty a second, of which twenty may arrive together,
-which is what it reads as. Reading an unset burst as `1` instead made `rate = 20` refuse the
-second of two simultaneous requests and then round the 50ms wait up to the one second the
-header takes, so an operator who wrote "twenty per second" got one per 50ms, strictly
-spaced.
-
-An explicitly written `burst` is used as written, floored at 1. Either way, the refusal
-message and the reload log quote the number being enforced, because quoting the configured
-one told a caller `burst 0` for a limiter that had just allowed a request through.
+The period is quoted **in the spelling the operator wrote**. `60s` is not answered with
+`1m`: this is the one place a caller ever sees the limit at all, and quoting it back in a
+spelling nobody used sends them asking their operator about a setting that is not there.
 
 ### With auth off, `per_token` is skipped rather than refused
 
@@ -464,7 +452,7 @@ on.
 Nor is "in flight" the same as "receiving something". A request waiting its turn inside
 Ollama, with `OLLAMA_NUM_PARALLEL` already spent, holds its relay slot the whole time it is
 receiving nothing. That is the intent, since it is occupying the upstream either way, but it
-is what makes `[limits.total] concurrent` above
+is what makes `[limits.total]` above
 `OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS` buy nothing: past that point Ollama queues
 internally, and the queued request holds a relay slot while it waits. Set it below that
 product and the relay refuses work Ollama could have done.
@@ -494,21 +482,20 @@ There is no database, no Redis and no shared state. That has consequences worth 
   since dropping that one would be handing back an allowance nobody waited for. So a table
   holds roughly the callers seen in the last five minutes, not every address that ever
   knocked. `total` is one bucket and one count, so it has nothing to sweep.
-- **A reload applies new numbers without disturbing anything in flight.** Changing a `rate` or
-  a `burst` rebuilds that scope's bucket table, which starts every caller full, so it is done
-  only when one of the two numbers actually moved rather than on every unrelated reload.
-  `concurrent` needs no such care: it is read per request, so a live request keeps the slots it
-  holds and the new number applies to the next arrival.
+- **A reload applies new numbers without disturbing anything in flight.** Changing a scope's
+  numbers rebuilds its bucket table, which starts every caller full, so it is done only when
+  that scope actually moved rather than on every unrelated reload. The in-flight counter
+  needs no such care: the cap is read per request, so a live request keeps the slots it holds
+  and the new number applies to the next arrival.
 
 ### Reading back what is in force
 
 `lmrelay status` prints one `limits` line, naming every scope that asks for anything and
-quoting the numbers as they will be enforced rather than as the file spells them, which is
-where an unset `burst` becomes visible:
+both halves of any scope that has a period, since the one number is doing two jobs:
 
 ```text
 auth         on, 2 tokens
-limits       per_address 2/s burst 2, 4 at once; total 6 at once
+limits       per_address 4 per 60s, 4 at once; total 6 at once
 ```
 
 A relay with nothing set says `limits       off` once, rather than three lines saying off
@@ -518,13 +505,18 @@ and by how much. Before this line the only way to read the effective numbers was
 
 ### The keys that used to be here
 
-`[server] rate_limit`, `[server] rate_burst` and `[server] max_concurrent` are gone. They
-were never in a published release, so nothing is being broken, and they are **refused**
-rather than ignored:
+`[server] rate_limit`, `[server] rate_burst` and `[server] max_concurrent` are gone, and so
+are `rate`, `burst` and `concurrent` inside a `[limits.*]` scope. None of them was ever in a
+published release, so nothing is being broken, and each is **refused** rather than ignored:
 
 ```text
-lmrelay: [server] rate_limit was replaced by [limits.per_token] rate, [limits.per_address]
-rate, [limits.total] rate. Pick the scope you meant; see docs/CONFIGURATION.md.
+lmrelay: [server] rate_limit was replaced by [limits.per_token] requests,
+[limits.per_address] requests, [limits.total] requests. Pick the scope you meant; see
+docs/CONFIGURATION.md.
+
+lmrelay: [limits.total] rate, burst were replaced by requests and period. 'requests' is how
+many at once, and with a 'period' it is also how many in that long: requests = 10,
+period = "30m". See docs/CONFIGURATION.md.
 ```
 
 Silently ignoring one would leave an operator believing a limit is on when it is off, which
@@ -535,10 +527,10 @@ For the same reason, a scope or a key inside `[limits]` that lmrelay does not re
 refused and named rather than ignored. A misspelt `[limits.per_tokens]` is indistinguishable
 from a limit that is on, right up to the moment it fails to refuse anybody.
 
-There is also no `lmrelay limits set`. Limits are settings, settings live in the file, and
-the CLI has never edited `lmrelay.toml` because your comments are in it. `lmrelay config
-import` is not a counter-example: it replaces the file wholesale, after backing it up, and
-says so. **The CLI edits state, and replaces config.**
+`lmrelay limits set` writes into that same file rather than into `state.json`, which is why
+it edits one assignment instead of rewriting the file: limits are settings, settings live in
+`lmrelay.toml`, and a limit stored in the state would shadow the `[limits.*]` table without
+appearing in it.
 
 ## When Ollama has no room to load a model
 
@@ -606,7 +598,7 @@ will use: `0` is the sentinel for "decide automatically", which Ollama resolves 
 an untouched install looks like, and a `0` there does **not** mean no model may be loaded.
 
 **What the relay does:** it bounds how many requests are in flight at once, per credential, per
-address, and for the relay as a whole. `[limits.total] concurrent` is the one that applies
+address, and for the relay as a whole. `[limits.total]` is the one that applies
 here, and its ceiling comes off this page: above
 `OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS` it buys nothing, because past that point
 Ollama queues internally and the queued request holds its relay slot the whole time it is
@@ -628,7 +620,7 @@ that both fit alternate for free, at 0.18s a turn.
 time, not the overlap between requests: alternating two models that cannot coexist, strictly
 serially, one at a time, never overlapping, still paid a full cold load on every swap. No
 admission decision can reorder that, which is why the relay documents
-`OLLAMA_MAX_LOADED_MODELS` instead of trying. `[limits.total] concurrent` is not a thrashing
+`OLLAMA_MAX_LOADED_MODELS` instead of trying. `[limits.total]` is not a thrashing
 setting and will not be made into one.
 
 ## Providers
@@ -716,9 +708,9 @@ and `state.json` already establishes the versioning convention this needs.
   "exported_at": "2026-08-31T18:04:11Z",
   "server":    { "host": "127.0.0.1", "port": 11435, "default_upstream": "ollama",
                  "connect_timeout": 10, "log_level": "INFO" },
-  "limits":    { "per_token":   { "rate": 2.0,  "burst": 5.0,  "concurrent": 2 },
-                 "per_address": { "rate": 5.0,  "burst": 10.0, "concurrent": 4 },
-                 "total":       { "rate": 20.0, "burst": 40.0, "concurrent": 6 } },
+  "limits":    { "per_token":   { "requests": 2, "period": "120s" },
+                 "per_address": { "requests": 4, "period": "60s" },
+                 "total":       { "requests": 6, "period": "0s" } },
   "auth":      { "enabled": true,
                  "tokens": [ { "id": 1, "token": "lmr_...", "label": "laptop",
                                "created_at": "2026-08-14T09:12:03Z" } ] },
@@ -732,8 +724,11 @@ and `state.json` already establishes the versioning convention this needs.
 Two version fields, doing two jobs. `bundle_version` is load bearing and is what an import
 checks. `written_by` is for the human reading a bundle six months later.
 
-`rate` and `burst` are written as JSON numbers with a decimal part, because they are floats
-in the relay: `rate = 2` in the file exports as `2.0` and means the same thing.
+`period` travels as a string, in the spelling the file carried, so a bundle read by eye says
+`"30m"` where the config it came from said `"30m"`. An import refuses one that is not a
+whole number and a unit, for the same reason it refuses a `log_level` of `"VERBOSE"`: both
+are the right JSON type, and both write a pair of files the relay then refuses to start
+from, on a machine whose working config the import has already moved aside.
 
 A bundle is a transfer format, not a replacement for your `lmrelay.toml`. **The comments in
 your file are yours and are not carried**, which is the surprise, so the export command says
@@ -884,8 +879,7 @@ That one needs a restart, under whatever manager owns the process.
 | `default_upstream` | `lmrelay reload` | Chosen per request, out of that same config. |
 | Caller tokens, and the auth switch | `lmrelay reload` | Also read per request, so `lmrelay auth true` starts requiring a credential as soon as the relay has re-read state. |
 | `log_level` | `lmrelay reload` | Logging is reconfigured in place, and the new level governs the next line the relay writes. |
-| `[limits.<scope>] rate`, `burst` | `lmrelay reload` | That scope's limiter is rebuilt when either number moves, and left alone when neither does: a fresh limiter starts every caller with a full bucket, which would clear the allowance of whoever was being limited at that moment. |
-| `[limits.<scope>] concurrent` | `lmrelay reload` | Read per request rather than built into anything, so a request already streaming keeps the slots it holds and the new number governs the next arrival. |
+| `[limits.<scope>] requests`, `period` | `lmrelay reload` | That scope's limiter is rebuilt when either moves, and left alone when neither does: a fresh limiter starts every caller with a full bucket, which would clear the allowance of whoever was being limited at that moment. The how-many-at-once half needs no rebuild at all, since the cap is read per request, so an answer already streaming keeps the slots it holds and the new number governs the next arrival. |
 | `host`, `port` | `lmrelay restart` | The socket is already bound, and a running server cannot move it. |
 | `connect_timeout` | `lmrelay restart` | The shared httpx client is already open and carries the timeout; closing it to re-time would abort every stream being relayed through it. |
 
@@ -906,12 +900,12 @@ from and to, so that a reload can be read back afterwards:
 
 ```text
 lmrelay: log_level INFO -> DEBUG
-lmrelay: [limits.total] rate off -> 2/s burst 5
-lmrelay: [limits.per_address] concurrent off -> 4 at once (from the next request; answers in flight keep the slot they hold)
+lmrelay: [limits.total] off -> 2 per 120s, 2 at once (from the next request; answers in flight keep the slot they hold)
+lmrelay: [limits.per_address] 4 at once -> 4 per 60s, 4 at once (from the next request; answers in flight keep the slot they hold)
 ```
 
-The scope is named, and each of its two measures moves on its own line, because a reload that
-changed one number in one scope has to be readable as exactly that.
+One line per scope, because the number is one number doing two jobs and two lines about it
+would read as two settings.
 
 A config the relay cannot use is logged and discarded, and it carries on serving the one it
 already had. That covers `state.json` as much as `lmrelay.toml`, and a value the file spells
@@ -964,7 +958,7 @@ its own and the relay does not get to decide otherwise.
 | `lmrelay_requests_total` | counter | `upstream`, `status` | How much traffic the relay answered, split by the upstream it chose and the status it returned. Includes the relay's own answers: a 400 for a wrong-dialect path, a 429 from a limit and a 500 from a fault in the relay are all requests it answered. A 401 is not here, because no upstream was chosen; it is in `lmrelay_auth_failures_total`. |
 | `lmrelay_request_ttfb_seconds` | histogram | `upstream` | Seconds from the request arriving to the upstream's first byte, so it carries the relay's own admission work as well, which is microseconds. The same measure the access log prints in brackets, unrounded. Written as `_bucket`, `_sum` and `_count`, as the format requires. |
 | `lmrelay_requests_in_flight` | gauge | none | How many answers are being relayed right now. A streamed answer counts until its last byte reaches the caller, which is the same lifetime `[limits.<scope>] concurrent` bounds. |
-| `lmrelay_refusals_total` | counter | `scope`, `kind` | How often a limit turned somebody away. `scope` is `per_token`, `per_address` or `total`; `kind` is `rate` or `concurrent`. These are the six numbers in `[limits.*]`, counted. |
+| `lmrelay_refusals_total` | counter | `scope`, `kind` | How often a limit turned somebody away. `scope` is `per_token`, `per_address` or `total`; `kind` is `rate` or `concurrent`, the two ways one scope's number can turn somebody away. |
 | `lmrelay_auth_failures_total` | counter | none | How often a credential was missing or wrong. Unlabelled, and deliberately not also counted as a request: it never reached the point where an upstream is chosen. |
 | `lmrelay_upstream_errors_total` | counter | `upstream`, `type` | How often the relay failed to reach an upstream at all, named by its httpx exception type, usually `ConnectError` or `ConnectTimeout`. A stream that breaks after the headers arrived is not here: the caller already had the upstream's own status, so that failure belongs to the answer rather than to getting there. |
 
@@ -1251,12 +1245,12 @@ These are JSON bodies of the form `{"error": "..."}` returned to the caller.
 | Message | Where | Means | Do |
 |---|---|---|---|
 | `lmrelay: missing or invalid credential` | relay response, 401 | Auth is on and the request carried no credential, or one that matches no configured token. | Present a configured token. Both `Authorization: Bearer <token>` and `x-api-key: <token>` are accepted carriers. `lmrelay token list` shows which exist; `lmrelay auth false` reopens the relay. |
-| `lmrelay: rate limit exceeded for your token: <rate>/s burst <burst> ([limits.per_token])` | relay response, 429 | This credential has asked more often than `[limits.per_token] rate` allows. The two numbers are the ones being enforced, which is not always what the file says: see the burst rule below. | Wait: `Retry-After` is the whole number of seconds until one request has refilled in that bucket. Raise `rate`, or `burst` if the traffic is bursty rather than fast. |
-| `lmrelay: rate limit exceeded for your address: <rate>/s burst <burst> ([limits.per_address])` | relay response, 429 | This client address has asked more often than `[limits.per_address] rate` allows. Behind NAT, that address is everyone sharing it. | As above, on `[limits.per_address]`. With auth on, `[limits.per_token]` is the scope that follows the caller rather than the network. |
-| `lmrelay: the relay's rate limit is exceeded: <rate>/s burst <burst> ([limits.total])` | relay response, 429 | The relay as a whole has been asked more often than `[limits.total] rate` allows, by everyone together. Your own scopes may be nowhere near their limits. | Wait, or raise `[limits.total] rate`. This is the scope that protects the upstream, so raise it against what the machine can do rather than against what one client wants. |
+| `lmrelay: rate limit exceeded for your token: <n> per <period> ([limits.per_token])` | relay response, 429 | This credential has started more requests in that period than `[limits.per_token]` allows. The period is quoted in the spelling the config carries. | Wait: `Retry-After` is the whole number of seconds until one request has refilled in that bucket. Raise `requests`, or lengthen nothing and shorten `period`, whichever the traffic is. |
+| `lmrelay: rate limit exceeded for your address: <n> per <period> ([limits.per_address])` | relay response, 429 | This client address has asked more often than `[limits.per_address]` allows. Behind NAT, that address is everyone sharing it. | As above, on `[limits.per_address]`. With auth on, `[limits.per_token]` is the scope that follows the caller rather than the network. |
+| `lmrelay: the relay's rate limit is exceeded: <n> per <period> ([limits.total])` | relay response, 429 | The relay as a whole has been asked more often than `[limits.total]` allows, by everyone together. Your own scopes may be nowhere near their limits. | Wait, or raise `[limits.total]`. This is the scope that protects the upstream, so raise it against what the machine can do rather than against what one client wants. |
 | `lmrelay: your token already has <N> requests in flight ([limits.per_token]); one of yours must finish first` | relay response, 429 | This credential already holds `[limits.per_token] concurrent` relayed requests whose bodies have not finished. | Wait for one of your own to finish, or raise it. There is deliberately no `Retry-After` on any of the three: a slot frees when an answer ends, and with no read timeout the relay cannot know when that will be. |
 | `lmrelay: your address already has <N> requests in flight ([limits.per_address]); one of yours must finish first` | relay response, 429 | This client address already holds `[limits.per_address] concurrent`. | As above. Behind NAT the request that has to finish may be a colleague's, which is the NAT caveat arriving where it is least convenient. |
-| `lmrelay: the relay is already carrying <N> requests ([limits.total]); one of them must finish first` | relay response, 429 | The relay as a whole is holding `[limits.total] concurrent` unfinished answers. | Wait, or raise it, up to `OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS` and no further. It says "one of them", not "one of yours", because at this scope the request that has to end may be anybody's. |
+| `lmrelay: the relay is already carrying <N> requests ([limits.total]); one of them must finish first` | relay response, 429 | The relay as a whole is holding `[limits.total]` unfinished answers. | Wait, or raise it, up to `OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS` and no further. It says "one of them", not "one of yours", because at this scope the request that has to end may be anybody's. |
 | `lmrelay: upstream '<name>' speaks the <Dialect> API; '<path>' is an <Other>-dialect path. lmrelay forwards requests unchanged and does not translate between dialects.` | relay response, 400 | The path belongs to a dialect the chosen upstream does not serve. | Change the path prefix to an upstream of that dialect, or point the client at an endpoint the upstream has. |
 | `lmrelay: method not allowed for <METHOD> <path>` | any method outside the relayed set, TRACE being the one a scanner tries | Starlette refused the request before the relay saw it. Phrased here so it carries the prefix and the `error` key every other refusal uses. | Nothing: the method is not one the relay forwards. |
 | `lmrelay: upstream '<name>' at <base_url> is unreachable: ConnectError` | relay response, 502 | The connection to the upstream was refused or timed out. `ConnectTimeout` appears in place of `ConnectError` when `connect_timeout` expired. | For `ollama`, usually Ollama itself is not running: start it. Otherwise check `base_url` and the network. |
@@ -1282,15 +1276,16 @@ Raised by the relay before it binds, and by every CLI command that loads the con
 | `lmrelay: cannot read <path>: <Type>: <detail>` | any command that loads the config | The file could not be opened, or TOML could not parse it. | Fix the syntax the detail names, or the permissions on the path. |
 | `lmrelay: config has no [upstream.*] sections in <config> and no providers in <state>. Run 'lmrelay provider add' or add an [upstream.*] table.` | any command that loads the config | The config parses but defines no upstream at all, and state has none either. | Add an `[upstream.*]` table, or run `lmrelay provider add`. |
 | `lmrelay: default_upstream '<name>' is not defined; known upstreams: <list>` | any command that loads the config | `[server] default_upstream` names an upstream that no source defines. | Set it to one of the names listed, or define the one it names. |
-| `lmrelay: [<table>] <key> must be a whole number, got <value>` | any command that loads the config | A whole-number key holds something `int()` cannot read, usually a quoted number or a typo. `<table>` is `server` for `port` and `connect_timeout`, and `limits.<scope>` for `concurrent`. | Write it unquoted, as a number. Refused rather than coerced, so a reload discards it like any other unusable config instead of raising out of the signal handler. |
+| `lmrelay: [<table>] <key> must be a whole number, got <value>` | any command that loads the config | A whole-number key holds something `int()` cannot read, usually a quoted number or a typo. `<table>` is `server` for `port` and `connect_timeout`, and `limits.<scope>` for `requests`. | Write it unquoted, as a number. Refused rather than coerced, so a reload discards it like any other unusable config instead of raising out of the signal handler. |
 | `lmrelay: [<table>] <key> cannot be less than 0, got <value>` | any command that loads the config | `[limits.<scope>] concurrent` is negative. Worded as a minimum rather than as a sign because it goes through the same reader as `port`, which has no minimum at all. | Use `0` to turn that scope's cap off. |
-| `lmrelay: [limits.<scope>] <rate\|burst> must be a number, got <value>` | any command that loads the config | The key holds something `float()` cannot read, usually a quoted number. | Write it unquoted. A fraction is allowed here, which is why these two are not read as whole numbers. |
-| `lmrelay: [limits.<scope>] <rate\|burst> cannot be negative, got <value>` | any command that loads the config | One of the two rate keys is below zero. | Use `0` to turn it off. A negative is refused rather than read as off, because it is a typo, and admitting it as another spelling of "off" would hide the mistake behind the behaviour it causes. |
-| `lmrelay: [server] <rate_limit\|rate_burst\|max_concurrent> was replaced by [limits.per_token] <key>, [limits.per_address] <key>, [limits.total] <key>. Pick the scope you meant; see docs/CONFIGURATION.md.` | any command that loads the config | The per-caller limit key from before the three scopes existed. | Move the number into whichever scope you meant, usually `[limits.total]`. Refused rather than ignored, because a limit an operator believes is on and is not is the failure this shape exists to avoid. |
+| `lmrelay: [limits.<scope>] requests cannot be less than 0, got <value>` | any command that loads the config | The count is below zero. | Use `0` to turn the scope off. A negative is refused rather than read as off, because it is a typo, and admitting it as another spelling of "off" would hide the mistake behind the behaviour it causes. |
+| `lmrelay: [limits.<scope>] period must be a whole number and a unit, one of s, m, h: "30s", "5m", "2h", or "0s" for no limit on how often. Got <value>` | any command that loads the config | The period is a bare number, carries an unknown unit, or is not a string. | Write the unit. `period = 30` is refused rather than read as seconds, because it is half an hour to whoever wrote it about as often as it is half a minute. `inf` and `nan` stop here too: a bucket built on `nan` compares false against every threshold, so it would refuse nobody while printing as though it were on. |
+| `lmrelay: [server] <rate_limit\|rate_burst\|max_concurrent> was replaced by [limits.per_token] requests, [limits.per_address] requests, [limits.total] requests. Pick the scope you meant; see docs/CONFIGURATION.md.` | any command that loads the config | The per-caller limit key from before the three scopes existed. | Move the number into whichever scope you meant, usually `[limits.total]`. Refused rather than ignored, because a limit an operator believes is on and is not is the failure this shape exists to avoid. |
+| `lmrelay: [limits.<scope>] <rate\|burst\|concurrent> was replaced by requests and period.` | any command that loads the config | The three keys one number replaced. | Write `requests`, and a `period` if the limit is a how-often as well. Named rather than reported as unrecognised, because an operator reading "no such key" would look for a typo in a key that no longer exists. |
 | `lmrelay: [limits] must be a table of scope tables` | any command that loads the config | `[limits]` itself is a scalar or an array. | Write the section as `[limits.<scope>]` tables. |
 | `lmrelay: [limits] has no scope <names>; expected [limits.per_token], [limits.per_address], [limits.total]` | any command that loads the config | A scope name lmrelay does not have, usually a misspelling. | Use one of the three. A misspelt scope is refused rather than ignored, because it is indistinguishable from a limit that is on until it fails to refuse anybody. |
-| `lmrelay: [limits.<scope>] must be a table` | any command that loads the config | The scope is a scalar or an array. | Write it as a TOML table with `rate`, `burst` and `concurrent`. |
-| `lmrelay: [limits.<scope>] has no key <names>; expected rate, burst, concurrent` | any command that loads the config | A key lmrelay does not have inside a scope that it does. | Use the three keys. Every scope takes the same three, so there is nothing else to reach for. |
+| `lmrelay: [limits.<scope>] must be a table` | any command that loads the config | The scope is a scalar or an array. | Write it as a TOML table with `requests` and `period`. |
+| `lmrelay: [limits.<scope>] has no key <names>; expected requests, period` | any command that loads the config | A key lmrelay does not have inside a scope that it does. | Use the two keys. Every scope takes the same two, so there is nothing else to reach for. |
 | `lmrelay: [server] log_level '<value>' is not a logging level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL` | any command that loads the config | The level is not one `logging` knows. | Use one of the five. Refused rather than quietly read as `INFO`, which would leave a reload announcing a level the relay was not running at. |
 | `lmrelay: upstream '<name>' header '<header>' references ${VAR}, which is not set` | any command that loads the config | A header value in `lmrelay.toml` interpolates an environment variable that is absent. | Export the variable, or comment the upstream block out. This is why the shipped example has the hosted blocks commented. |
 | `lmrelay: upstream '<name>' header '<header>' has a malformed ${...} reference: <detail>` | any command that loads the config | A `$` in a header value is not a well-formed `${VAR}`. | Write `$$` for a literal `$`, or store the key with `lmrelay provider add`, which does not expand. |
@@ -1335,9 +1330,10 @@ another version.
 | `lmrelay: <source> has <what> this lmrelay does not know: <names>. At bundle version 1 both ends agree on the keys, so this is a hand edit or a bundle_version that is not the one it was written at.` | `lmrelay config import` | An unknown key at the top level, in `server`, in `auth`, in a token record or in an upstream. | Remove the key, or set `bundle_version` to what the bundle was actually written at. Forward compatibility is what that field is for. |
 | `lmrelay: <source> has a <server\|limits> section that is not an object` | `lmrelay config import` | The settings half or the limits half is the wrong shape. | Repair it, or export again. |
 | `lmrelay: <source> has an <auth\|upstreams> section that is not an object` | `lmrelay config import` | The credential half or the upstream half is the wrong shape. | As above. Two rows rather than one, because the article changes with the word and this table is quoted verbatim. |
-| `lmrelay: <source> has <server\|limits <scope>> <name> = <value>, which is not <a string\|a number\|a whole number>` | `lmrelay config import` | A value would have written an `lmrelay.toml` that parses and then refuses to start. `nan` and `Infinity` are counted here too: JSON reads both, and neither is a limit. | Correct the type. The three wordings are the config file's own for those keys, so `concurrent = 2.5` is refused as not a whole number in both places rather than as two different mistakes. Checked here rather than at the next start, so an import never half applies. |
+| `lmrelay: <source> has <server\|limits <scope>> <name> = <value>, which is not <a string\|a number\|a whole number>` | `lmrelay config import` | A value would have written an `lmrelay.toml` that parses and then refuses to start. `nan` and `Infinity` are counted here too: JSON reads both, and neither is a limit. | Correct the type. The three wordings are the config file's own for those keys, so `requests = 2.5` is refused as not a whole number in both places rather than as two different mistakes. Checked here rather than at the next start, so an import never half applies. |
 | `lmrelay: <source> has server log_level = <value>, which is not a logging level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL` | `lmrelay config import` | `log_level` is a string and still not a level. | Write one of the five. A type check cannot reach this one, and the pair of files written with it in them is a relay that refuses to start on every command afterwards, on a machine whose own config the import has already moved aside. |
-| `lmrelay: <source> has a limits <scope> that is not an object` | `lmrelay config import` | A scope under `limits` is not a table of the three keys. | Write it as `{"rate": 0, "burst": 0, "concurrent": 0}`, or leave the scope out to get those defaults. |
+| `lmrelay: <source> has a limits <scope> that is not an object` | `lmrelay config import` | A scope under `limits` is not a table of the two keys. | Write it as `{"requests": 0, "period": "0s"}`, or leave the scope out to get those defaults. |
+| `lmrelay: <source> has limits <scope> period = <value>, which is not a whole number and a unit` | `lmrelay config import` | The period would have written a config the relay refuses to start from. | Write `"30s"`, `"5m"`, `"2h"` or `"0s"`. Checked here for the reason `log_level` is: both are the right JSON type, and both half apply. |
 | `lmrelay: <source> has limits <scope> <name> = <value>, and a limit cannot be negative` | `lmrelay config import` | A limit below zero. | Use `0`, which is off. A negative is refused here for the same reason the config file refuses one. |
 | `lmrelay: <source> has auth enabled = <value>, which is not true or false` | `lmrelay config import` | The auth switch is not a JSON boolean. | Write `true` or `false`. |
 | `lmrelay: <source> has an auth tokens list that is not a list` | `lmrelay config import` | `auth.tokens` is not an array. | Write it as an array of token objects. |
@@ -1390,10 +1386,10 @@ leaves the file exactly as it was.
 
 | Message | Where | Means | Do |
 |---|---|---|---|
-| `lmrelay: limits set needs at least one of --rate, --burst and --concurrent; pass 0 to turn one off` | `lmrelay limits set` | A scope was named and no number was given. | Pass a number. A command with no flags is not a request to set them to nothing, and it is not read as one. |
+| `lmrelay: [limits.<scope>] in <path> would still read <x> rather than <y>` | `lmrelay limits set` | The edit parsed, but the scope did not end up carrying what was asked for, so something else in the file is defining it. | Edit that scope by hand. The file has not been written. |
 | `lmrelay: no config at <path> to edit; limits live in lmrelay.toml. Run 'lmrelay init' first.` | `lmrelay limits set` | There is no config file to edit. | Run `lmrelay init`. Writing one here would produce a config with limits and no upstream, which the relay refuses to start from. |
-| `lmrelay: editing [limits.<scope>] in <path> would not have left a file this relay can read (<detail>)` | `lmrelay limits set` | The edit was made, parsed, and would not have loaded. Almost always an inline table: `total = { concurrent = 1 }` is legal TOML that a line rewrite cannot reach. | Edit that scope by hand. The file has not been written. |
-| `lmrelay: [limits.<scope>] <key> in <path> would still read <x> rather than <y>` | `lmrelay limits set` | The edit parsed, but the key did not end up carrying the value asked for, so something else in the file is defining it. | Edit that scope by hand. The file has not been written. |
+| `lmrelay: editing [limits.<scope>] in <path> would not have left a file this relay can read (<detail>)` | `lmrelay limits set` | The edit was made, parsed, and would not have loaded. Almost always an inline table: `total = { requests = 1 }` is legal TOML that a line rewrite cannot reach. | Edit that scope by hand. The file has not been written. |
+
 | `lmrelay: provider '<name>' was not added by the CLI; if it is defined in <config>, remove its [upstream.<name>] section by hand` | `lmrelay provider delete` | The name exists, but `lmrelay.toml` owns it and the CLI does not edit that file. | Delete the `[upstream.<name>]` section yourself, then `lmrelay reload`. |
 | `lmrelay: --header expects NAME=VALUE, got '<pair>'` | `lmrelay provider add` | A `--header` argument had no `=`, or an empty name. | Write `--header Name=value`. Only the first `=` splits, so a value may contain more. |
 
@@ -1451,7 +1447,7 @@ Logged and then ignored. Nothing is refused and nothing stops.
 |---|---|---|
 | Every request comes back 401 | Auth is on and the token presented is not one of the configured ones | `lmrelay token list`, then present one of them; `lmrelay auth false` reopens the relay |
 | Requests come back 429 | One of the six limits is set below what this client sends | The message names the scope, the measure and the number being enforced; raise that one, or set it to `0`. The access log line names the same pair, as `(rate, per_token)` |
-| 429 on a relay whose own limits look generous | `[limits.total]` refused it: it is shared, so the traffic that filled it may be somebody else's | Raise `[limits.total]`, up to `OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS` for `concurrent`, or set `[limits.per_token]` so no one caller can fill it |
+| 429 on a relay whose own limits look generous | `[limits.total]` refused it: it is shared, so the traffic that filled it may be somebody else's | Raise `[limits.total] requests`, up to `OLLAMA_NUM_PARALLEL x OLLAMA_MAX_LOADED_MODELS`, or set `[limits.per_token]` so no one caller can fill it |
 | A limit allows about twice what it says | Two relays are running and each counts its own callers | `lmrelay status` on each; every scope is per process, `[limits.total]` included, so put the limit in front of the pair or accept the doubling |
 | A limit written as `rate_limit` is refused at startup | That key was replaced by three scopes | The message names all three; put the number in the scope you meant, usually `[limits.total]` |
 | 502 naming `ollama` | Ollama is not running on 11434 | Start Ollama, then `lmrelay status` to confirm the upstream list |

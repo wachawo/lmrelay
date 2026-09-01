@@ -88,7 +88,7 @@ def rate_limited(tmp_path, monkeypatch, recorder):
     refused at the door: what this fixture is for is the one other WARNING the
     relay writes, which the filter must not confuse with a refused credential.
     """
-    body = CONFIG_TEMPLATE.format(token=TOKEN) + "\n[limits.per_address]\nrate = 1\nburst = 1\n"
+    body = CONFIG_TEMPLATE.format(token=TOKEN) + '\n[limits.per_address]\nrequests = 1\nperiod = "1s"\n'
     monkeypatch.setenv(CONFIG_ENV_VAR, write_config(tmp_path, body))
     write_state(tmp_path, auth_enabled=False)
     yield from build_relay(recorder)

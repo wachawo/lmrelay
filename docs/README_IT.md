@@ -144,7 +144,7 @@ priva di entrambi i gestori, `lmrelay serve` esegue il relay in background.
 | `lmrelay provider add NAME TOKEN` | aggiunge o ruota un upstream |
 | `lmrelay provider list [--show]` | tutti gli upstream, dal file e dallo stato |
 | `lmrelay provider delete NAME` | rimuove un provider di proprietà dello stato |
-| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | scrive i limiti di un ambito nel file di configurazione |
+| `lmrelay limits set SCOPE N [PERIOD]` | scrive i limiti di un ambito nel file di configurazione |
 | `lmrelay config export PATH` | scrive tutto ciò che serve a riprodurre questo relay |
 | `lmrelay config import PATH` | sostituisce configurazione e stato con un pacchetto |
 

@@ -2,12 +2,15 @@
 # -*- coding: utf-8 -*-
 """The limits' arithmetic: the bucket that refills, the counter in flight, and admission."""
 
+import pytest
+
 # Local imports
 from lmrelay.ratelimit import (
     IDLE_EVICTION,
     SCOPES,
     SWEEP_INTERVAL,
     InflightCounter,
+    RateLimiter,
     ScopeLimits,
     admit,
     build_limiter,
@@ -15,7 +18,7 @@ from lmrelay.ratelimit import (
     default_limits,
     describe_rate,
     describe_scope,
-    effective_burst,
+    parse_period,
     release_all,
     scope_keys,
 )
@@ -29,18 +32,18 @@ NOW = 1_000.0
 
 
 def fresh(rate: float, burst: float):
-    """A limiter whose sweep clock starts at NOW rather than at time.monotonic().
+    """A bucket with its sweep clock at NOW rather than at time.monotonic().
 
-    Re-seeded because `build_limiter` reads the real monotonic clock, which on a
-    machine up for a month is millions of seconds ahead of NOW: every sweep would
-    then find `now - swept` negative, return early, and evict nothing, which
-    reads exactly like a sweep that ran and found nothing to do. That is the
-    shape of the bug these tests exist for, so the test must not be able to
-    reproduce it by accident.
+    Built directly rather than through `build_limiter`, for two reasons. The
+    clock: `build_limiter` reads the real monotonic clock, which on a machine up
+    for a month is millions of seconds ahead of NOW, so every sweep would find
+    `now - swept` negative, return early and evict nothing, which reads exactly
+    like a sweep that ran and found nothing to do. That is the shape of the bug
+    these tests exist for. And the arithmetic below is the bucket's own, which
+    holds a rate and a capacity whatever the configuration that produced them
+    happened to say.
     """
-    limiter = build_limiter(rate, burst)
-    limiter.swept = NOW
-    return limiter
+    return RateLimiter(rate=rate, burst=burst, buckets={}, swept=NOW)
 
 
 def take(limiter, key: str, now: float) -> float:
@@ -202,41 +205,71 @@ class TestForgettingIdleCallers:
         assert limiter.buckets == {}
 
 
-class TestWhenTheRateIsOff:
-    """`build_limiter`, and the burst an operator did not write."""
+class TestTheBucketOneNumberBuys:
+    """`build_limiter`: what a scope with a period gets, and what one without does not."""
 
-    def test_no_rate_means_no_limiter_at_all(self):
+    def test_a_scope_that_asks_for_nothing_has_no_limiter(self):
         """0 is the default, and admission skips a None scope entirely, so an
         install that never asked for a limit keeps no table."""
-        assert build_limiter(0, 0) is None
+        assert build_limiter(ScopeLimits()) is None
 
-    def test_a_negative_rate_is_off_too(self):
-        assert build_limiter(-1, 5) is None
+    def test_nor_has_one_that_only_says_how_many_at_once(self):
+        """`requests = 4` with no period is a cap, and the counter enforces
+        caps. A bucket here would be a second limit nobody asked for."""
+        assert build_limiter(ScopeLimits(requests=4)) is None
 
-    def test_an_unset_burst_is_one_seconds_worth_of_the_rate(self):
-        """The trap this rule exists for. Read as a flat 1, `rate = 20` refused
-        the second of two simultaneous requests and then rounded a 50ms wait up
-        to the whole second the header takes, so an operator who wrote "twenty
-        per second" got one per 50ms strictly spaced."""
-        assert effective_burst(20.0, 0) == 20.0
-        limiter = build_limiter(20.0, 0)
-        assert [take(limiter, CALLER, NOW) for _ in range(20)] == [0.0] * 20
+    def test_the_bucket_holds_the_whole_number_of_requests(self):
+        """Ten a minute is ten that may arrive together and then a wait, which
+        is what the operator who wrote it expects. The separate burst this
+        replaced got that wrong in both directions: unset it was a second's
+        worth of the rate, and set it was a third number to keep in step."""
+        limiter = build_limiter(ScopeLimits(requests=10, period="1m"))
+        assert [take(limiter, CALLER, NOW) for _ in range(10)] == [0.0] * 10
         assert take(limiter, CALLER, NOW) > 0.0
 
-    def test_and_never_less_than_one_request(self):
-        """A bucket too small to hold one request would refuse every request, so
-        a rate under one per second still admits one at a time."""
-        assert effective_burst(0.5, 0) == 1.0
-        limiter = build_limiter(0.5, 0)
+    def test_and_refills_across_the_period_it_was_given(self):
+        limiter = build_limiter(ScopeLimits(requests=10, period="1m"))
+        for _ in range(10):
+            take(limiter, CALLER, NOW)
+        assert take(limiter, CALLER, NOW + 6.1) == 0.0
+
+    def test_one_request_a_period_still_admits_one(self):
+        """A bucket too small to hold a request would refuse every request, and
+        `requests = 1` is the tightest limit an operator can ask for."""
+        limiter = build_limiter(ScopeLimits(requests=1, period="2h"))
         assert take(limiter, CALLER, NOW) == 0.0
+        assert take(limiter, CALLER, NOW) > 0.0
 
-    def test_an_explicit_burst_is_floored_at_one_as_well(self):
-        assert effective_burst(20.0, 0.5) == 1.0
 
-    def test_and_a_real_burst_is_left_alone(self):
-        """Set, it wins over the rate in both directions: below it and above."""
-        assert effective_burst(20.0, 5.0) == 5.0
-        assert effective_burst(2.0, 40.0) == 40.0
+class TestSpellingAPeriod:
+    """One spelling on the command line, in the file, and in every line quoting it."""
+
+    @pytest.mark.parametrize("spelling, seconds", [
+        ("0s", 0.0), ("30s", 30.0), ("90s", 90.0), ("1m", 60.0), ("30m", 1800.0),
+        ("1h", 3600.0), ("2h", 7200.0),
+    ])
+    def test_a_whole_number_and_a_unit(self, spelling, seconds):
+        assert parse_period(spelling) == seconds
+
+    @pytest.mark.parametrize(
+        "spelling", ["30", "", "m", "-5m", "1.5m", "5 m", "1d", "5M", "inf", "nan"]
+    )
+    def test_and_nothing_else(self, spelling):
+        """A bare number above all: `period = 30` is half an hour to whoever
+        wrote it about as often as it is half a minute. `inf` and `nan` matter
+        for a different reason: a bucket built on nan compares false against
+        every threshold, so it would refuse nobody while printing as though it
+        were on."""
+        assert parse_period(spelling) is None
+
+    def test_the_spelling_is_kept_rather_than_canonicalised(self):
+        """`limits set total 1 60s` must not answer `1m`. It is the operator's
+        file, and this is the command whose whole point is leaving it alone."""
+        assert describe_scope(ScopeLimits(requests=1, period="60s")) == "1 per 60s, 1 at once"
+
+    def test_but_two_spellings_of_one_duration_limit_the_same(self):
+        assert ScopeLimits(requests=1, period="60s").rate() == \
+            ScopeLimits(requests=1, period="1m").rate()
 
 
 class TestTakingASlot:
@@ -418,7 +451,8 @@ class TestAdmissionIsAllOrNothing:
         own bucket drained, and got "I was refused, and now I am rate limited
         too" with no way to see why."""
         limits = limits_of(
-            per_token=ScopeLimits(rate=10, burst=10), total=ScopeLimits(rate=1, burst=1)
+            per_token=ScopeLimits(requests=10, period="1s"),
+            total=ScopeLimits(requests=1, period="1s"),
         )
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys("tok", "10.0.0.1")
@@ -432,7 +466,7 @@ class TestAdmissionIsAllOrNothing:
 
     def test_a_refusal_by_the_total_cap_gives_back_the_token_slot(self):
         limits = limits_of(
-            per_token=ScopeLimits(concurrent=4), total=ScopeLimits(concurrent=1)
+            per_token=ScopeLimits(requests=4), total=ScopeLimits(requests=1)
         )
         limiters, counter = build_limiters(limits), InflightCounter({})
         first = scope_keys("tok-a", "10.0.0.1")
@@ -447,8 +481,8 @@ class TestAdmissionIsAllOrNothing:
         """The rates are asked first and charged last, so a request the caps
         turn away has not touched a single bucket."""
         limits = limits_of(
-            per_address=ScopeLimits(rate=10, burst=10, concurrent=1),
-            total=ScopeLimits(rate=10, burst=10),
+            per_address=ScopeLimits(requests=1),
+            total=ScopeLimits(requests=10, period="1s"),
         )
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys(None, "10.0.0.1")
@@ -462,9 +496,9 @@ class TestAdmissionIsAllOrNothing:
         """The scopes are ceilings, not alternatives: passing three of them is
         being counted by three of them."""
         limits = limits_of(
-            per_token=ScopeLimits(rate=10, burst=10, concurrent=3),
-            per_address=ScopeLimits(rate=10, burst=10, concurrent=3),
-            total=ScopeLimits(rate=10, burst=10, concurrent=3),
+            per_token=ScopeLimits(requests=10, period="1s"),
+            per_address=ScopeLimits(requests=10, period="1s"),
+            total=ScopeLimits(requests=10, period="1s"),
         )
         limiters, counter = build_limiters(limits), InflightCounter({})
         admit(limiters, limits, counter, scope_keys("tok", "10.0.0.1"), NOW)
@@ -477,9 +511,9 @@ class TestAdmissionIsAllOrNothing:
 
     def test_and_one_release_gives_the_whole_set_back(self):
         limits = limits_of(
-            per_token=ScopeLimits(concurrent=3),
-            per_address=ScopeLimits(concurrent=3),
-            total=ScopeLimits(concurrent=3),
+            per_token=ScopeLimits(requests=3),
+            per_address=ScopeLimits(requests=3),
+            total=ScopeLimits(requests=3),
         )
         limiters, counter = build_limiters(limits), InflightCounter({})
         unused_refusal, release = admit(
@@ -492,7 +526,7 @@ class TestAdmissionIsAllOrNothing:
     def test_the_release_set_is_fixed_when_the_slots_are_taken(self):
         """Recomputed on the way out instead, a scope turned off by a reload
         between the two would leave its slot held for the life of the process."""
-        limits = limits_of(total=ScopeLimits(concurrent=3))
+        limits = limits_of(total=ScopeLimits(requests=3))
         limiters, counter = build_limiters(limits), InflightCounter({})
         unused_refusal, release = admit(
             limiters, limits, counter, scope_keys(None, "10.0.0.1"), NOW
@@ -508,7 +542,9 @@ class TestWhichLimitTheRefusalNames:
     def test_the_token_is_named_when_all_three_would_refuse(self):
         """Being told the relay is full while you personally are the reason is
         the wrong answer even though it is true."""
-        limits = limits_of(**{scope: ScopeLimits(rate=1, burst=1) for scope in SCOPES})
+        limits = limits_of(
+            **{scope: ScopeLimits(requests=1, period="1s") for scope in SCOPES}
+        )
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys("tok", "10.0.0.1")
         admit(limiters, limits, counter, keys, NOW)
@@ -516,9 +552,9 @@ class TestWhichLimitTheRefusalNames:
 
     def test_the_address_is_named_when_there_is_no_credential(self):
         limits = limits_of(
-            per_token=ScopeLimits(rate=1, burst=1),
-            per_address=ScopeLimits(rate=1, burst=1),
-            total=ScopeLimits(rate=1, burst=1),
+            per_token=ScopeLimits(requests=1, period="1s"),
+            per_address=ScopeLimits(requests=1, period="1s"),
+            total=ScopeLimits(requests=1, period="1s"),
         )
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys(None, "10.0.0.1")
@@ -529,7 +565,8 @@ class TestWhichLimitTheRefusalNames:
         """Not from the tightest one configured: a Retry-After computed off a
         different scope's rate is a number the caller cannot act on."""
         limits = limits_of(
-            per_token=ScopeLimits(rate=0.5, burst=1), total=ScopeLimits(rate=10, burst=1)
+            per_token=ScopeLimits(requests=1, period="2s"),
+            total=ScopeLimits(requests=10, period="1s"),
         )
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys("tok", "10.0.0.1")
@@ -540,7 +577,7 @@ class TestWhichLimitTheRefusalNames:
     def test_a_slot_refusal_names_no_wait_at_all(self):
         """A slot frees when a model finishes, and with no read timeout the
         relay cannot know when that is."""
-        limits = limits_of(total=ScopeLimits(concurrent=1))
+        limits = limits_of(total=ScopeLimits(requests=1))
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys(None, "10.0.0.1")
         admit(limiters, limits, counter, keys, NOW)
@@ -551,7 +588,7 @@ class TestWithAuthOff:
     """The token scope is skipped, not refused, and the other two do the work."""
 
     def test_a_configured_token_scope_admits_everybody(self):
-        limits = limits_of(per_token=ScopeLimits(rate=1, burst=1, concurrent=1))
+        limits = limits_of(per_token=ScopeLimits(requests=1, period="1s"))
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys(None, "10.0.0.1")
         assert [admit(limiters, limits, counter, keys, NOW)[0] for _ in range(3)] == [None] * 3
@@ -559,14 +596,14 @@ class TestWithAuthOff:
     def test_and_holds_nothing_against_anyone(self):
         """No bucket created and no slot held, so turning auth on later starts
         every caller full rather than mid-way through an allowance nobody spent."""
-        limits = limits_of(per_token=ScopeLimits(rate=1, burst=1, concurrent=1))
+        limits = limits_of(per_token=ScopeLimits(requests=1, period="1s"))
         limiters, counter = build_limiters(limits), InflightCounter({})
         admit(limiters, limits, counter, scope_keys(None, "10.0.0.1"), NOW)
         assert limiters["per_token"].buckets == {}
         assert counter.counts == {}
 
     def test_while_the_address_scope_still_refuses(self):
-        limits = limits_of(per_address=ScopeLimits(rate=1, burst=1))
+        limits = limits_of(per_address=ScopeLimits(requests=1, period="1s"))
         limiters, counter = build_limiters(limits), InflightCounter({})
         keys = scope_keys(None, "10.0.0.1")
         admit(limiters, limits, counter, keys, NOW)
@@ -594,20 +631,15 @@ class TestSayingWhatALimitIs:
         assert describe_scope(ScopeLimits()) == "off"
         assert describe_rate(ScopeLimits()) == "off"
 
-    def test_a_rate_quotes_the_burst_being_enforced(self):
-        """Not the one in the file: unset, it is a second's worth of the rate,
-        and quoting 0 told a caller no request was permitted while one had just
-        been served."""
-        assert describe_rate(ScopeLimits(rate=20)) == "20/s burst 20"
-        assert describe_rate(ScopeLimits(rate=2, burst=5)) == "2/s burst 5"
+    def test_a_cap_on_its_own_names_only_the_cap(self):
+        assert describe_scope(ScopeLimits(requests=6)) == "6 at once"
+        assert describe_rate(ScopeLimits(requests=6)) == "off"
 
-    def test_a_fraction_is_printed_as_one(self):
-        assert describe_rate(ScopeLimits(rate=0.5)) == "0.5/s burst 1"
+    def test_a_period_names_both_halves(self):
+        """The same number doing two jobs, so both are said. A line that named
+        one would leave the other to be found out by being refused by it."""
+        assert describe_scope(ScopeLimits(requests=10, period="30m")) == "10 per 30m, 10 at once"
+        assert describe_rate(ScopeLimits(requests=10, period="30m")) == "10 per 30m"
 
-    def test_a_scope_names_both_of_its_measures(self):
-        assert describe_scope(ScopeLimits(rate=2, burst=5, concurrent=2)) == \
-            "2/s burst 5, 2 at once"
-
-    def test_and_only_the_ones_that_are_set(self):
-        assert describe_scope(ScopeLimits(concurrent=6)) == "6 at once"
-        assert describe_scope(ScopeLimits(rate=20, burst=40)) == "20/s burst 40"
+    def test_and_a_period_of_zero_is_no_period(self):
+        assert describe_scope(ScopeLimits(requests=6, period="0s")) == "6 at once"

@@ -4,7 +4,6 @@
 
 import ipaddress
 import logging
-import math
 import os
 import re
 import tomllib
@@ -14,7 +13,15 @@ from string import Template
 
 # Local imports
 from lmrelay.errors import ConfigError
-from lmrelay.ratelimit import LIMIT_KEYS, SCOPES, ScopeLimits
+from lmrelay.ratelimit import (
+    LIMIT_KEYS,
+    NO_PERIOD,
+    PERIOD_UNITS,
+    SCOPES,
+    ScopeLimits,
+    describe_scope,
+    parse_period,
+)
 from lmrelay.state import (
     DIALECTS,
     RESERVED_UPSTREAM_NAMES,
@@ -70,10 +77,15 @@ SERVER_KEYS = ("host", "port", "default_upstream", "connect_timeout", "log_level
 # Refused rather than ignored, for one release: a silently ignored key leaves an
 # operator believing a limit is on when it is off.
 RETIRED_SERVER_KEYS = {
-    "rate_limit": "rate",
-    "rate_burst": "burst",
-    "max_concurrent": "concurrent",
+    "rate_limit": "requests",
+    "rate_burst": "requests",
+    "max_concurrent": "requests",
 }
+
+# The three keys the two below replaced, refused by name rather than reported as
+# unrecognised. A scope whose numbers are all in keys nobody reads is a scope
+# that is off, and an operator who wrote them believes it is on.
+RETIRED_LIMIT_KEYS = ("rate", "burst", "concurrent")
 
 # For `lmrelay limits set`, which edits one number in place rather than
 # rewriting the file. A table header of its own, and anything else that opens a
@@ -278,29 +290,28 @@ def read_int(
     return number
 
 
-def read_rate(table: dict, section: str, name: str, default: float) -> float:
-    """Read one rate key, refusing a negative as the operator's error.
+def read_period(table: dict, section: str, name: str) -> str:
+    """Read a period as seconds, refusing anything that is not a count and a unit.
 
-    A float rather than an int so that a limit under one request per second can
-    be written as one: `rate = 0.5` is one request every two seconds, and
-    rounding it to zero would silently turn the limit off.
+    A bare number is refused rather than read as seconds. `period = 30` is half
+    an hour to whoever wrote it about as often as it is half a minute, and the
+    unit costs one character. It is also what keeps one spelling everywhere:
+    the `30m` typed into `lmrelay limits set` is the `30m` written to the file.
+
+    This is where `inf` and `nan` stop too. Both are spellable in TOML and in
+    JSON, and neither is a period: a limiter built on nan compares false against
+    every threshold, so it would be swept for the life of the process and refuse
+    nobody, while printing as though it were on.
     """
-    value = table.get(name, default)
-    try:
-        rate = float(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"lmrelay: [{section}] {name} must be a number, got {value!r}")
-    if not math.isfinite(rate):
-        # TOML spells `nan` and `inf`, and json.loads reads NaN and Infinity, so
-        # both reach here through the file, the bundle and the environment
-        # alike. Neither is a rate: nan compares false against every threshold,
-        # so a limiter would be built, swept for the life of the process, and
-        # refuse nobody, while the same value reads as "off" everywhere it is
-        # printed. Refused in the same words a word would be.
-        raise ConfigError(f"lmrelay: [{section}] {name} must be a number, got {value!r}")
-    if rate < 0:
-        raise ConfigError(f"lmrelay: [{section}] {name} cannot be negative, got {value!r}")
-    return rate
+    value = table.get(name, NO_PERIOD)
+    if not isinstance(value, str) or parse_period(value) is None:
+        raise ConfigError(
+            f"lmrelay: [{section}] {name} must be a whole number and a unit, one of "
+            f"{', '.join(PERIOD_UNITS)}: \"30s\", \"5m\", \"2h\", or \"{NO_PERIOD}\" for no "
+            f"limit on how often. Got {value!r}"
+        )
+    # The spelling, not the seconds: see ScopeLimits.
+    return value
 
 
 def is_log_level(value: str) -> bool:
@@ -342,8 +353,20 @@ def check_retired_keys(server: dict) -> None:
         )
 
 
+def check_retired_limit_keys(table: dict, scope: str) -> None:
+    """Refuse the three keys `requests` and `period` replaced."""
+    found = [name for name in RETIRED_LIMIT_KEYS if name in table]
+    if found:
+        raise ConfigError(
+            f"lmrelay: [limits.{scope}] {', '.join(found)} "
+            f"{'were' if len(found) > 1 else 'was'} replaced by requests and period. "
+            f"'requests' is how many at once, and with a 'period' it is also how many "
+            f"in that long: requests = 10, period = \"30m\". See docs/CONFIGURATION.md."
+        )
+
+
 def parse_limits(data: dict) -> dict[str, ScopeLimits]:
-    """Validate [limits.*]: three scopes, the same three keys, everything off by default.
+    """Validate [limits.*]: three scopes, the same two keys, everything off by default.
 
     A scope or a key nobody recognises is refused rather than ignored, because a
     misspelt table is indistinguishable from a limit that is on until the moment
@@ -364,6 +387,7 @@ def parse_limits(data: dict) -> dict[str, ScopeLimits]:
         table = section.get(scope) or {}
         if not isinstance(table, dict):
             raise ConfigError(f"lmrelay: [limits.{scope}] must be a table")
+        check_retired_limit_keys(table, scope)
         stray = sorted(set(table) - set(LIMIT_KEYS))
         if stray:
             raise ConfigError(
@@ -372,9 +396,8 @@ def parse_limits(data: dict) -> dict[str, ScopeLimits]:
             )
         label = f"limits.{scope}"
         limits[scope] = ScopeLimits(
-            rate=read_rate(table, label, "rate", 0.0),
-            burst=read_rate(table, label, "burst", 0.0),
-            concurrent=read_int(table, label, "concurrent", 0, minimum=0),
+            requests=read_int(table, label, "requests", 0, minimum=0),
+            period=read_period(table, label, "period"),
         )
     return limits
 
@@ -404,11 +427,9 @@ def parse_config_text(text: str, target: Path) -> dict:
         raise ConfigError(f"lmrelay: cannot read {target}: {type(exc).__name__}: {exc}")
 
 
-def render_limit_value(value: float | int) -> str:
-    """One limit as the file should spell it: 2 rather than 2.0, and 0.5 as itself."""
-    if isinstance(value, int):
-        return str(value)
-    return str(int(value)) if value.is_integer() else repr(value)
+def render_limit_value(value: int | str) -> str:
+    """One limit as the file should spell it: a bare count, a quoted period."""
+    return f'"{value}"' if isinstance(value, str) else str(value)
 
 
 def is_key_line(line: str, name: str) -> bool:
@@ -437,12 +458,8 @@ def rewrite_key_line(line: str, rendered: str) -> str:
     return f"{head}= {rendered}{comment}{ending}"
 
 
-def new_limit_section(scope: str, values: dict[str, float | int]) -> str:
-    """A whole `[limits.<scope>]` table, for a file that has not got one.
-
-    Only the keys that were asked for. The others are 0 whether they are written
-    down or not, so writing them would add lines that say nothing.
-    """
+def new_limit_section(scope: str, values: dict[str, str]) -> str:
+    """A whole `[limits.<scope>]` table, for a file that has not got one."""
     written = [
         f"{key:<{LIMIT_KEY_WIDTH}} = {render_limit_value(values[key])}\n"
         for key in LIMIT_KEYS if key in values
@@ -450,7 +467,7 @@ def new_limit_section(scope: str, values: dict[str, float | int]) -> str:
     return f"\n[limits.{scope}]\n" + "".join(written)
 
 
-def edit_limit_section(text: str, scope: str, values: dict[str, float | int]) -> str:
+def edit_limit_section(text: str, scope: str, values: dict[str, int | str]) -> str:
     """Return the config with one scope's numbers changed and nothing else touched.
 
     A line rewrite rather than a re-render of the whole file, because this file
@@ -494,10 +511,15 @@ def edit_limit_section(text: str, scope: str, values: dict[str, float | int]) ->
     return "".join(lines[:start + 1] + body + lines[end:])
 
 
-def set_limit_values(
-    target: Path, scope: str, values: dict[str, float | int]
+def set_scope_limits(
+    target: Path, scope: str, wanted: ScopeLimits
 ) -> tuple[ScopeLimits, ScopeLimits]:
-    """Write one scope's numbers into the config file. Returns what it was and now is.
+    """Write one scope into the config file. Returns what it was and what it now is.
+
+    The whole scope rather than one key of it, because the command that calls
+    this sets a scope: `limits set total 1` is "one at a time and no period",
+    and leaving a period behind from last time would make the same command mean
+    different things on two machines.
 
     Everything is decided before anything is written. The file is read, the edit
     is made to a string, and that string is parsed and checked to carry the
@@ -511,6 +533,7 @@ def set_limit_values(
         text += "\n"
     before = parse_limits(parse_config_text(text, target))[scope]
 
+    values = {"requests": wanted.requests, "period": wanted.period}
     edited = edit_limit_section(text, scope, values)
     try:
         after = parse_limits(parse_config_text(edited, target))[scope]
@@ -519,13 +542,12 @@ def set_limit_values(
             f"lmrelay: editing [limits.{scope}] in {target} would not have left a file this "
             f"relay can read ({exc}). Edit it by hand; nothing has been written."
         )
-    for name, wanted in values.items():
-        if getattr(after, name) != wanted:
-            raise ConfigError(
-                f"lmrelay: [limits.{scope}] {name} in {target} would still read "
-                f"{render_limit_value(getattr(after, name))} rather than "
-                f"{render_limit_value(wanted)}. Edit it by hand; nothing has been written."
-            )
+    if after != wanted:
+        raise ConfigError(
+            f"lmrelay: [limits.{scope}] in {target} would still read "
+            f"{describe_scope(after)} rather than {describe_scope(wanted)}. Edit it by "
+            f"hand; nothing has been written."
+        )
 
     # 0600 like every other writer of this file: it is meant to hold provider keys.
     write_private(target, edited)

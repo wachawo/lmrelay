@@ -147,7 +147,7 @@ können, wem der Prozess gehört. Auf einem POSIX-System ohne beide Manager star
 | `lmrelay provider add NAME TOKEN` | einen Upstream hinzufügen oder rotieren |
 | `lmrelay provider list [--show]` | alle Upstreams, aus der Datei und aus dem State |
 | `lmrelay provider delete NAME` | einen Anbieter entfernen, der dem State gehört |
-| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | die Limits eines Scopes in die Konfigurationsdatei schreiben |
+| `lmrelay limits set SCOPE N [PERIOD]` | die Limits eines Scopes in die Konfigurationsdatei schreiben |
 | `lmrelay config export PATH` | alles schreiben, was dieses Relay anderswo reproduziert |
 | `lmrelay config import PATH` | Konfiguration und State durch ein Bundle ersetzen |
 

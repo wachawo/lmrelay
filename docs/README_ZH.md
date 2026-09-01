@@ -137,7 +137,7 @@ pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器�
 | `lmrelay provider add NAME TOKEN` | 添加或轮换一个上游 |
 | `lmrelay provider list [--show]` | 全部上游，来自配置文件和 state |
 | `lmrelay provider delete NAME` | 删除由 state 拥有的服务商 |
-| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | 把某个作用域的上限写入配置文件 |
+| `lmrelay limits set SCOPE N [PERIOD]` | 把某个作用域的上限写入配置文件 |
 | `lmrelay config export PATH` | 写出在别处重建这个中继所需的一切 |
 | `lmrelay config import PATH` | 用一个打包文件替换配置和 state |
 

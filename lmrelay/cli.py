@@ -36,8 +36,8 @@ from lmrelay.config import (
     find_config_path,
     load_config,
     read_int,
-    read_rate,
-    set_limit_values,
+    read_period,
+    set_scope_limits,
 )
 from lmrelay.daemon import (
     daemon_status,
@@ -49,7 +49,7 @@ from lmrelay.daemon import (
 )
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.logging_setup import setup_logging
-from lmrelay.ratelimit import describe_limits, describe_scope
+from lmrelay.ratelimit import NO_PERIOD, ScopeLimits, describe_limits, describe_scope
 from lmrelay.service import (
     LAUNCHD_PLIST_PATH,
     SYSTEMD_UNIT_NAME,
@@ -476,24 +476,18 @@ def provider_delete(args: argparse.Namespace) -> None:
     reload_running_relay(config_path)
 
 
-def limit_values_from(args: argparse.Namespace) -> dict[str, float | int]:
-    """The keys this invocation sets, validated the way the file validates them.
+def scope_limits_from(args: argparse.Namespace) -> ScopeLimits:
+    """The scope this invocation asks for, validated the way the file validates it.
 
-    Through the config's own readers rather than argparse's `type=`, so
-    `--rate abc` is refused in the words a bad `rate` in the TOML is refused in,
-    and so the floor on `concurrent` is the one place it has always been.
+    Through the config's own readers rather than argparse's `type=`, so a number
+    typed on the command line is refused in the words the same number in the
+    TOML is refused in.
     """
     section = f"limits.{args.scope}"
-    values: dict[str, float | int] = {}
-    if args.rate is not None:
-        values["rate"] = read_rate({"rate": args.rate}, section, "rate", 0.0)
-    if args.burst is not None:
-        values["burst"] = read_rate({"burst": args.burst}, section, "burst", 0.0)
-    if args.concurrent is not None:
-        values["concurrent"] = read_int(
-            {"concurrent": args.concurrent}, section, "concurrent", 0, minimum=0
-        )
-    return values
+    return ScopeLimits(
+        requests=read_int({"requests": args.requests}, section, "requests", 0, minimum=0),
+        period=read_period({"period": args.period or NO_PERIOD}, section, "period"),
+    )
 
 
 def warn_about_a_scope_nothing_keys(scope: str, config_path: Path, limits) -> None:
@@ -516,12 +510,7 @@ def warn_about_a_scope_nothing_keys(scope: str, config_path: Path, limits) -> No
 def limits_set(args: argparse.Namespace) -> None:
     """Write one scope's numbers into the config file."""
     config_path = config_path_from(args)
-    values = limit_values_from(args)
-    if not values:
-        raise LmrelayError(
-            "lmrelay: limits set needs at least one of --rate, --burst and --concurrent; "
-            "pass 0 to turn one off"
-        )
+    wanted = scope_limits_from(args)
     if not config_path.exists():
         # Writing one would produce a config with limits and no upstream, which
         # is a file the relay refuses to start from.
@@ -530,7 +519,7 @@ def limits_set(args: argparse.Namespace) -> None:
             f"Run 'lmrelay init' first."
         )
 
-    before, after = set_limit_values(config_path, args.scope, values)
+    before, after = set_scope_limits(config_path, args.scope, wanted)
     # Before and after in the words `status` and the reload log use, because a
     # command that only said "written" leaves the operator running `status` to
     # find out whether it wrote what they meant.
@@ -775,14 +764,14 @@ def add_limits_commands(subparsers: argparse._SubParsersAction) -> None:
     set_parser = limits_subparsers.add_parser(
         "set", help="write one scope's numbers into the config file"
     )
-    set_parser.add_argument("scope", choices=SCOPES, help="whose requests the numbers count")
+    set_parser.add_argument("scope", choices=SCOPES, help="whose requests the number counts")
     # Left as strings, and read by the config's own readers in the handler: a
     # number argparse refused would be refused in argparse's words rather than
     # in the ones the same number in the file is refused in.
-    set_parser.add_argument("--rate", default=None, help="requests per second, 0 off")
-    set_parser.add_argument("--burst", default=None, help="how many may arrive at once")
+    set_parser.add_argument("requests", help="how many at once, and per period; 0 turns it off")
     set_parser.add_argument(
-        "--concurrent", default=None, help="how many may be in flight at once, 0 off"
+        "period", nargs="?", default=None,
+        help="30s, 5m, 2h. Without it, only the how-many-at-once cap applies",
     )
     add_config_option(set_parser)
     set_parser.set_defaults(handler=limits_set)

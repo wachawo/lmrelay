@@ -10,7 +10,7 @@ import pytest
 from lmrelay import service
 from lmrelay.cli import build_parser
 from lmrelay.config import CONFIG_ENV_VAR, load_config
-from lmrelay.errors import ConfigError, LmrelayError
+from lmrelay.errors import ConfigError
 from lmrelay.state import STATE_ENV_VAR
 from tests.conftest import write_state
 
@@ -26,15 +26,13 @@ port = 11435
 
 # Per credential. Skipped entirely with auth off.
 [limits.per_token]
-rate       = 0
-burst      = 0
-concurrent = 0
+requests = 0
+period   = "0s"
 
 # The relay as a whole, whoever is asking.
 [limits.total]
-rate       = 0
-burst      = 0
-concurrent = 0
+requests = 0
+period   = "0s"
 
 [upstream.ollama]
 base_url = "http://127.0.0.1:11434"
@@ -65,9 +63,9 @@ def run_command(argv: list[str]) -> None:
     args.handler(args)
 
 
-def set_limit(config_path, scope: str, *flags: str) -> None:
-    """`lmrelay limits set <scope> ...` against a given config."""
-    run_command(["limits", "set", scope, *flags, "--config", str(config_path)])
+def set_limit(config_path, *words: str) -> None:
+    """`lmrelay limits set <scope> <requests> [period]` against a given config."""
+    run_command(["limits", "set", *words, "--config", str(config_path)])
 
 
 def limits_of(config_path, scope: str):
@@ -82,165 +80,174 @@ def changed_lines(before: str, after: str) -> list[tuple[str, str]]:
     return [pair for pair in zip(old, new, strict=True) if pair[0] != pair[1]]
 
 
-class TestWritingANumber:
-    """The number lands in the file, and the loader reads back what was asked for."""
+class TestOneNumberAndOptionallyAPeriod:
+    """`limits set total 1` is one at a time; add `60s` and it is also one a minute."""
 
-    def test_a_count(self, config_path):
-        set_limit(config_path, "total", "--concurrent", "6")
-        assert limits_of(config_path, "total").concurrent == 6
-
-    def test_a_rate_and_its_burst_together(self, config_path):
-        """One command, one write, one reload: rate and burst are two halves of
-        the same decision and setting them in two goes leaves the relay running
-        on half of it in between."""
-        set_limit(config_path, "per_token", "--rate", "2", "--burst", "5")
-        limits = limits_of(config_path, "per_token")
-        assert (limits.rate, limits.burst) == (2.0, 5.0)
-
-    def test_a_fraction_stays_a_fraction(self, config_path):
-        """`rate = 0.5` is one request every two seconds, and rounding it to
-        zero would silently turn the limit off."""
-        set_limit(config_path, "total", "--rate", "0.5")
-        assert limits_of(config_path, "total").rate == 0.5
-        assert "0.5" in config_path.read_text(encoding="utf-8")
-
-    def test_a_whole_number_is_written_without_a_decimal_point(self, config_path):
-        """It is read as a float and written back as what the operator typed;
-        `rate = 2.0` in a file whose other numbers are bare reads as a different
-        kind of setting."""
-        set_limit(config_path, "total", "--rate", "2")
-        assert "rate       = 2\n" in config_path.read_text(encoding="utf-8")
-
-    def test_zero_turns_one_off(self, config_path):
-        set_limit(config_path, "total", "--concurrent", "6")
-        set_limit(config_path, "total", "--concurrent", "0")
-        assert limits_of(config_path, "total").concurrent == 0
-
-    def test_and_leaves_the_scope_alone_where_it_was_not_asked(self, config_path):
-        set_limit(config_path, "total", "--rate", "3", "--burst", "9", "--concurrent", "4")
-        set_limit(config_path, "total", "--concurrent", "1")
+    def test_a_count_on_its_own_is_a_cap(self, config_path):
+        set_limit(config_path, "total", "6")
         limits = limits_of(config_path, "total")
-        assert (limits.rate, limits.burst, limits.concurrent) == (3.0, 9.0, 1)
+        assert (limits.requests, limits.rate()) == (6, 0.0)
+
+    def test_a_count_and_a_period_is_both(self, config_path):
+        """The same number doing two jobs: one a minute, and never two at once."""
+        set_limit(config_path, "total", "1", "60s")
+        limits = limits_of(config_path, "total")
+        assert (limits.requests, limits.period) == (1, "60s")
+        assert limits.rate() == pytest.approx(1 / 60)
+
+    def test_ten_every_half_hour(self, config_path):
+        set_limit(config_path, "per_token", "10", "30m")
+        limits = limits_of(config_path, "per_token")
+        assert (limits.requests, limits.period) == (10, "30m")
+        assert limits.rate() == pytest.approx(10 / 1800)
+
+    def test_zero_turns_the_scope_off(self, config_path):
+        set_limit(config_path, "total", "6")
+        set_limit(config_path, "total", "0")
+        assert limits_of(config_path, "total").configured() is False
+
+    def test_setting_it_again_without_a_period_clears_the_period(self, config_path):
+        """The command sets a scope, not a key. A period left behind from last
+        time would make the same command mean different things on two
+        machines."""
+        set_limit(config_path, "total", "1", "60s")
+        set_limit(config_path, "total", "4")
+        limits = limits_of(config_path, "total")
+        assert (limits.requests, limits.rate()) == (4, 0.0)
 
     def test_one_scope_does_not_touch_another(self, config_path):
-        set_limit(config_path, "total", "--concurrent", "6")
-        set_limit(config_path, "per_token", "--concurrent", "2")
-        assert limits_of(config_path, "total").concurrent == 6
-        assert limits_of(config_path, "per_token").concurrent == 2
+        set_limit(config_path, "total", "6")
+        set_limit(config_path, "per_token", "2", "120s")
+        assert limits_of(config_path, "total").requests == 6
+        assert limits_of(config_path, "per_token").period == "120s"
+
+    def test_the_period_is_written_as_it_was_typed(self, config_path):
+        """`60s` must not come back as `1m`. It is the operator's file, and this
+        is the command whose whole point is leaving it alone."""
+        set_limit(config_path, "total", "1", "60s")
+        assert 'period   = "60s"' in config_path.read_text(encoding="utf-8")
+        assert limits_of(config_path, "total").period == "60s"
 
 
 class TestTheFileIsStillTheOperators:
-    """This is the one command that writes lmrelay.toml, and it writes one line."""
+    """This is the one command that writes lmrelay.toml, and it writes two lines."""
 
     def test_only_the_line_it_was_asked_about_moves(self, config_path):
         """`lmrelay init` ships this file with sixty lines of comment explaining
         the numbers. A command that dropped them to change one is a command
         nobody runs twice."""
         before = config_path.read_text(encoding="utf-8")
-        set_limit(config_path, "total", "--concurrent", "6")
+        set_limit(config_path, "total", "6")
         after = config_path.read_text(encoding="utf-8")
-        assert changed_lines(before, after) == [("concurrent = 0", "concurrent = 6")]
+        # The period was already "0s" and stays "0s", so its line is rewritten
+        # to exactly what it said and does not appear here.
+        assert changed_lines(before, after) == [("requests = 0", "requests = 6")]
 
-    def test_two_keys_move_two_lines_and_no_more(self, config_path):
+    def test_a_period_moves_its_own_line_and_no_other(self, config_path):
         before = config_path.read_text(encoding="utf-8")
-        set_limit(config_path, "per_token", "--rate", "2", "--burst", "5")
+        set_limit(config_path, "total", "10", "30m")
         after = config_path.read_text(encoding="utf-8")
         assert changed_lines(before, after) == [
-            ("rate       = 0", "rate       = 2"),
-            ("burst      = 0", "burst      = 5"),
+            ("requests = 0", "requests = 10"),
+            ('period   = "0s"', 'period   = "30m"'),
         ]
 
     def test_a_note_beside_the_number_survives_it(self, config_path):
         """A number changed by a command is exactly the number somebody wrote a
         reason beside."""
         body = config_path.read_text(encoding="utf-8").replace(
-            "concurrent = 0\n\n[upstream", "concurrent = 0   # sized for the 3090\n\n[upstream"
+            "requests = 0\nperiod   = \"0s\"\n\n[upstream",
+            "requests = 0   # sized for the 3090\nperiod   = \"0s\"\n\n[upstream",
         )
         config_path.write_text(body, encoding="utf-8")
-        set_limit(config_path, "total", "--concurrent", "6")
-        assert "concurrent = 6   # sized for the 3090" in config_path.read_text(encoding="utf-8")
+        set_limit(config_path, "total", "6")
+        assert "requests = 6   # sized for the 3090" in config_path.read_text(encoding="utf-8")
 
     def test_the_file_keeps_its_private_mode(self, config_path):
         """It is meant to hold provider keys, and every other writer of it
         leaves it 0600."""
         config_path.chmod(0o600)
-        set_limit(config_path, "total", "--concurrent", "6")
+        set_limit(config_path, "total", "6")
         assert config_path.stat().st_mode & 0o777 == 0o600
 
     def test_a_key_the_scope_has_not_got_is_added_to_it(self, tmp_path):
         target = tmp_path / "lmrelay.toml"
         target.write_text(
-            "[limits.total]\nrate       = 5\n\n"
+            "[limits.total]\nrequests = 5\n\n"
             '[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"\n',
             encoding="utf-8",
         )
-        set_limit(target, "total", "--concurrent", "2")
+        set_limit(target, "total", "5", "1h")
         body = target.read_text(encoding="utf-8")
         # Written into the scope it belongs to, aligned like its neighbour, and
         # before the blank line that separates the tables.
-        assert "rate       = 5\nconcurrent = 2\n\n[upstream.ollama]" in body
+        assert 'requests = 5\nperiod   = "1h"\n\n[upstream.ollama]' in body
 
     def test_a_scope_the_file_has_not_got_is_appended_whole(self, tmp_path):
         target = tmp_path / "lmrelay.toml"
         target.write_text(
-            "# a note\n[upstream.ollama]\nbase_url = \"http://127.0.0.1:11434\"\n", encoding="utf-8"
+            '# a note\n[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"\n', encoding="utf-8"
         )
-        set_limit(target, "per_address", "--concurrent", "3")
+        set_limit(target, "per_address", "3")
         body = target.read_text(encoding="utf-8")
         assert body.startswith("# a note\n")
-        assert body.endswith("\n[limits.per_address]\nconcurrent = 3\n")
-        assert limits_of(target, "per_address").concurrent == 3
+        assert body.endswith('\n[limits.per_address]\nrequests = 3\nperiod   = "0s"\n')
+        assert limits_of(target, "per_address").requests == 3
 
     def test_a_file_with_no_trailing_newline_still_parses_afterwards(self, tmp_path):
         target = tmp_path / "lmrelay.toml"
         target.write_text(
             '[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"', encoding="utf-8"
         )
-        set_limit(target, "total", "--concurrent", "3")
-        assert limits_of(target, "total").concurrent == 3
+        set_limit(target, "total", "3")
+        assert limits_of(target, "total").requests == 3
 
 
 class TestWhatItRefuses:
     """Every refusal leaves the file exactly as it was."""
 
-    def test_no_key_at_all(self, config_path):
-        with pytest.raises(LmrelayError) as raised:
+    def test_a_scope_with_no_number(self, config_path):
+        """`limits set total` is an unfinished command, not a command."""
+        with pytest.raises(SystemExit):
             set_limit(config_path, "total")
-        message = str(raised.value)
-        assert "--rate" in message and "--concurrent" in message
-        # Said out loud, because "set it to nothing" is a reasonable reading of
-        # a command with no flags and it is not what this does.
-        assert "0 to turn one off" in message
 
-    @pytest.mark.parametrize("flags", [
-        ["--rate", "abc"],
-        ["--rate", "-2"],
-        ["--rate", "nan"],
-        ["--burst", "abc"],
-        ["--concurrent", "1.5"],
-        ["--concurrent", "-1"],
+    def test_a_scope_that_does_not_exist(self, config_path):
+        with pytest.raises(SystemExit):
+            set_limit(config_path, "per_user", "1")
+
+    @pytest.mark.parametrize("words", [
+        ["total", "abc"],
+        ["total", "-1"],
+        ["total", "1.5"],
+        ["total", "1", "30"],
+        ["total", "1", "1d"],
+        ["total", "1", "1.5m"],
+        ["total", "1", "nan"],
     ])
-    def test_a_value_the_file_would_refuse(self, config_path, flags):
+    def test_a_value_the_file_would_refuse(self, config_path, words):
         """Read by the config's own readers, so a number is refused in the same
         words whether it was typed into the file or onto the command line."""
         before = config_path.read_text(encoding="utf-8")
         with pytest.raises(ConfigError) as raised:
-            set_limit(config_path, "total", *flags)
+            set_limit(config_path, *words)
         assert "[limits.total]" in str(raised.value)
         assert config_path.read_text(encoding="utf-8") == before
 
-    def test_a_scope_that_does_not_exist(self, config_path):
-        with pytest.raises(SystemExit):
-            set_limit(config_path, "per_user", "--rate", "1")
+    def test_and_a_period_refusal_names_the_units(self, config_path):
+        with pytest.raises(ConfigError) as raised:
+            set_limit(config_path, "total", "1", "30")
+        message = str(raised.value)
+        assert "whole number and a unit" in message
+        assert '"30s"' in message and '"5m"' in message and '"2h"' in message
 
     def test_a_config_that_was_already_broken(self, tmp_path):
         """Its own error, not one about the edit: nothing was wrong with the
         command, and pointing at the command would send the operator to fix the
         wrong thing."""
         target = tmp_path / "lmrelay.toml"
-        target.write_text('[limits.total]\nconcurrent = "six"\n', encoding="utf-8")
+        target.write_text('[limits.total]\nrequests = "six"\n', encoding="utf-8")
         with pytest.raises(ConfigError, match="whole number"):
-            set_limit(target, "total", "--concurrent", "4")
+            set_limit(target, "total", "4")
 
     def test_a_spelling_this_editor_cannot_reach(self, tmp_path):
         """An inline table is legal TOML that a line rewrite cannot edit, so the
@@ -248,12 +255,12 @@ class TestWhatItRefuses:
         disk."""
         target = tmp_path / "lmrelay.toml"
         body = (
-            "[limits]\ntotal = { concurrent = 1 }\n\n"
+            "[limits]\ntotal = { requests = 1 }\n\n"
             '[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"\n'
         )
         target.write_text(body, encoding="utf-8")
         with pytest.raises(ConfigError) as raised:
-            set_limit(target, "total", "--concurrent", "4")
+            set_limit(target, "total", "4")
         assert "nothing has been written" in str(raised.value)
         assert target.read_text(encoding="utf-8") == body
 
@@ -261,7 +268,7 @@ class TestWhatItRefuses:
         """Writing one would produce a config with limits and no upstream, which
         is a file the relay refuses to start from."""
         with pytest.raises(ConfigError) as raised:
-            set_limit(tmp_path / "absent.toml", "total", "--concurrent", "4")
+            set_limit(tmp_path / "absent.toml", "total", "4")
         assert "lmrelay init" in str(raised.value)
 
 
@@ -270,13 +277,18 @@ class TestWhatItSays:
 
     def test_it_reports_the_scope_before_and_after(self, config_path, caplog):
         with caplog.at_level(logging.INFO):
-            set_limit(config_path, "total", "--concurrent", "6")
+            set_limit(config_path, "total", "6")
         # The same words `status` and the reload log use for the same numbers.
         assert "[limits.total] off -> 6 at once" in caplog.text
 
+    def test_and_names_both_halves_when_there_is_a_period(self, config_path, caplog):
+        with caplog.at_level(logging.INFO):
+            set_limit(config_path, "total", "10", "30m")
+        assert "[limits.total] off -> 10 per 30m, 10 at once" in caplog.text
+
     def test_and_names_the_file_it_wrote(self, config_path, caplog):
         with caplog.at_level(logging.INFO):
-            set_limit(config_path, "total", "--concurrent", "6")
+            set_limit(config_path, "total", "6")
         assert str(config_path) in caplog.text
 
     def test_a_per_token_limit_with_auth_off_is_flagged(self, config_path, caplog):
@@ -285,14 +297,14 @@ class TestWhatItSays:
         at the moment they can still make the other choice."""
         write_state(config_path.parent, auth_enabled=False)
         with caplog.at_level(logging.WARNING):
-            set_limit(config_path, "per_token", "--rate", "2")
+            set_limit(config_path, "per_token", "2")
         assert "nothing is keyed by a token" in caplog.text
         assert "lmrelay auth true" in caplog.text
 
     def test_but_not_when_auth_is_on(self, config_path, caplog):
         write_state(config_path.parent, auth_enabled=True, tokens=("lmr_a",))
         with caplog.at_level(logging.WARNING):
-            set_limit(config_path, "per_token", "--rate", "2")
+            set_limit(config_path, "per_token", "2")
         assert "nothing is keyed by a token" not in caplog.text
 
     def test_nor_for_another_scope_with_auth_off(self, config_path, caplog):
@@ -300,19 +312,19 @@ class TestWhatItSays:
         switch says, so the warning would be noise on both."""
         write_state(config_path.parent, auth_enabled=False)
         with caplog.at_level(logging.WARNING):
-            set_limit(config_path, "total", "--rate", "2")
+            set_limit(config_path, "total", "2")
         assert "nothing is keyed by a token" not in caplog.text
 
     def test_turning_the_per_token_scope_off_is_not_flagged(self, config_path, caplog):
         """Nothing is keyed by a token, and nothing is asking to be."""
         write_state(config_path.parent, auth_enabled=False)
         with caplog.at_level(logging.WARNING):
-            set_limit(config_path, "per_token", "--rate", "0")
+            set_limit(config_path, "per_token", "0")
         assert "nothing is keyed by a token" not in caplog.text
 
     def test_a_stopped_relay_is_told_the_change_waits(self, config_path, caplog):
         with caplog.at_level(logging.INFO):
-            set_limit(config_path, "total", "--concurrent", "6")
+            set_limit(config_path, "total", "6")
         assert "No relay is running" in caplog.text
 
 

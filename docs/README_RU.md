@@ -144,7 +144,7 @@ autostart    systemd: enabled, active
 | `lmrelay provider add NAME TOKEN` | добавить апстрим или сменить его токен |
 | `lmrelay provider list [--show]` | все апстримы, из файла и из состояния |
 | `lmrelay provider delete NAME` | удалить провайдера, которым владеет состояние |
-| `lmrelay limits set SCOPE [--rate R] [--burst B] [--concurrent N]` | записать лимиты одной области в конфиг |
+| `lmrelay limits set SCOPE N [PERIOD]` | записать лимиты одной области в конфиг |
 | `lmrelay config export PATH` | записать всё, что нужно, чтобы воспроизвести этот релей |
 | `lmrelay config import PATH` | заменить конфиг и состояние пакетом |
 
