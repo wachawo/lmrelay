@@ -16,13 +16,14 @@ section is the point of this file: a decision that is not written down gets made
 - [x] **0.0.4** `reload` applies `log_level`; the warning about keys that need a restart
       stopped fading after the first reload; a non-numeric `port` became an operator message
       rather than a traceback out of the signal handler; `check_exposure` runs on reload.
+- [x] **0.0.5** Request limits, `/metrics`, `export` and `import`, and the settings
+      layer taken back out of the environment. All of it at once, because none of it
+      had been released separately:
 
-## In progress
-
-- [ ] **Limits in three scopes.** Per token, per address, and for the relay as a whole. A
+  - [x] **Limits in three scopes.** Per token, per address, and for the relay as a whole. A
       per-caller cap does not protect the upstream, since callers each inside their own
       limit still arrive together; the global scope is the one that does.
-- [ ] **One number per scope, and `lmrelay limits set <scope> <requests> [period]`.**
+  - [x] **One number per scope, and `lmrelay limits set <scope> <requests> [period]`.**
       `limits set total 1` is one at a time; `limits set total 1 60s` is one a minute and
       still one at a time; `limits set per_address 10 30m` is ten every half hour.
 
@@ -47,7 +48,7 @@ section is the point of this file: a decision that is not written down gets made
       `state.json`: an override there would be invisible in the file, which is the defect
       the environment layer was removed for.
 
-- [ ] **`lmrelay export` and `lmrelay import`.** One file that reproduces a relay elsewhere,
+  - [x] **`lmrelay export` and `lmrelay import`.** One file that reproduces a relay elsewhere,
       written 0600 because it carries tokens and provider keys.
 
       The bundle is **TOML**, and it is an `lmrelay.toml` with the machine-owned half written
@@ -62,7 +63,7 @@ section is the point of this file: a decision that is not written down gets made
       the terminal, and an export to a terminal warns that the tokens and keys in it are now
       in the scrollback.
 
-- [ ] **`GET /metrics`, in Prometheus text format.** Aggregate only, and built: requests by
+  - [x] **`GET /metrics`, in Prometheus text format.** Aggregate only, and built: requests by
       upstream and status, time to first byte as a histogram per upstream, requests in flight,
       refusals by scope and by measure, authentication failures, upstream errors by exception
       type, and the version on a `build_info` gauge. Written by hand rather than with
@@ -86,20 +87,33 @@ section is the point of this file: a decision that is not written down gets made
       default. Only a request an upstream answered is timed; a refusal is counted and not
       timed, so the relay's own overhead cannot drag the distribution down.
 
-- [ ] **A request id in the log line.** Enough to tie a caller's request to the upstream call
+  - [x] **A request id in the log line.** Enough to tie a caller's request to the upstream call
       it caused when both land in `lmrelay.log`. Eight hex characters in a field of the
       format, filled in by a callable filter on the handler, `-` for a line that belongs to no
       request. No dependency. Not a trace id: it is neither read from an inbound header nor
       sent upstream, and it is not returned to the caller.
 
-- [ ] **Old and new values in the reload warning.** It named which of `host`, `port` and
+  - [x] **Old and new values in the reload warning.** It named which of `host`, `port` and
       `connect_timeout` changed, but not to what, so an operator reading the log had to open
       the TOML to find out. Now `port 11435 -> 8080, connect_timeout 10 -> 30`, which cost one
       f-string.
 
+  - [x] **And that warning said in the terminal, not only in the log.** Editing the port and
+      running `lmrelay reload` printed "signalled" and left the relay on the old port. The
+      warning existed, in `lmrelay.log`, which is not where somebody who has just typed a
+      command is looking.
+
+      Worked out by the CLI rather than reported back by the relay. A status file beside the
+      pidfile was the obvious mechanism and the wrong one: SIGHUP is delivered, not
+      acknowledged, so the CLI would poll for an answer that may not have been written yet
+      and then decide what its absence meant. Both halves are already on that side, so the
+      pidfile grew a third line for `connect_timeout` beside the address on the second, and
+      the comparison and the sentence are one function each, shared with the relay's own
+      warning.
+
 ## Next
 
-Nothing agreed. Everything that was is in the section above, built and not yet released.
+Nothing agreed.
 
 ## Considered and declined
 

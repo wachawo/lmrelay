@@ -986,8 +986,9 @@ whatever the level, an accepted one at `INFO` or below.
 
 `GET /metrics` answers a Prometheus scrape: aggregate counters in the text exposition format,
 served as `text/plain; version=0.0.4; charset=utf-8`. That `0.0.4` is the version of the
-exposition format, which Prometheus parses by, and not lmrelay's own; the two are the same
-number today by coincidence and will diverge.
+exposition format, which Prometheus parses by, and not lmrelay's own. They were the same
+number for one release, by coincidence, and 0.0.5 is where they part: the header still says
+`0.0.4` and `lmrelay_build_info` says `0.0.5`.
 
 Nothing configures it. There is no key in `lmrelay.toml` to turn it on, turn it off or move
 it. It is one route, written by hand rather than with
@@ -1071,7 +1072,7 @@ the relay will measure rather than answering with a nearly empty page:
 ```text
 # HELP lmrelay_build_info The version of the relay these counters came from, as a label on a constant 1.
 # TYPE lmrelay_build_info gauge
-lmrelay_build_info{version="0.0.4"} 1
+lmrelay_build_info{version="0.0.5"} 1
 # HELP lmrelay_requests_total Requests the relay answered, by the upstream chosen and the status returned.
 # TYPE lmrelay_requests_total counter
 # HELP lmrelay_request_ttfb_seconds Seconds from a request arriving to the upstream's first byte, by upstream.
