@@ -12,7 +12,7 @@ import pytest
 from starlette.testclient import TestClient
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR
+from lmrelay.config import CONFIG_ENV_VAR, ConfigError
 from lmrelay.daemon import PID_NAME, read_pid, write_pid
 from lmrelay.state import STATE_NAME
 from tests.conftest import (
@@ -939,8 +939,38 @@ class TestStartup:
         monkeypatch.setenv(CONFIG_ENV_VAR, str(bad))
         from lmrelay.app import app
 
-        with pytest.raises(Exception, match=r"\[upstream"), TestClient(app):
+        with pytest.raises(ConfigError, match=r"\[upstream"), TestClient(app):
             pass
+
+    def test_so_does_a_relay_already_running_on_the_same_config(self, tmp_path, monkeypatch):
+        """Refused before the bind. Left to the bind, the second relay would die
+        of an "address already in use" that names neither the process holding
+        the port nor the command that would have stopped or restarted it."""
+        from lmrelay.app import app
+
+        monkeypatch.setenv(CONFIG_ENV_VAR, str(write_config(tmp_path, CONFIG_TEMPLATE.format(
+            token=TOKEN
+        ))))
+        # This process, so the pid in the file is one that is certainly alive.
+        write_pid(tmp_path / PID_NAME, os.getpid())
+        with pytest.raises(ConfigError, match="already running"), TestClient(app):
+            pass
+
+    def test_a_port_anyone_can_reach_is_warned_about_as_it_starts(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """No state file, so auth is off, on a wildcard bind: the moment the
+        operator who wrote that config is still at the terminal to read it. The
+        reload path says the same thing, and is tested with it; this is the
+        first start, where a relay that stayed quiet would look deliberate."""
+        from lmrelay.app import app
+
+        monkeypatch.setenv(
+            CONFIG_ENV_VAR, str(write_config(tmp_path, config_where("host", '"0.0.0.0"')))
+        )
+        with caplog.at_level(logging.WARNING), TestClient(app):
+            pass
+        assert "caller that can reach this port" in caplog.text
 
     def test_it_records_its_pid_and_clears_it_again(self, tmp_path, monkeypatch):
         from lmrelay.app import app

@@ -85,7 +85,9 @@ def isolated_home(tmp_path, monkeypatch):
 
     A machine that has ever run `lmrelay token gen` would otherwise hand a test
     real tokens and a real auth switch through $LMRELAY_STATE, and anything that
-    resolves `~` at call time, `lmrelay init` above all, would write there.
+    resolves `~` at call time, a `~` in $LMRELAY_STATE for one, would write
+    there. `lmrelay init` is not among them: its home path is fixed when the
+    package is imported, which is why the tests of it patch that constant.
 
     Every LMRELAY_ name goes, not just that one. $LMRELAY_CONFIG points the
     whole suite at another file, and $LMRELAY_BIND and $LMRELAY_SERVICE are read

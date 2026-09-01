@@ -194,6 +194,19 @@ class TestTheExpositionFormat:
         assert "\\n" in body
         parse_exposition(body)
 
+    def test_two_tables_filled_in_opposite_orders_render_the_same_bytes(self):
+        """Nothing in Prometheus needs this; an operator diffing two scrapes by
+        hand does, and parse_exposition sorts labels itself, so it would pass a
+        renderer that had stopped sorting and made every line look changed."""
+        forwards, backwards = Metrics(), Metrics()
+        series = [("ollama", "per_token"), ("openai", "total")]
+        for metrics, order in ((forwards, series), (backwards, reversed(series))):
+            for upstream, scope in order:
+                observe_request(metrics, upstream, 200, 0.2)
+                count_refusal(metrics, scope, "rate")
+                count_upstream_error(metrics, upstream, "ConnectError")
+        assert render(forwards, "0.0.4") == render(backwards, "0.0.4")
+
 
 class TestTheHistogram:
     """The one family the format has real rules about."""

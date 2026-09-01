@@ -86,19 +86,18 @@ class TestSettingItUpMoreThanOnce:
     """setup_logging runs at startup and again on a reload that moves the level."""
 
     def test_one_handler_with_one_filter_after_a_reload(self, logging_restored):
+        """The second call drops the handler the first installed, so the filter
+        goes on with the handler rather than accumulating beside it, and the
+        handler that is left has to take a bare line through its own filter and
+        its own formatter."""
         setup_logging("INFO")
         setup_logging("DEBUG")
         assert len(ours()) == 1
-        assert ours()[0].filters == [supply_request_id]
-
-    def test_and_the_handler_it_leaves_can_format_a_bare_line(self, logging_restored):
-        """The second call drops the handler the first installed, so the filter
-        goes on with the handler rather than accumulating beside it."""
-        setup_logging("INFO")
-        setup_logging("INFO")
+        handler = ours()[0]
+        assert handler.filters == [supply_request_id]
         record = record_of("lmrelay reloaded")
-        assert all(one(record) for one in ours()[0].filters)
-        assert FORMATTER.format(record).endswith("[-] lmrelay reloaded")
+        assert handler.filter(record)
+        assert handler.format(record).endswith("[-] lmrelay reloaded")
 
     def test_but_a_handler_it_did_not_install_is_left_alone(self, logging_restored, caplog):
         """Which is why it replaces its own by name instead of calling

@@ -12,7 +12,7 @@ import time
 import pytest
 
 # Local imports
-from lmrelay.config import CONFIG_ENV_VAR, load_config
+from lmrelay.config import load_config
 from lmrelay.daemon import (
     BIND_ENV_VAR,
     LOG_NAME,
@@ -24,6 +24,7 @@ from lmrelay.daemon import (
     process_alive,
     publish_bind,
     read_bind,
+    read_child_pid,
     read_pid,
     read_startup_settings,
     recorded_bind,
@@ -208,6 +209,12 @@ class TestWhetherAProcessIsThere:
 
     def test_a_number_too_large_for_a_pid_is_not(self):
         assert not process_alive(999999999999999999999)
+
+    def test_and_neither_is_zero(self):
+        """os.kill(0, 0) succeeds, because 0 means the caller's own process
+        group. Without the guard a pidfile holding 0 would read as a live relay
+        for ever, and `stop` would SIGTERM the CLI's own group."""
+        assert not process_alive(0)
 
 
 # Under root the refusal these tests rely on never comes: os.kill(1, SIGTERM) is
@@ -462,21 +469,31 @@ class TestWaitingForTheRelayWeStarted:
         write_pid(target, os.getpid())
         assert wait_for_relay(os.getpid(), target, tmp_path / LOG_NAME) == os.getpid()
 
+    def test_a_child_that_never_reported_a_pid_is_a_failure_naming_the_log(self, tmp_path):
+        """The grandchild writes its pid down the startup pipe as its first act,
+        so a pipe that closes with nothing in it is a start that died before
+        that, and the log is the only account of why."""
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with pytest.raises(LmrelayError, match="did not start") as raised:
+            read_child_pid(read_fd, tmp_path / LOG_NAME)
+        assert str(tmp_path / LOG_NAME) in str(raised.value)
+
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="start_detached forks; Windows cannot")
 class TestARealDetachedRelay:
     """The only test in the suite that starts a process. It also stops it."""
 
-    def test_it_starts_answers_and_stops(self, tmp_path, monkeypatch):
-        # The detached child inherits the environment, and this is how the CLI
-        # passes --config on to a relay that loads the config itself. Set before
-        # the start, since the helper may write the config more than once.
-        monkeypatch.setenv(CONFIG_ENV_VAR, str(tmp_path / "lmrelay.toml"))
-
+    def test_it_starts_answers_and_stops(self, tmp_path):
         pid, config, port = start_relay_through_the_cli(tmp_path)
         try:
             assert process_alive(pid)
             healthy = holds_within(lambda: probe_health("127.0.0.1", port))
+            # The one place the suite sends a real SIGHUP: reload_config runs in
+            # the relay's own process, off a handler the lifespan installs, and
+            # the line it writes is the only sign from outside that it ran.
+            reloaded = reload_daemon(config)
+            reload_logged = holds_within(lambda: f"lmrelay reloaded <- {config}" in read_log(config))
             # Recorded by the process that bound the socket, which is the only
             # thing that knows what it started with. Asserted here rather than
             # against write_pid alone, because the call site is what a `reload`
@@ -486,6 +503,8 @@ class TestARealDetachedRelay:
         finally:
             stopped = stop_daemon(config)
         assert healthy, read_log(config)
+        assert reloaded is True
+        assert reload_logged, read_log(config)
         assert started == {"host": "127.0.0.1", "port": port, "connect_timeout": 10}
         assert stopped
         assert read_pid(pid_file(config)) is None

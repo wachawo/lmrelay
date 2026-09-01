@@ -12,10 +12,10 @@ import pytest
 # Local imports
 from lmrelay import cli, daemon, service
 from lmrelay.cli import build_parser
-from lmrelay.config import CONFIG_ENV_VAR
+from lmrelay.config import CONFIG_ENV_VAR, ConfigError, load_config
 from lmrelay.daemon import pid_file, write_pid
 from lmrelay.errors import LmrelayError
-from lmrelay.service import LAUNCHD_PLIST_PATH
+from lmrelay.service import LAUNCHD_PLIST_PATH, SYSTEMD_UNIT_NAME
 from lmrelay.state import TOKEN_PREFIX, load_state, state_path_for
 from tests.conftest import run_command
 
@@ -168,6 +168,15 @@ class TestTurningAuthOn:
         run_command(["auth", "false", "--config", str(config_path)])
         assert state_for(config_path).auth_enabled is False
 
+    def test_a_token_in_the_state_still_counts_when_the_config_will_not_load(self, config_path):
+        """The config cannot contribute a credential it cannot be read for, but
+        the one the CLI stored is real, and refusing here would send the
+        operator to fix a file that has nothing to do with the switch."""
+        run_command(["token", "add", "lmr_pasted", "--config", str(config_path)])
+        config_path.write_text("this is not = = toml", encoding="utf-8")
+        run_command(["auth", "true", "--config", str(config_path)])
+        assert state_for(config_path).auth_enabled is True
+
 
 class TestCallerTokens:
     """gen, add, delete, and what the first one does to the switch."""
@@ -218,6 +227,31 @@ class TestCallerTokens:
         with pytest.raises(LmrelayError):
             run_command(["token", "delete", "7", "--config", str(config_path)])
 
+    def test_deleting_the_last_token_with_auth_on_says_every_request_will_fail(
+        self, config_path, caplog
+    ):
+        """The delete itself is what was asked for. What was not asked for is a
+        relay that now 401s everybody, and the operator is told the two ways
+        out rather than left to find that from a client."""
+        run_command(["token", "gen", "--config", str(config_path)])
+        run_command(["auth", "true", "--config", str(config_path)])
+        token_id = state_for(config_path).tokens[0].id
+        with caplog.at_level(logging.WARNING):
+            run_command(["token", "delete", str(token_id), "--config", str(config_path)])
+        assert "lmrelay auth false" in caplog.text
+
+    def test_the_list_masks_the_tokens(self, config_path, capsys, logging_restored):
+        """The list is what an operator runs to find an id, on a shared screen as
+        often as not, and the secret itself is not needed for that."""
+        run_command(["token", "add", "lmr_pasted_secret_value", "--config", str(config_path)])
+        run_command(["token", "list", "--config", str(config_path)])
+        assert "lmr_pasted_secret_value" not in capsys.readouterr().err
+
+    def test_and_shows_them_only_when_asked(self, config_path, capsys, logging_restored):
+        run_command(["token", "add", "lmr_pasted_secret_value", "--config", str(config_path)])
+        run_command(["token", "list", "--show", "--config", str(config_path)])
+        assert "lmr_pasted_secret_value" in capsys.readouterr().err
+
 
 class TestProviders:
     """Adding a hosted provider without opening the TOML."""
@@ -244,6 +278,15 @@ class TestProviders:
             "--header", "X-Blob=a=b==", "--config", str(config_path),
         ])
         assert state_for(config_path).providers["acme"]["headers"]["X-Blob"] == "a=b=="
+
+    def test_a_header_with_no_value_is_refused_and_the_shape_is_named(self, config_path):
+        """A bare name would be stored as a header with an empty value and sent
+        upstream, and the refusal it earned there would read as a bad key."""
+        with pytest.raises(LmrelayError, match="NAME=VALUE"):
+            run_command([
+                "provider", "add", "acme", "tok", "--base-url", "https://acme.test",
+                "--header", "X-Trace", "--config", str(config_path),
+            ])
 
     def test_one_the_cli_added_can_be_deleted_again(self, config_path):
         run_command(["provider", "add", "openai", "sk-test", "--config", str(config_path)])
@@ -283,6 +326,121 @@ class TestHandingOverToTheServiceManager:
         calls = self.launchctl_calls(monkeypatch)
         cli.service_control("restart", config_path)
         assert all("-w" not in argv for argv in calls)
+
+    def systemctl_calls(self, monkeypatch, returncode: int = 0, stderr: str = "") -> list[list[str]]:
+        """A systemd that owns an active relay, answering every command the same way."""
+        calls: list[list[str]] = []
+        monkeypatch.setattr(cli, "detect_manager", lambda: "systemd")
+        monkeypatch.setattr(cli, "service_is_active", lambda: True)
+
+        def record(argv, **unused_kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, returncode, stdout="", stderr=stderr)
+
+        monkeypatch.setattr(cli.subprocess, "run", record)
+        return calls
+
+    @pytest.mark.parametrize("action", ["stop", "restart", "reload"])
+    def test_under_systemd_the_verb_goes_to_systemctl_rather_than_to_the_pid(
+        self, config_path, monkeypatch, action
+    ):
+        """Signalling the pid behind the manager's back leaves the two disagreeing
+        about who owns the relay, and Restart=on-failure undoes the stop."""
+        calls = self.systemctl_calls(monkeypatch)
+        run_command([action, "--config", str(config_path)])
+        assert calls == [["systemctl", "--user", action, SYSTEMD_UNIT_NAME]]
+
+    def test_a_manager_that_refuses_is_quoted_to_the_operator(self, config_path, monkeypatch):
+        """systemctl's own words are the diagnosis; a bare "failed" would send
+        the operator off to run the same command by hand to read them."""
+        self.systemctl_calls(monkeypatch, returncode=1, stderr="Unit lmrelay.service not loaded.")
+        with pytest.raises(LmrelayError, match="not loaded"):
+            run_command(["stop", "--config", str(config_path)])
+
+    def test_run_is_refused_while_the_unit_holds_the_port(self, config_path, monkeypatch):
+        """Two relays on one port: the foreground one would fail to bind with an
+        errno, or worse, bind first and leave the unit's next restart failing."""
+        monkeypatch.setattr(cli, "detect_manager", lambda: "systemd")
+        monkeypatch.setattr(cli, "service_is_active", lambda: True)
+        with pytest.raises(LmrelayError, match="lmrelay stop"):
+            run_command(["run", "--config", str(config_path)])
+
+
+class TestProcessControlWithoutAManager:
+    """stop, restart, enable and disable when nothing but the pidfile owns the relay."""
+
+    def test_stopping_with_nothing_running_says_so_and_is_not_a_failure(
+        self, config_path, caplog
+    ):
+        with caplog.at_level(logging.INFO):
+            run_command(["stop", "--config", str(config_path)])
+        assert "not running" in caplog.text
+
+    def test_and_stopping_one_that_was_running_says_stopped(self, config_path, monkeypatch, caplog):
+        monkeypatch.setattr(cli, "stop_daemon", lambda unused_path: True)
+        with caplog.at_level(logging.INFO):
+            run_command(["stop", "--config", str(config_path)])
+        assert "stopped" in caplog.text
+
+    def test_restart_stops_what_is_there_and_reports_the_new_pid(
+        self, config_path, monkeypatch, caplog, logging_restored
+    ):
+        """Nothing forks here: the stop and the start are both stubbed, and the
+        assertion is that restart is the two of them in that order and that the
+        operator is told which pid came out of it."""
+        stopped: list = []
+        monkeypatch.setattr(cli, "stop_daemon", lambda path: stopped.append(path) or False)
+        monkeypatch.setattr(cli, "start_detached", lambda *unused_args: 4242)
+        with caplog.at_level(logging.INFO):
+            run_command(["restart", "--config", str(config_path)])
+        assert stopped == [config_path]
+        assert "started (pid 4242)" in caplog.text
+
+    def test_enable_hands_the_manager_an_absolute_config_path(
+        self, config_path, monkeypatch, tmp_path
+    ):
+        """A unit runs from a working directory the operator never chose, so the
+        relative path they typed would resolve somewhere else entirely."""
+        received: list = []
+        monkeypatch.setattr(cli, "enable_autostart", lambda path: received.append(path) or "ok")
+        monkeypatch.chdir(tmp_path)
+        run_command(["enable", "--config", config_path.name])
+        assert received == [config_path.resolve()]
+
+    def test_disable_reports_what_the_manager_said(self, monkeypatch, caplog):
+        monkeypatch.setattr(cli, "disable_autostart", lambda: "lmrelay: autostart disabled")
+        with caplog.at_level(logging.INFO):
+            run_command(["disable"])
+        assert "autostart disabled" in caplog.text
+
+
+class TestInit:
+    """The one command that writes into $HOME, kept out of the developer's."""
+
+    @pytest.fixture
+    def home_config(self, tmp_path, monkeypatch):
+        """Where init writes. HOME_CONFIG_PATH was resolved when config.py was
+        imported, so conftest's $HOME does not move it; cli's own binding is
+        what init_config reads, and that is what is pointed at tmp_path."""
+        target = tmp_path / "home" / ".lmrelay" / "lmrelay.toml"
+        monkeypatch.setattr(cli, "HOME_CONFIG_PATH", target)
+        return target
+
+    def test_it_writes_a_config_the_relay_can_start_from(self, home_config):
+        """The file ships with every hosted provider commented out, because each
+        one's ${VAR} would be unset on a machine that has just run init."""
+        run_command(["init"])
+        assert load_config(home_config).upstreams.keys() == {"ollama"}
+
+    def test_and_makes_it_private(self, home_config):
+        """It is where provider keys go."""
+        run_command(["init"])
+        assert home_config.stat().st_mode & 0o777 == 0o600
+
+    def test_but_never_over_one_that_is_already_there(self, home_config):
+        run_command(["init"])
+        with pytest.raises(ConfigError, match="already exists"):
+            run_command(["init"])
 
 
 class TestSayingWhatWasDone:

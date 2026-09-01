@@ -52,10 +52,9 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
         # One macOS leg, not a second sweep. Not for service.py: the tests
         # reach detect_manager's darwin branch on ubuntu by faking sys.platform,
-        # and reach the launchd registration on neither OS, because every
-        # enable/disable/status test replaces detect_manager with a lambda. It
-        # is here for what cannot be faked: a real fork, real sockets and a
-        # real uvicorn on the other OS the classifiers promise.
+        # and drive the launchd registration on every OS with launchctl
+        # stubbed. It is here for what cannot be faked: a real fork, real
+        # sockets and a real uvicorn on the other OS the classifiers promise.
         include:
           - os: macos-latest
             python-version: "3.13"

@@ -269,6 +269,21 @@ class TestTheRoundTrip:
         run_command(["import", STDIO_PATH, "--config", str(target)])
         assert load_config(target).port == 11500
 
+    def test_a_bundle_written_by_hand_with_one_upstream_provisions_a_relay(
+        self, bundle_path, target
+    ):
+        """Hand-writing a bundle is a documented way to provision a machine, and
+        the least one can say is the version and one upstream. No [server], no
+        [limits], no [auth]: every default has to hold, or the format quietly
+        requires an export to have written it."""
+        bundle_path.write_text(
+            'bundle_version = 1\n\n[upstream.ollama]\nbase_url = "http://127.0.0.1:11434"\n',
+            encoding="utf-8",
+        )
+        run_command(["import", str(bundle_path), "--config", str(target)])
+        assert "ollama" in load_config(target).upstreams
+        assert load_state(state_path_for(target)).auth_enabled is False
+
 
 class TestExportWritesNowhereItWouldRuin:
     """The one verb in the set that used to overwrite in silence."""
@@ -552,6 +567,18 @@ class TestRefusingABundleItCannotApply:
                          str(edited(bundle_path, bundle_version=BUNDLE_VERSION + 1)),
                          "--config", str(target)])
 
+    @pytest.mark.parametrize("value", [0, "1", True])
+    def test_one_whose_version_is_not_a_version_number(
+        self, source, bundle_path, target, value
+    ):
+        """bundle_version is the one line both ends agree on, so a hand edit
+        that leaves it a string, a bool or below one is told so, not compared
+        against the version this lmrelay understands as though it were one."""
+        export(source, bundle_path)
+        with pytest.raises(BundleError, match="not a version number"):
+            run_command(["import", str(edited(bundle_path, bundle_version=value)),
+                         "--config", str(target)])
+
     def test_one_that_does_not_say_what_it_is(self, tmp_path, target):
         """A TOML file is not a bundle, and bundle_version is what says it is:
         an lmrelay.toml handed to `import` by mistake parses perfectly."""
@@ -704,6 +731,24 @@ class TestRefusingABundleItCannotApply:
         data = export(source, bundle_path)
         data["auth"]["tokens"][1]["id"] = data["auth"]["tokens"][0]["id"]
         with pytest.raises(BundleError, match="two tokens"):
+            run_command(["import", str(edited(bundle_path, auth=data["auth"])),
+                         "--config", str(target)])
+
+    def test_one_token_under_two_ids(self, source, bundle_path, target):
+        """The other half of the id rule: one credential named by two ids is a
+        `token delete` that revokes half of it."""
+        data = export(source, bundle_path)
+        data["auth"]["tokens"][1]["token"] = data["auth"]["tokens"][0]["token"]
+        with pytest.raises(BundleError, match="same token twice"):
+            run_command(["import", str(edited(bundle_path, auth=data["auth"])),
+                         "--config", str(target)])
+
+    def test_a_token_id_that_is_not_an_integer(self, source, bundle_path, target):
+        """ids are what `token list` prints and `token delete` takes, so one
+        spelled as a word is refused rather than stored and never matched."""
+        data = export(source, bundle_path)
+        data["auth"]["tokens"][0]["id"] = "one"
+        with pytest.raises(BundleError, match="not an id"):
             run_command(["import", str(edited(bundle_path, auth=data["auth"])),
                          "--config", str(target)])
 

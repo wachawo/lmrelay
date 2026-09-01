@@ -84,6 +84,7 @@ class TestFindingTheFile:
             load_config()
         message = str(raised.value)
         assert "lmrelay.toml" in message and "lmrelay init" in message
+        assert "nohome.toml" in message
 
 
 class TestRefusingABrokenConfig:
@@ -134,6 +135,27 @@ class TestRefusingABrokenConfig:
         # The three that are accepted are listed rather than left to the README.
         assert "ollama" in str(raised.value) and "anthropic" in str(raised.value)
 
+    @pytest.mark.parametrize(
+        ("body", "named"),
+        [
+            ('[upstream]\nollama = "http://x"\n', "[upstream.ollama]"),
+            ('[upstream.ollama]\nbase_url = "http://x"\nheaders = "x"\n', "headers"),
+            ("upstream = 3\n", "[upstream]"),
+            ("limits = 3\n" + MINIMAL, "[limits]"),
+            ("[limits]\ntotal = 3\n" + MINIMAL, "[limits.total]"),
+        ],
+    )
+    def test_a_value_where_a_table_belongs(self, tmp_path, body, named):
+        """`[upstream]\nollama = "http://x"` is the shape of the mistake: a
+        string where a table was meant. TOML accepts it, so the refusal is this
+        module's, and it has to say which table it was reading rather than fail
+        somewhere inside with an AttributeError on a str."""
+        target = write_config(tmp_path, body)
+        with pytest.raises(ConfigError) as raised:
+            load_config(target)
+        message = str(raised.value)
+        assert named in message and "must be a table" in message
+
 
 class TestKeepingSecretsOutOfTheFile:
     """${VAR} in a header value, and where caller tokens come from."""
@@ -164,6 +186,22 @@ headers  = { Authorization = "Bearer ${PROVIDER_KEY}" }
             load_config(target)
         message = str(raised.value)
         assert "PROVIDER_KEY" in message and "openai" in message and "Authorization" in message
+
+    def test_a_dollar_that_is_not_a_reference_is_refused_by_place(self, tmp_path):
+        """The other half of the stored-key test in TestWhatTheStateAdds. In
+        the file, ${VAR} is the documented spelling, so a bare $ followed by a
+        digit is a slip in a hand-written key, and the refusal has to name the
+        upstream and the header it is in: the value itself is a secret, and a
+        traceback from Template would print it."""
+        target = write_config(tmp_path, """
+[upstream.openai]
+base_url = "https://api.openai.com"
+headers  = { Authorization = "Bearer sk-9f$1abc" }
+""")
+        with pytest.raises(ConfigError) as raised:
+            load_config(target)
+        message = str(raised.value)
+        assert "malformed" in message and "openai" in message and "Authorization" in message
 
     def test_a_literal_value_is_left_alone(self, tmp_path):
         target = write_config(tmp_path, """
@@ -517,25 +555,6 @@ class TestTheEnvironmentIsNotASource:
         chosen = write_config(tmp_path, MINIMAL)
         monkeypatch.setenv(CONFIG_ENV_VAR, str(chosen))
         assert load_config().config_path == chosen
-
-
-class TestARelayWithNoFileAtAll:
-    """There is no such relay: with no file there is nothing to configure it."""
-
-    def test_no_file_anywhere_is_refused_and_names_both_places_looked(
-        self, tmp_path, monkeypatch
-    ):
-        """It cannot invent an upstream, and starting empty would produce 404s
-        the operator would have to debug."""
-        elsewhere = tmp_path / "elsewhere"
-        elsewhere.mkdir()
-        monkeypatch.chdir(elsewhere)
-        monkeypatch.setattr(config_module, "HOME_CONFIG_PATH", tmp_path / ".lmrelay" / "x.toml")
-        with pytest.raises(ConfigError) as raised:
-            load_config()
-        message = str(raised.value)
-        assert "lmrelay init" in message
-        assert "lmrelay.toml" in message and "x.toml" in message
 
 
 def main():

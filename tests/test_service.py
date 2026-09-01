@@ -66,6 +66,25 @@ def systemctl_run(results: dict):
     return run
 
 
+@pytest.fixture
+def systemd_unit(tmp_path, monkeypatch):
+    """This machine has systemd, and the unit lives in tmp_path rather than in
+    the developer's own ~/.config. Returns where the unit will be written."""
+    monkeypatch.setattr(service, "detect_manager", lambda: "systemd")
+    unit = tmp_path / SYSTEMD_UNIT_NAME
+    monkeypatch.setattr(service, "SYSTEMD_UNIT_PATH", unit)
+    return unit
+
+
+@pytest.fixture
+def launchd_agent(tmp_path, monkeypatch):
+    """The same machine as a Mac, with the LaunchAgent in tmp_path."""
+    monkeypatch.setattr(service, "detect_manager", lambda: "launchd")
+    agent = tmp_path / f"{LAUNCHD_LABEL}.plist"
+    monkeypatch.setattr(service, "LAUNCHD_PLIST_PATH", agent)
+    return agent
+
+
 class TestTheSystemdUnit:
     """Written by hand into ~/.config/systemd/user, read at every login."""
 
@@ -188,61 +207,99 @@ class TestFindingTheExecutable:
 class TestRegisteringForAutostart:
     """Writing the file is half of it; the manager has to be told."""
 
-    def as_systemd(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(service, "detect_manager", lambda: "systemd")
-        monkeypatch.setattr(service, "SYSTEMD_UNIT_PATH", tmp_path / SYSTEMD_UNIT_NAME)
-        return tmp_path / SYSTEMD_UNIT_NAME
-
     def test_a_platform_with_no_manager_says_what_to_use_instead(self, tmp_path, monkeypatch):
         monkeypatch.setattr(service, "detect_manager", lambda: "none")
         with pytest.raises(LmrelayError, match="lmrelay serve"):
             enable_autostart(tmp_path / "lmrelay.toml")
 
-    def test_enabling_writes_the_unit(self, tmp_path, monkeypatch):
-        unit = self.as_systemd(tmp_path, monkeypatch)
+    def test_and_says_it_again_when_asked_to_disable(self, monkeypatch):
+        monkeypatch.setattr(service, "detect_manager", lambda: "none")
+        with pytest.raises(LmrelayError, match="lmrelay serve"):
+            disable_autostart()
+
+    def test_enabling_writes_the_unit(self, tmp_path, monkeypatch, systemd_unit):
         monkeypatch.setattr(service.subprocess, "run", recording_run([]))
         enable_autostart(tmp_path / "lmrelay.toml")
-        assert unit.exists()
+        assert systemd_unit.exists()
 
-    def test_and_reports_one_line_to_the_operator(self, tmp_path, monkeypatch):
-        self.as_systemd(tmp_path, monkeypatch)
+    def test_and_reports_one_line_to_the_operator(self, tmp_path, monkeypatch, systemd_unit):
         monkeypatch.setattr(service.subprocess, "run", recording_run([]))
         message = enable_autostart(tmp_path / "lmrelay.toml")
         assert message and "\n" not in message
 
-    def test_the_manager_is_reloaded_before_the_unit_is_enabled(self, tmp_path, monkeypatch):
+    def test_the_manager_is_reloaded_before_the_unit_is_enabled(
+        self, tmp_path, monkeypatch, systemd_unit
+    ):
         """systemd will not see a unit file it has not been told to re-read."""
-        self.as_systemd(tmp_path, monkeypatch)
         calls: list[list[str]] = []
         monkeypatch.setattr(service.subprocess, "run", recording_run(calls))
         enable_autostart(tmp_path / "lmrelay.toml")
         assert "daemon-reload" in calls[0]
 
-    def test_every_call_is_an_argument_list(self, tmp_path, monkeypatch):
+    def test_every_call_is_an_argument_list(self, tmp_path, monkeypatch, systemd_unit):
         """A string command line would go through a shell, and a home directory
         with a space in it would silently become two arguments."""
-        self.as_systemd(tmp_path, monkeypatch)
         calls: list[list[str]] = []
         monkeypatch.setattr(service.subprocess, "run", recording_run(calls))
         enable_autostart(tmp_path / "lmrelay.toml")
         assert calls and all(isinstance(argv, list) for argv in calls)
 
-    def test_a_failing_systemctl_is_reported_with_what_it_said(self, tmp_path, monkeypatch):
+    def test_a_failing_systemctl_is_reported_with_what_it_said(
+        self, tmp_path, monkeypatch, systemd_unit
+    ):
         """A silent failure here means the relay does not come back after a
         reboot, and nothing ever said so."""
-        self.as_systemd(tmp_path, monkeypatch)
         monkeypatch.setattr(
             service.subprocess, "run", recording_run([], 1, "Failed to connect to bus")
         )
         with pytest.raises(LmrelayError, match="Failed to connect to bus"):
             enable_autostart(tmp_path / "lmrelay.toml")
 
-    def test_disabling_takes_the_unit_away(self, tmp_path, monkeypatch):
-        unit = self.as_systemd(tmp_path, monkeypatch)
-        unit.write_text("[Unit]\n", encoding="utf-8")
+    def test_disabling_takes_the_unit_away(self, monkeypatch, systemd_unit):
+        systemd_unit.write_text("[Unit]\n", encoding="utf-8")
         monkeypatch.setattr(service.subprocess, "run", recording_run([]))
         disable_autostart()
-        assert not unit.exists()
+        assert not systemd_unit.exists()
+
+    def test_disabling_a_unit_that_was_never_written_is_not_an_error(self, systemd_unit):
+        """And systemctl is not asked either: it refuses to disable a unit it
+        cannot find. The autouse stub fails this test if anything is run."""
+        assert "nothing to disable" in disable_autostart()
+
+    def test_enabling_under_launchd_writes_an_agent_launchd_can_read(
+        self, tmp_path, monkeypatch, launchd_agent
+    ):
+        """A plist that does not parse is refused at login with nothing said
+        to anyone, and this is the file, not the template the text came from."""
+        monkeypatch.setattr(service.subprocess, "run", recording_run([]))
+        enable_autostart(tmp_path / "lmrelay.toml")
+        assert plistlib.loads(launchd_agent.read_bytes())["Label"] == LAUNCHD_LABEL
+
+    def test_and_loads_it_with_the_flag_that_clears_a_disable(
+        self, tmp_path, monkeypatch, launchd_agent
+    ):
+        """`lmrelay disable` unloads with -w, which records the agent as disabled
+        in launchd's own database. A plain `load` of a disabled agent is refused,
+        so without -w here the second enable is the one that would fail."""
+        calls: list[list[str]] = []
+        monkeypatch.setattr(service.subprocess, "run", recording_run(calls))
+        enable_autostart(tmp_path / "lmrelay.toml")
+        assert calls == [["launchctl", "load", "-w", str(launchd_agent)]]
+
+    def test_disabling_under_launchd_unloads_it_and_takes_the_agent_away(
+        self, monkeypatch, launchd_agent
+    ):
+        """With -w, unlike `lmrelay stop`: this is the one command whose point
+        is that the relay stops coming back at login."""
+        launchd_agent.write_text("<plist/>\n", encoding="utf-8")
+        calls: list[list[str]] = []
+        monkeypatch.setattr(service.subprocess, "run", recording_run(calls))
+        disable_autostart()
+        assert calls == [["launchctl", "unload", "-w", str(launchd_agent)]]
+        assert not launchd_agent.exists()
+
+    def test_and_an_agent_that_was_never_written_is_nothing_to_disable(self, launchd_agent):
+        assert "nothing to disable" in disable_autostart()
 
 
 class TestReportingAutostart:
@@ -254,48 +311,51 @@ class TestReportingAutostart:
         assert status["manager"] == "none"
         assert not (status["installed"] or status["enabled"] or status["active"])
 
-    def test_a_written_unit_counts_as_installed(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(service, "detect_manager", lambda: "systemd")
-        unit = tmp_path / SYSTEMD_UNIT_NAME
-        unit.write_text("[Unit]\n", encoding="utf-8")
-        monkeypatch.setattr(service, "SYSTEMD_UNIT_PATH", unit)
+    def test_a_written_unit_counts_as_installed(self, monkeypatch, systemd_unit):
+        systemd_unit.write_text("[Unit]\n", encoding="utf-8")
         monkeypatch.setattr(
             service.subprocess, "run", systemctl_run({"is-enabled": 0, "is-active": 0})
         )
         assert autostart_status()["installed"] is True
 
-    def test_the_return_code_decides_it_rather_than_the_output(self, monkeypatch, tmp_path):
+    def test_the_return_code_decides_it_rather_than_the_output(self, monkeypatch, systemd_unit):
         """`systemctl is-enabled` prints "disabled" and exits non-zero; reading
         its stdout would report a disabled unit as enabled."""
-        monkeypatch.setattr(service, "detect_manager", lambda: "systemd")
-        monkeypatch.setattr(service, "SYSTEMD_UNIT_PATH", tmp_path / SYSTEMD_UNIT_NAME)
         monkeypatch.setattr(
             service.subprocess, "run", systemctl_run({"is-enabled": 1, "is-active": 3})
         )
         status = autostart_status()
         assert status["enabled"] is False and status["active"] is False
 
-    def test_an_active_unit_is_what_the_cli_delegates_to(self, monkeypatch, tmp_path):
+    def test_an_active_unit_is_what_the_cli_delegates_to(self, monkeypatch, systemd_unit):
         """`lmrelay stop` has to go through the manager when the manager owns
         the process, or the two end up disagreeing about who does."""
-        monkeypatch.setattr(service, "detect_manager", lambda: "systemd")
-        monkeypatch.setattr(service, "SYSTEMD_UNIT_PATH", tmp_path / SYSTEMD_UNIT_NAME)
         monkeypatch.setattr(
             service.subprocess, "run", systemctl_run({"is-enabled": 0, "is-active": 0})
         )
         assert service_is_active() is True
 
-    def test_but_not_from_inside_the_managed_process(self, monkeypatch, tmp_path):
+    def test_but_not_from_inside_the_managed_process(self, monkeypatch, systemd_unit):
         """The unit's own ExecStart is `lmrelay run`, and by the time it runs
         the manager already calls the unit active. Answering yes here is what
         would make it refuse to start itself."""
         monkeypatch.setenv(SERVICE_ENV_VAR, "1")
-        monkeypatch.setattr(service, "detect_manager", lambda: "systemd")
-        monkeypatch.setattr(service, "SYSTEMD_UNIT_PATH", tmp_path / SYSTEMD_UNIT_NAME)
         monkeypatch.setattr(
             service.subprocess, "run", systemctl_run({"is-enabled": 0, "is-active": 0})
         )
         assert service_is_active() is False
+
+    def test_under_launchd_one_probe_answers_for_enabled_and_active_alike(
+        self, monkeypatch, launchd_agent
+    ):
+        """launchd has no is-enabled and no is-active: `launchctl list <label>`
+        exits zero for a loaded agent and non-zero otherwise, and that one code
+        is all the status line has to go on."""
+        calls: list[list[str]] = []
+        monkeypatch.setattr(service.subprocess, "run", recording_run(calls))
+        status = autostart_status()
+        assert status["enabled"] is True and status["active"] is True
+        assert calls == [["launchctl", "list", LAUNCHD_LABEL]]
 
 
 def main():

@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,22 @@ class TestKeepingCallerTokens:
         state = delete_token(state, second.id)
         state, third = add_token(state, "lmr_third")
         assert third.id > second.id
+
+    def test_nor_when_the_file_says_the_next_id_is_one_already_taken(self, tmp_path):
+        """The file is hand-editable, and the counter in it is recomputed rather
+        than trusted whenever trusting it would hand out an id that already
+        names a token."""
+        target = tmp_path / "state.json"
+        target.write_text(
+            json.dumps({
+                "version": STATE_VERSION,
+                "next_token_id": 1,
+                "tokens": [{"id": 1, "token": "lmr_first"}, {"id": 2, "token": "lmr_second"}],
+            }),
+            encoding="utf-8",
+        )
+        unused_state, third = add_token(load_state(target), "lmr_third")
+        assert third.id == 3
 
     def test_the_same_token_twice_is_refused(self, tmp_path):
         state, unused_record = add_token(fresh(tmp_path), "lmr_first")
@@ -372,25 +389,28 @@ class TestWritingItDown:
 class TestRefusingAStateItCannotUse:
     """Each refusal names the file, because the operator has to go and look."""
 
-    def test_a_file_that_is_not_json(self, tmp_path):
-        target = tmp_path / "state.json"
-        target.write_text("{not json", encoding="utf-8")
-        with pytest.raises(StateError) as raised:
-            load_state(target)
-        assert str(target) in str(raised.value)
-
-    def test_a_providers_entry_that_is_not_a_table(self, tmp_path):
-        """Refused here as the StateError naming the file that every command is
-        written to report, rather than reaching the upstream parser and coming
-        out of `status` as an AttributeError traceback."""
-        target = tmp_path / "state.json"
-        target.write_text(
+    @pytest.mark.parametrize("body", [
+        pytest.param("{not json", id="not json"),
+        pytest.param("[]", id="not an object"),
+        # Refused here as the StateError naming the file that every command is
+        # written to report, rather than reaching the upstream parser and coming
+        # out of `status` as an AttributeError traceback.
+        pytest.param(
             json.dumps({"version": STATE_VERSION, "providers": {"openai": "sk-oops"}}),
-            encoding="utf-8",
-        )
-        with pytest.raises(StateError) as raised:
+            id="a providers entry that is not a table",
+        ),
+        # An id that is not an int would never match the one `token list` prints,
+        # and a token that is not a string is a credential quietly dropped.
+        pytest.param(
+            json.dumps({"version": STATE_VERSION, "tokens": [{"id": "1", "token": "lmr_x"}]}),
+            id="a malformed token entry",
+        ),
+    ])
+    def test_a_file_it_cannot_read_is_refused_by_name(self, tmp_path, body):
+        target = tmp_path / "state.json"
+        target.write_text(body, encoding="utf-8")
+        with pytest.raises(StateError, match=re.escape(str(target))):
             load_state(target)
-        assert str(target) in str(raised.value)
 
     def test_a_file_written_by_a_newer_lmrelay(self, tmp_path):
         """Reading it as though the fields meant what they mean here would drop
@@ -399,6 +419,15 @@ class TestRefusingAStateItCannotUse:
         target.write_text(json.dumps({"version": STATE_VERSION + 1}), encoding="utf-8")
         with pytest.raises(StateError):
             load_state(target)
+
+    def test_a_path_it_cannot_write_to(self, tmp_path):
+        """`token gen` has already printed the token by the time the save fails,
+        so the refusal has to say which file did not take it."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("", encoding="utf-8")
+        target = blocker / "state.json"
+        with pytest.raises(StateError, match=re.escape(str(target))):
+            save_state(load_state(target))
 
 
 def main():
