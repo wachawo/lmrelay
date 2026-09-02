@@ -736,10 +736,10 @@ keys at the top. An operator reading a bundle, hand-editing one to provision a m
 diffing two of them is reading the file they already know.
 
 ```toml
-# lmrelay bundle, written by lmrelay 0.0.7 at 2026-08-31T18:04:11Z.
+# lmrelay bundle, written by lmrelay 0.0.8 at 2026-08-31T18:04:11Z.
 
 bundle_version = 1
-written_by     = "lmrelay 0.0.7"
+written_by     = "lmrelay 0.0.8"
 exported_at    = "2026-08-31T18:04:11Z"
 
 [server]
@@ -866,7 +866,7 @@ not accept leaves the existing pair exactly as it was. What it then writes, it n
 ```text
 Moved /home/u/.lmrelay/lmrelay.toml to /home/u/.lmrelay/lmrelay.toml.bak.
 Moved /home/u/.lmrelay/state.json to /home/u/.lmrelay/state.json.bak.
-Imported relay.toml, written by lmrelay 0.0.7 at 2026-08-31T18:04:11Z.
+Imported relay.toml, written by lmrelay 0.0.8 at 2026-08-31T18:04:11Z.
 Wrote /home/u/.lmrelay/lmrelay.toml and /home/u/.lmrelay/state.json (0600): 3 upstreams,
 2 caller tokens, auth on.
 ```
@@ -1089,7 +1089,7 @@ the relay will measure rather than answering with a nearly empty page:
 ```text
 # HELP lmrelay_build_info The version of the relay these counters came from, as a label on a constant 1.
 # TYPE lmrelay_build_info gauge
-lmrelay_build_info{version="0.0.7"} 1
+lmrelay_build_info{version="0.0.8"} 1
 # HELP lmrelay_requests_total Requests the relay answered, by the upstream chosen and the status returned.
 # TYPE lmrelay_requests_total counter
 # HELP lmrelay_request_ttfb_seconds Seconds from a request arriving to the upstream's first byte, by upstream.
