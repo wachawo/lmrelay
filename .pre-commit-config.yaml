@@ -22,7 +22,33 @@ repos:
     hooks:
       - id: pytest
         name: pytest
+        # `language: python` with the project's own test extra, rather than
+        # `language: system` with a bare `pytest`. System meant whatever was on
+        # PATH when git ran, and on a machine where the suite is run from a
+        # virtualenv that is nothing: the hook answered `Executable pytest not
+        # found` and refused every push, including the ones whose tests passed.
+        # A hook that cannot run is worse than no hook, because it fails in the
+        # one direction that looks like a real failure.
+        #
+        # `.[test]` installs the relay and the four packages the suite needs
+        # into an environment pre-commit builds and caches itself, so a fresh
+        # clone needs nothing beyond `pre-commit install`.
+        # Named rather than `.[test]`: pre-commit resolves a local path against
+        # its own working directory, and the extra brought in no pytest at all.
+        # Spelled out, the environment is built once and cached. The runtime
+        # four are here because the suite imports lmrelay, which imports them;
+        # lmrelay itself is not installed, and does not need to be, since
+        # pre-commit runs with the repository as the working directory.
         entry: pytest
-        language: system
+        language: python
+        additional_dependencies:
+          - pytest>=8
+          - anyio>=4
+          - httpx2>=2
+          - pytest-cov>=5
+          - fastapi>=0.115,<1
+          - starlette>=0.37,<2
+          - uvicorn[standard]>=0.30,<1
+          - httpx>=0.27,<1
         pass_filenames: false
         stages: [pre-push]
