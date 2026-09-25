@@ -175,6 +175,66 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 명령이 받습니다. 즉 `init`과 `disable`을 뺀 모든 명령이며, `init`은 언제나
 `~/.lmrelay/lmrelay.toml`에 쓰고 `disable`은 둘 다 읽지 않습니다.
 
+### 프로바이더 추가하기
+
+각각 두 단계입니다. 키를 변수에 넣고, 그 변수를 `provider add`에 넘깁니다. 그러면 복사하는
+명령에는 비밀이 실리지 않고, 키는 프로바이더마다 한 번이 아니라 전체에서 한 번만 붙여 넣게
+됩니다. 프롬프트에서 입력한 `VAR=value`는 그래도 셸 히스토리에 남으므로, 그것이 문제가 되는
+자리에서는 `read -rs VAR` 형태를 쓰십시오.
+
+프리셋이 아는 이름에는 URL이 필요 없습니다. 그 밖의 모든 것에는 `--base-url`이 필요하고,
+릴레이는 추측하지 않고 그렇게 말해 줍니다.
+
+**Ollama**는 명령 자체가 필요 없습니다. 함께 배포되는 `lmrelay.toml`이 이미
+`[upstream.ollama]`를 `http://127.0.0.1:11434`에 두고 `default_upstream`으로 만듭니다.
+다른 머신으로 옮길 때만 이름을 지정하십시오.
+
+```bash
+lmrelay provider add ollama "" --base-url http://gpu102:11434
+```
+
+빈 토큰은 의도한 것입니다. 로컬 Ollama는 자격 증명을 요구하지 않으므로 Ollama 프리셋은
+헤더를 하나도 갖지 않습니다.
+
+**OpenRouter**에는 프리셋이 없으므로 URL을 줍니다. `openai`가 기본 방언이고
+OpenRouter가 말하는 것도 그것이니 `--dialect`는 필요하지 않습니다.
+
+```bash
+OPENROUTER_KEY=sk-or-v1-...
+lmrelay provider add openrouter $OPENROUTER_KEY --base-url https://openrouter.ai/api
+```
+
+**OpenAI**는 프리셋이므로 URL과 방언과 헤더 형태가 이름과 함께 따라옵니다.
+
+```bash
+OPENAI_KEY=sk-...
+lmrelay provider add openai $OPENAI_KEY
+```
+
+**Gemini**는 OpenAI 방언을 말하지만 `/v1` 아래가 아니라 자기만의 경로에서 말합니다. 그래서
+기본 URL은 맨 호스트이고 `/v1beta/openai`는 클라이언트가 지닙니다.
+
+```bash
+GEMINI_KEY=AIza...
+lmrelay provider add gemini $GEMINI_KEY --base-url https://generativelanguage.googleapis.com
+```
+
+**Claude**는 `anthropic` 프리셋이고, 프리셋이라는 점이 바로 핵심입니다. 이것이 `x-api-key`와
+`anthropic-version`을 보내며, 그 API는 바로 그것으로 인증합니다. 직접 지은 이름은 대신
+기본값인 `Authorization: Bearer`를 받게 되고, `--header` 값은 글자 그대로 취해지므로 거기에
+쓴 `{token}`은 키가 아니라 그 일곱 글자로 나갑니다.
+
+```bash
+CLAUDE_KEY=sk-ant-...
+lmrelay provider add anthropic $CLAUDE_KEY
+```
+
+그다음 릴레이가 실제로 사용할 것을 다시 읽어 보십시오. 따로 요청하지 않으면 키는 가려집니다.
+
+```bash
+lmrelay provider list
+```
+
 ### 업스트림 선택
 
 첫 번째 경로 세그먼트가 `[upstream]`의 키와 정확히 일치할 때에만 그 세그먼트가 업스트림을
@@ -187,6 +247,8 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
+POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
 
 그래서 클라이언트는 포트를 한 번만 익히면 되고, 하나를 다른 제공자로 돌리는 일은 한 줄이면
@@ -197,8 +259,10 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
-Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
+Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 
 ```bash

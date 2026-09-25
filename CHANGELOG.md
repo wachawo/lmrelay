@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **The README shows how to add each provider**, in every translation: the key into a
+  variable, then `lmrelay provider add`. Ollama needs no command, because the shipped config
+  already carries it as the default upstream. OpenRouter and Gemini have no preset and take
+  `--base-url`; Gemini's is the bare host, because it serves the OpenAI dialect under
+  `/v1beta/openai` rather than `/v1`. Claude is the `anthropic` preset, which is what sends
+  `x-api-key` and `anthropic-version`: a name of your own gets the default bearer instead,
+  and `--header` values are literal, so a `{token}` written there is sent as those seven
+  characters.
 
 ## [0.0.8] - 2026-09-02
 

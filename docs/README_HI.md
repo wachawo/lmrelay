@@ -189,6 +189,66 @@ command `lmrelay.toml` में लिखती है और बाकी फ�
 commands में चलता है जो config या state पढ़ती हैं, यानी `init` और `disable` को छोड़कर हर command
 में। `init` हमेशा `~/.lmrelay/lmrelay.toml` ही लिखती है, और `disable` इनमें से कुछ नहीं पढ़ती।
 
+### प्रोवाइडर जोड़ना
+
+हर एक के लिए दो चरण: कुंजी को एक वेरिएबल में रखें, फिर वेरिएबल को `provider add` को दें।
+इससे जो कमांड आप कॉपी करते हैं उसमें कोई गोपनीय मान नहीं रहता, और कुंजी हर प्रोवाइडर के लिए
+एक बार की जगह कुल एक बार चिपकानी पड़ती है। प्रॉम्प्ट पर टाइप किया गया `VAR=value` फिर भी शेल
+हिस्ट्री में रहता है, इसलिए जहाँ यह मायने रखता है वहाँ `read -rs VAR` वाला रूप इस्तेमाल करें।
+
+जिस नाम को कोई प्रीसेट जानता है उसे URL की ज़रूरत नहीं। बाकी सबको `--base-url` चाहिए, और
+रिले अनुमान लगाने की जगह यह बता देता है।
+
+**Ollama** को कोई कमांड ही नहीं चाहिए। साथ आने वाली `lmrelay.toml` पहले से
+`[upstream.ollama]` को `http://127.0.0.1:11434` पर रखती है और उसे `default_upstream`
+बनाती है। नाम तभी दें जब उसे किसी दूसरी मशीन पर ले जाना हो:
+
+```bash
+lmrelay provider add ollama "" --base-url http://gpu102:11434
+```
+
+खाली टोकन जान-बूझकर है: Ollama प्रीसेट कोई हेडर नहीं रखता, क्योंकि स्थानीय Ollama कोई
+क्रेडेंशियल नहीं माँगता।
+
+**OpenRouter** का कोई प्रीसेट नहीं है, इसलिए उसे उसका URL दिया जाता है। `openai`
+डिफ़ॉल्ट डायलेक्ट है और OpenRouter वही बोलता है, इसलिए `--dialect` की ज़रूरत नहीं:
+
+```bash
+OPENROUTER_KEY=sk-or-v1-...
+lmrelay provider add openrouter $OPENROUTER_KEY --base-url https://openrouter.ai/api
+```
+
+**OpenAI** एक प्रीसेट है, इसलिए URL, डायलेक्ट और हेडर का रूप नाम के साथ ही आ जाते हैं:
+
+```bash
+OPENAI_KEY=sk-...
+lmrelay provider add openai $OPENAI_KEY
+```
+
+**Gemini** OpenAI डायलेक्ट बोलता है, पर `/v1` के नीचे नहीं, अपने ही पथ पर। इसलिए बेस URL
+सिर्फ़ होस्ट है और `/v1beta/openai` क्लाइंट लेकर चलता है:
+
+```bash
+GEMINI_KEY=AIza...
+lmrelay provider add gemini $GEMINI_KEY --base-url https://generativelanguage.googleapis.com
+```
+
+**Claude** `anthropic` प्रीसेट है, और प्रीसेट होना ही यहाँ असल बात है: यह `x-api-key` और
+`anthropic-version` भेजता है, और वह API इन्हीं से प्रमाणित करता है। अपना रखा नाम इनकी जगह
+डिफ़ॉल्ट `Authorization: Bearer` पाएगा, और `--header` के मान अक्षरशः लिए जाते हैं, इसलिए
+वहाँ लिखा `{token}` कुंजी की जगह उन सात अक्षरों के रूप में जाएगा:
+
+```bash
+CLAUDE_KEY=sk-ant-...
+lmrelay provider add anthropic $CLAUDE_KEY
+```
+
+फिर पढ़कर देखें कि रिले असल में क्या इस्तेमाल करेगा; जब तक आप न कहें, कुंजियाँ छिपी रहती हैं:
+
+```bash
+lmrelay provider list
+```
+
 ### upstream चुनना
 
 path का पहला segment upstream तभी चुनता है जब वह `[upstream]` की किसी key से हूबहू मेल खाए। वरना
@@ -201,6 +261,8 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
+POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
 
 इसलिए client को port सिर्फ़ एक बार सीखना पड़ता है, और उसे किसी दूसरे provider पर मोड़ना एक line का
@@ -211,8 +273,10 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
-Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
+Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 
 ```bash

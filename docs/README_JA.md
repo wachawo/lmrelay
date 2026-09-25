@@ -174,6 +174,66 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。
 `init` は常に `~/.lmrelay/lmrelay.toml` を書き、`disable` はどちらも読まない。
 
+### プロバイダーを追加する
+
+どれも二段階です。鍵を変数に入れ、その変数を `provider add` に渡します。こうすればコピーする
+コマンドに秘密は乗らず、鍵を貼るのはプロバイダーごとに一度ではなく全体で一度になります。
+プロンプトで打った `VAR=value` はそれでもシェルの履歴に残るので、そこが問題になる場面では
+`read -rs VAR` の形を使ってください。
+
+プリセットが知っている名前に URL は要りません。それ以外には `--base-url` が必要で、リレーは
+推測せずにそう言います。
+
+**Ollama** はコマンドそのものが要りません。同梱の `lmrelay.toml` がすでに
+`[upstream.ollama]` を `http://127.0.0.1:11434` に置き、`default_upstream` にしています。
+名前を挙げるのは別のマシンへ移すときだけです。
+
+```bash
+lmrelay provider add ollama "" --base-url http://gpu102:11434
+```
+
+空のトークンは意図的です。ローカルの Ollama は資格情報を求めないので、Ollama プリセットは
+ヘッダーを一つも持ちません。
+
+**OpenRouter** にはプリセットがないので、URL を渡します。`openai` は既定の方言で、
+OpenRouter が話すのもそれなので、`--dialect` は不要です。
+
+```bash
+OPENROUTER_KEY=sk-or-v1-...
+lmrelay provider add openrouter $OPENROUTER_KEY --base-url https://openrouter.ai/api
+```
+
+**OpenAI** はプリセットなので、URL、方言、ヘッダーの形が名前とともに付いてきます。
+
+```bash
+OPENAI_KEY=sk-...
+lmrelay provider add openai $OPENAI_KEY
+```
+
+**Gemini** は OpenAI 方言を話しますが、`/v1` の下ではなく自分専用のパスの上でです。そのため
+ベース URL は素のホストで、`/v1beta/openai` はクライアントが担います。
+
+```bash
+GEMINI_KEY=AIza...
+lmrelay provider add gemini $GEMINI_KEY --base-url https://generativelanguage.googleapis.com
+```
+
+**Claude** は `anthropic` プリセットであり、プリセットであること自体が要点です。これが
+`x-api-key` と `anthropic-version` を送り、あの API はまさにそれで認証します。自分で付けた
+名前だと代わりに既定の `Authorization: Bearer` になり、さらに `--header` の値は文字どおりに
+取られるので、そこに書いた `{token}` は鍵ではなくその七文字として出ていきます。
+
+```bash
+CLAUDE_KEY=sk-ant-...
+lmrelay provider add anthropic $CLAUDE_KEY
+```
+
+そのうえで、リレーが実際に使うものを読み返してください。求めない限り鍵は隠されています。
+
+```bash
+lmrelay provider list
+```
+
 ### アップストリームの選択
 
 パスの最初のセグメントがアップストリームを選ぶのは、それが `[upstream]` のキーと完全に一致する
@@ -186,6 +246,8 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
+POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
 
 したがってクライアントが覚えるポートは一度きりで、別のプロバイダに向け直すのは 1 行で済む:
@@ -195,8 +257,10 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
-Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
+Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 
 ```bash

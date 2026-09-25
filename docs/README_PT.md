@@ -191,6 +191,67 @@ caminho nenhum o pacote sai pelo stdout e é lido do stdin, de modo que
 todo comando que lê a configuração ou o estado, ou seja, todos menos `init`, que sempre
 escreve `~/.lmrelay/lmrelay.toml`, e `disable`, que não lê nenhum dos dois.
 
+### Adicionando os provedores
+
+Dois passos para cada um: colocar a chave numa variável e depois passar a variável para
+`provider add`. O comando que você copia não carrega nenhum segredo, e a chave é colada uma
+vez em vez de uma vez por provedor. Um `VAR=value` digitado no prompt continua no histórico
+do shell, então `read -rs VAR` é a forma a usar quando isso importa.
+
+Um nome que um preset conhece não precisa de URL. Todo o resto precisa de `--base-url`, e o
+relay diz isso em vez de adivinhar.
+
+**Ollama** não precisa de comando nenhum. A `lmrelay.toml` que vem no pacote já carrega
+`[upstream.ollama]` em `http://127.0.0.1:11434` e o torna `default_upstream`. Nomeie-o
+apenas para movê-lo para outra máquina:
+
+```bash
+lmrelay provider add ollama "" --base-url http://gpu102:11434
+```
+
+O token vazio é deliberado: o preset do Ollama não carrega cabeçalhos, porque um Ollama
+local não pede credencial.
+
+**OpenRouter** não tem preset, então recebe sua URL. `openai` é o dialeto padrão e o
+que o OpenRouter fala, então `--dialect` não é necessário:
+
+```bash
+OPENROUTER_KEY=sk-or-v1-...
+lmrelay provider add openrouter $OPENROUTER_KEY --base-url https://openrouter.ai/api
+```
+
+**OpenAI** é um preset, então a URL, o dialeto e a forma dos cabeçalhos vêm com o nome:
+
+```bash
+OPENAI_KEY=sk-...
+lmrelay provider add openai $OPENAI_KEY
+```
+
+**Gemini** fala o dialeto do OpenAI, mas num caminho próprio e não sob `/v1`. Por isso a
+URL base é o host nu e `/v1beta/openai` é levado pelo cliente:
+
+```bash
+GEMINI_KEY=AIza...
+lmrelay provider add gemini $GEMINI_KEY --base-url https://generativelanguage.googleapis.com
+```
+
+**Claude** é o preset `anthropic`, e o preset é justamente o ponto: ele envia `x-api-key` e
+`anthropic-version`, que é com o que aquela API autentica. Um nome seu receberia no lugar o
+`Authorization: Bearer` padrão, e os valores de `--header` são tomados literalmente, então
+um `{token}` escrito ali sai como esses sete caracteres e não como a chave:
+
+```bash
+CLAUDE_KEY=sk-ant-...
+lmrelay provider add anthropic $CLAUDE_KEY
+```
+
+Depois leia de volta o que o relay vai realmente usar, chaves mascaradas a não ser que
+você peça o contrário:
+
+```bash
+lmrelay provider list
+```
+
 ### Escolhendo um upstream
 
 O primeiro segmento do caminho seleciona o upstream se e somente se ele corresponder
@@ -204,6 +265,8 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
+POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
 
 Assim, um cliente só precisa aprender a porta uma vez, e reapontá-lo para outro provedor é
@@ -214,8 +277,10 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
-Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
+Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 
 ```bash

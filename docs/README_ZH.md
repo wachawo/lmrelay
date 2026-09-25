@@ -173,6 +173,63 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 的命令都接受 `--config PATH`，也就是除 `init` 和 `disable` 以外的全部命令；`init` 始终写入
 `~/.lmrelay/lmrelay.toml`，而 `disable` 两者都不读。
 
+### 添加提供方
+
+每个都是两步：把密钥放进变量，再把变量交给 `provider add`。这样你复制的命令不带任何机密，密钥
+只粘贴一次，而不是每个提供方粘一次。在提示符下敲出的 `VAR=value` 仍然会留在 shell 历史里，所以
+在这一点重要时用 `read -rs VAR`。
+
+预设认识的名字不需要 URL。其余一切都需要 `--base-url`，而中继会明说，不会去猜。
+
+**Ollama** 完全不需要命令。随包的 `lmrelay.toml` 已经把 `[upstream.ollama]` 指向
+`http://127.0.0.1:11434`，并让它成为 `default_upstream`。只有要把它挪到别的机器上时才需要
+指名：
+
+```bash
+lmrelay provider add ollama "" --base-url http://gpu102:11434
+```
+
+空令牌是故意的：Ollama 预设不带任何头部，因为本地 Ollama 不要凭据。
+
+**OpenRouter** 没有预设，所以要给它 URL。`openai` 是默认方言，也正是 OpenRouter 所讲的，
+因此不需要 `--dialect`：
+
+```bash
+OPENROUTER_KEY=sk-or-v1-...
+lmrelay provider add openrouter $OPENROUTER_KEY --base-url https://openrouter.ai/api
+```
+
+**OpenAI** 有预设，所以 URL、方言和头部形态都随名字一起来：
+
+```bash
+OPENAI_KEY=sk-...
+lmrelay provider add openai $OPENAI_KEY
+```
+
+**Gemini** 讲 OpenAI 方言，但走它自己的路径，不在 `/v1` 之下。因此基础 URL 是裸主机，
+`/v1beta/openai` 由客户端携带：
+
+```bash
+GEMINI_KEY=AIza...
+lmrelay provider add gemini $GEMINI_KEY --base-url https://generativelanguage.googleapis.com
+```
+
+**Claude** 用的是 `anthropic` 预设，而预设正是关键：它发送 `x-api-key` 和
+`anthropic-version`，那个 API 就是靠这两个来认证的。自取的名字会改为拿到默认的
+`Authorization: Bearer`，而 `--header` 的值是按字面取的，所以写在那里的 `{token}` 会作为这
+七个字符发出去，而不是密钥：
+
+```bash
+CLAUDE_KEY=sk-ant-...
+lmrelay provider add anthropic $CLAUDE_KEY
+```
+
+然后回读中继真正会使用的内容，除非你另外要求，密钥都是打码的：
+
+```bash
+lmrelay provider list
+```
+
 ### 选择上游
 
 当且仅当第一个路径段与 `[upstream]` 中的某个键完全一致时，它才用于选择上游。否则由
@@ -185,6 +242,8 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
+POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
 
 因此客户端只需记住一次端口，把某个客户端改指到另一个服务商只是一行的事：
@@ -194,8 +253,10 @@ from openai import OpenAI
 from anthropic import Anthropic
 
 OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
+OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
-Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)
+Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 
 ```bash
