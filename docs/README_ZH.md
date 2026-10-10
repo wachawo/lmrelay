@@ -109,13 +109,19 @@ state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
 limits       total 10/30m, 2 at once
-autostart    systemd: enabled, active
+autostart    systemd user unit: enabled, active
 ```
 
 `enable` 在 Linux 上注册一个 systemd `--user` 单元，在 macOS 上注册一个 launchd
 agent，然后把它启动起来。此后 `stop`、`restart` 和 `reload` 都走该管理器而不是
 pidfile，两者因此不会对进程归谁管产生分歧。在两种管理器都没有的 POSIX 机器上，用
 `lmrelay serve` 以后台方式运行中继。
+
+用户单元只在该用户登录期间运行。在没有登录会话的服务器上，只有开启 linger
+（`sudo loginctl enable-linger $USER`）才会在开机时启动；linger 关闭时，`enable` 和
+`status` 会给出警告。`lmrelay enable --system` 改为安装一个系统单元：它在开机时启动，
+以你的用户身份运行，并在存在系统 `ollama.service` 时排在其后启动。没有 root 时，它会
+打印单元内容以及安装它所需的 `sudo` 命令。
 
 ### 限制一个调用方能要多少
 
@@ -151,7 +157,8 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay status` | 正在运行什么、在哪里运行、用了哪些上游 |
 | `lmrelay version` | 打印版本号 |
 | `lmrelay enable` | 登录时启动，并立即启动 |
-| `lmrelay disable` | 撤销 `enable` |
+| `lmrelay enable --system` | 开机时以系统单元启动 |
+| `lmrelay disable [--system]` | 撤销 `enable` |
 | `lmrelay auth true\|false` | 要求调用方出示凭据，或不要求 |
 | `lmrelay token gen [--label L]` | 生成一个令牌并打印一次 |
 | `lmrelay token add TOKEN [--label L]` | 注册一个你自己选定的令牌 |

@@ -18,9 +18,11 @@ import pytest
 from starlette.testclient import TestClient
 
 # Local imports
+from lmrelay import service
 from lmrelay.cli import build_parser
 from lmrelay.config import CONFIG_ENV_VAR
 from lmrelay.logging_setup import LOG_DATEFMT, LOG_FORMAT
+from lmrelay.service import SYSTEMD_UNIT_NAME
 from lmrelay.state import STATE_NAME, CallerToken, RelayState, save_state
 
 TOKEN = "caller-token-value"
@@ -97,6 +99,9 @@ def isolated_home(tmp_path, monkeypatch):
     for name in [name for name in os.environ if name.startswith(ENV_PREFIX)]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    # A system unit on the developer's machine would otherwise route every
+    # process-control test through it.
+    monkeypatch.setattr(service, "SYSTEM_UNIT_PATH", tmp_path / "system" / SYSTEMD_UNIT_NAME)
 
 
 def write_config(path, body: str) -> Path:

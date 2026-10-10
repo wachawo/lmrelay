@@ -59,8 +59,17 @@ from lmrelay.service import (
     detect_manager,
     disable_autostart,
     enable_autostart,
+    install_system_unit,
+    linger_warning,
+    remove_system_unit,
     run_service_command,
+    running_as_root,
     service_is_active,
+    system_install_commands,
+    system_removal_commands,
+    system_unit_for,
+    systemctl,
+    systemd_scope,
 )
 from lmrelay.state import (
     DIALECTS,
@@ -113,8 +122,14 @@ def service_control(action: str, config_path: Path) -> str:
     about who owns the relay, and the next Restart=on-failure would undo it.
     """
     if detect_manager() == "systemd":
-        run_service_command(["systemctl", "--user", action, SYSTEMD_UNIT_NAME])
-        return f"lmrelay: {action} via systemd."
+        scope = systemd_scope()
+        if action == "reload" and scope == "system":
+            # A signal to the process, which runs as this user, rather than
+            # `systemctl reload`, which would need root for the same SIGHUP.
+            reload_daemon(config_path)
+            return "lmrelay: signalled the systemd-managed process to re-read its config (SIGHUP)."
+        run_service_command([*systemctl(scope), action, SYSTEMD_UNIT_NAME])
+        return f"lmrelay: {action} via systemd ({scope} unit)."
     if action == "reload":
         # launchd has no reload verb, and it is the same process either way.
         reload_daemon(config_path)
@@ -162,11 +177,14 @@ def describe_autostart(status: dict) -> str:
     """Render autostart_status() as the one line the status block shows."""
     if status["manager"] == "none":
         return "unavailable on this platform"
+    manager = status["manager"]
+    if "scope" in status:
+        manager = f"{manager} {status['scope']} unit"
     if not status["installed"]:
-        return f"{status['manager']}: not installed"
+        return f"{manager}: not installed"
     enabled = "enabled" if status["enabled"] else "disabled"
     active = "active" if status["active"] else "inactive"
-    return f"{status['manager']}: {enabled}, {active}"
+    return f"{manager}: {enabled}, {active}"
 
 
 def save_new_token(state: RelayState, record: CallerToken) -> None:
@@ -308,6 +326,7 @@ def show_status(args: argparse.Namespace) -> None:
     setup_logging(plain=True)
     config = load_config()
     info = daemon_status(config)
+    autostart = autostart_status()
 
     if info["running"]:
         health = "healthy" if info["healthy"] else "not responding"
@@ -328,10 +347,13 @@ def show_status(args: argparse.Namespace) -> None:
         # What is actually enforced, which was otherwise visible only by
         # exporting the whole configuration and reading the bundle.
         ("limits", describe_limits(config.limits)),
-        ("autostart", describe_autostart(autostart_status())),
+        ("autostart", describe_autostart(autostart)),
     ]
     for label, value in rows:
         logger.info(f"{label:<{STATUS_LABEL_WIDTH}} {value}")
+    warning = linger_warning() if autostart["installed"] else None
+    if warning:
+        logger.warning(warning)
 
 
 def show_version(unused_args: argparse.Namespace) -> None:
@@ -347,12 +369,43 @@ def enable_service(args: argparse.Namespace) -> None:
     config = load_config()
     # A unit runs from an unknown working directory, so the path it names has to
     # be absolute even when the operator typed a relative one.
-    logger.info(enable_autostart(config.config_path.resolve()))
+    config_path = config.config_path.resolve()
+    if args.system:
+        enable_system_service(config_path)
+        return
+    logger.info(enable_autostart(config_path))
+    warning = linger_warning()
+    if warning:
+        logger.warning(warning)
 
 
-def disable_service(unused_args: argparse.Namespace) -> None:
+def enable_system_service(config_path: Path) -> None:
+    """Install the system unit as root, or print it and the commands that install it.
+
+    The unit goes to standard output and every word about it to stderr, so
+    the printed command can pipe this same invocation into `sudo tee`.
+    """
+    text = system_unit_for(config_path)
+    if running_as_root():
+        logger.info(install_system_unit(text))
+        return
+    sys.stdout.write(text)
+    logger.info("Installing a system unit needs root. Run:")
+    for command in system_install_commands(config_path):
+        logger.info(f"  {command}")
+
+
+def disable_service(args: argparse.Namespace) -> None:
     """Unregister the relay from the platform's service manager and stop it."""
-    logger.info(disable_autostart())
+    if not args.system:
+        logger.info(disable_autostart())
+        return
+    if running_as_root() or systemd_scope() != "system":
+        logger.info(remove_system_unit())
+        return
+    logger.info("Removing a system unit needs root. Run:")
+    for command in system_removal_commands():
+        logger.info(f"  {command}")
 
 
 def acceptable_token_count(config_path: Path, state: RelayState) -> int:
@@ -937,11 +990,18 @@ def build_parser() -> argparse.ArgumentParser:
     version_parser = subparsers.add_parser("version", help="print the version")
     version_parser.set_defaults(handler=show_version)
 
-    enable_parser = subparsers.add_parser("enable", help="start the relay at login")
+    enable_parser = subparsers.add_parser("enable", help="start the relay automatically")
+    enable_parser.add_argument(
+        "--system", action="store_true",
+        help="a system unit that starts at boot, rather than a systemd --user unit",
+    )
     add_config_option(enable_parser)
     enable_parser.set_defaults(handler=enable_service)
 
-    disable_parser = subparsers.add_parser("disable", help="stop starting the relay at login")
+    disable_parser = subparsers.add_parser("disable", help="undo 'lmrelay enable'")
+    disable_parser.add_argument(
+        "--system", action="store_true", help="remove the system unit 'enable --system' installed"
+    )
     disable_parser.set_defaults(handler=disable_service)
 
     auth_parser = subparsers.add_parser("auth", help="turn caller authentication on or off")

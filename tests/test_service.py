@@ -3,9 +3,9 @@
 """Unit and plist contents, and the manager calls, without a service manager."""
 
 import configparser
+import os
 import plistlib
 import subprocess
-import sys
 
 import pytest
 
@@ -14,15 +14,21 @@ from lmrelay import service
 from lmrelay.errors import LmrelayError
 from lmrelay.service import (
     LAUNCHD_LABEL,
+    OLLAMA_UNIT_NAME,
     SERVICE_ENV_VAR,
     SYSTEMD_UNIT_NAME,
     autostart_status,
     detect_manager,
     disable_autostart,
     enable_autostart,
+    install_system_unit,
     launchd_plist_text,
+    linger_warning,
     relay_executable,
+    remove_system_unit,
     service_is_active,
+    system_unit_for,
+    system_unit_text,
     systemd_unit_text,
 )
 
@@ -57,11 +63,25 @@ def recording_run(calls, returncode: int = 0, stderr: str = ""):
     return run
 
 
-def systemctl_run(results: dict):
-    """Answer each systemctl verb with the return code the test chose."""
+def systemctl_run(results: dict, main_pid: str = "1", calls: list | None = None):
+    """Answer each systemctl verb with the return code the test chose, and
+    `show -p MainPID` with the pid the test chose."""
     def run(argv, **unused_kwargs):
+        if calls is not None:
+            calls.append(argv)
+        if "show" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{main_pid}\n", stderr="")
         verb = next(word for word in argv if word in results)
         return subprocess.CompletedProcess(argv, results[verb], stdout="", stderr="")
+
+    return run
+
+
+def loginctl_run(returncode: int, stdout: str):
+    """Answer `loginctl show-user` the way logind would."""
+    def run(argv, **unused_kwargs):
+        assert argv[0] == "loginctl", argv
+        return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
 
     return run
 
@@ -74,6 +94,15 @@ def systemd_unit(tmp_path, monkeypatch):
     unit = tmp_path / SYSTEMD_UNIT_NAME
     monkeypatch.setattr(service, "SYSTEMD_UNIT_PATH", unit)
     return unit
+
+
+@pytest.fixture
+def system_unit(systemd_unit):
+    """Where a system unit goes on this test's machine; conftest keeps it in
+    tmp_path. The directory exists, as /etc/systemd/system does."""
+    path = service.SYSTEM_UNIT_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @pytest.fixture
@@ -119,6 +148,54 @@ class TestTheSystemdUnit:
         and refuse the port to itself. Without this the unit never serves a
         request: it fails, is restarted, and reaches the start limit."""
         assert self.parsed(tmp_path)["Service"]["Environment"] == f"{SERVICE_ENV_VAR}=1"
+
+    def test_a_start_that_keeps_failing_gives_up(self, tmp_path):
+        """RestartSec=2 alone restarted a refused start every two seconds for
+        days: one host counted 60,155 restarts."""
+        unit = self.parsed(tmp_path)["Unit"]
+        assert (unit["StartLimitIntervalSec"], unit["StartLimitBurst"]) == ("60", "5")
+
+    def test_it_does_not_order_itself_after_a_target_a_user_manager_lacks(self, tmp_path):
+        assert "After" not in self.parsed(tmp_path)["Unit"]
+
+
+class TestTheSystemUnit:
+    """`enable --system`: /etc/systemd/system, started at boot as the operator."""
+
+    def parsed(self, tmp_path, after_ollama: bool = False):
+        return parse_unit(system_unit_text(
+            EXECUTABLE, tmp_path / "lmrelay.toml", "relay", "staff", after_ollama
+        ))
+
+    def test_it_is_a_unit_file_that_parses(self, tmp_path):
+        assert self.parsed(tmp_path).sections() == ["Unit", "Service", "Install"]
+
+    def test_it_starts_at_boot_rather_than_at_login(self, tmp_path):
+        assert self.parsed(tmp_path)["Install"]["WantedBy"] == "multi-user.target"
+
+    def test_it_runs_as_the_operator_rather_than_as_root(self, tmp_path):
+        """The config, the state and the pidfile are the operator's files."""
+        unit = self.parsed(tmp_path)["Service"]
+        assert (unit["User"], unit["Group"]) == ("relay", "staff")
+
+    def test_it_waits_for_the_network(self, tmp_path):
+        unit = self.parsed(tmp_path)["Unit"]
+        assert unit["Wants"] == "network-online.target"
+        assert unit["After"] == "network-online.target"
+
+    def test_and_for_a_system_ollama_when_there_is_one(self, tmp_path):
+        """The one ordering a user unit cannot express."""
+        unit = self.parsed(tmp_path, after_ollama=True)["Unit"]
+        assert unit["After"] == f"network-online.target {OLLAMA_UNIT_NAME}"
+
+    def test_it_runs_the_relay_with_its_config_and_says_it_is_the_unit(self, tmp_path):
+        unit = self.parsed(tmp_path)["Service"]
+        assert unit["ExecStart"] == f"{EXECUTABLE} run --config {tmp_path / 'lmrelay.toml'}"
+        assert unit["Environment"] == f"{SERVICE_ENV_VAR}=1"
+
+    def test_a_start_that_keeps_failing_gives_up(self, tmp_path):
+        unit = self.parsed(tmp_path)["Unit"]
+        assert (unit["StartLimitIntervalSec"], unit["StartLimitBurst"]) == ("60", "5")
 
 
 class TestTheLaunchdPlist:
@@ -194,14 +271,29 @@ class TestDetectingTheManager:
 class TestFindingTheExecutable:
     """What the unit file will call, hours later, with a different $PATH."""
 
-    def test_the_installed_entry_point_is_used(self, monkeypatch):
-        monkeypatch.setattr(service.shutil, "which", lambda name: EXECUTABLE)
-        assert relay_executable() == EXECUTABLE
+    def interpreter_in(self, monkeypatch, directory):
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(service.sys, "executable", str(directory / "python"))
 
-    def test_and_the_fallback_is_still_an_absolute_path(self, monkeypatch):
+    def test_the_entry_point_beside_the_running_interpreter_is_used(self, tmp_path, monkeypatch):
+        bin_dir = tmp_path / "venv" / "bin"
+        self.interpreter_in(monkeypatch, bin_dir)
+        entry_point = bin_dir / "lmrelay"
+        entry_point.write_text("#!/bin/sh\n", encoding="utf-8")
+        entry_point.chmod(0o755)
+        assert relay_executable() == str(entry_point)
+
+    def test_rather_than_whichever_install_is_first_on_path(self, tmp_path, monkeypatch):
+        """With two installs on PATH, `which` named the other one, and the unit
+        ran a relay the operator had not configured."""
+        self.interpreter_in(monkeypatch, tmp_path / "venv" / "bin")
+        monkeypatch.setattr(service.shutil, "which", lambda name: "/usr/local/bin/lmrelay")
+        assert "/usr/local/bin/lmrelay" not in relay_executable()
+
+    def test_and_without_an_entry_point_it_is_this_interpreter_with_m(self, tmp_path, monkeypatch):
         """A unit file cannot depend on $PATH at boot."""
-        monkeypatch.setattr(service.shutil, "which", lambda name: None)
-        assert relay_executable().startswith(sys.executable)
+        self.interpreter_in(monkeypatch, tmp_path / "bin")
+        assert relay_executable() == f"{tmp_path / 'bin' / 'python'} -m lmrelay"
 
 
 class TestRegisteringForAutostart:
@@ -301,6 +393,62 @@ class TestRegisteringForAutostart:
     def test_and_an_agent_that_was_never_written_is_nothing_to_disable(self, launchd_agent):
         assert "nothing to disable" in disable_autostart()
 
+    def test_a_user_unit_is_refused_beside_a_system_one(self, tmp_path, system_unit):
+        """Two units of one relay fight over the pidfile and the port."""
+        system_unit.write_text("[Unit]\n", encoding="utf-8")
+        with pytest.raises(LmrelayError, match="system unit is already installed"):
+            enable_autostart(tmp_path / "lmrelay.toml")
+
+    def test_disabling_the_user_unit_points_at_the_system_one(self, system_unit):
+        system_unit.write_text("[Unit]\n", encoding="utf-8")
+        assert "lmrelay disable --system" in disable_autostart()
+
+
+class TestRegisteringASystemUnit:
+    """`enable --system` and `disable --system`, without touching /etc."""
+
+    def test_it_is_refused_beside_a_user_unit(self, tmp_path, systemd_unit):
+        systemd_unit.write_text("[Unit]\n", encoding="utf-8")
+        with pytest.raises(LmrelayError, match="lmrelay disable"):
+            system_unit_for(tmp_path / "lmrelay.toml")
+
+    def test_and_on_a_machine_without_systemd(self, tmp_path, launchd_agent):
+        with pytest.raises(LmrelayError, match="needs systemd"):
+            system_unit_for(tmp_path / "lmrelay.toml")
+
+    def test_it_runs_as_whoever_asked_and_after_ollama_when_it_exists(
+        self, tmp_path, monkeypatch, systemd_unit
+    ):
+        monkeypatch.setattr(service, "unit_owner", lambda: ("relay", "staff"))
+        monkeypatch.setattr(service.subprocess, "run", systemctl_run({"cat": 0}))
+        unit = parse_unit(system_unit_for(tmp_path / "lmrelay.toml"))
+        assert unit["Service"]["User"] == "relay"
+        assert OLLAMA_UNIT_NAME in unit["Unit"]["After"]
+
+    def test_installing_it_talks_to_the_system_manager(self, monkeypatch, system_unit):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(service.subprocess, "run", recording_run(calls))
+        install_system_unit("[Unit]\n")
+        assert system_unit.read_text(encoding="utf-8") == "[Unit]\n"
+        assert calls == [
+            ["systemctl", "daemon-reload"],
+            ["systemctl", "enable", "--now", SYSTEMD_UNIT_NAME],
+        ]
+
+    def test_removing_it_stops_it_before_the_file_goes(self, monkeypatch, system_unit):
+        system_unit.write_text("[Unit]\n", encoding="utf-8")
+        calls: list[list[str]] = []
+        monkeypatch.setattr(service.subprocess, "run", recording_run(calls))
+        remove_system_unit()
+        assert not system_unit.exists()
+        assert calls == [
+            ["systemctl", "disable", "--now", SYSTEMD_UNIT_NAME],
+            ["systemctl", "daemon-reload"],
+        ]
+
+    def test_and_a_system_unit_that_was_never_written_is_nothing_to_remove(self, system_unit):
+        assert "nothing to disable" in remove_system_unit()
+
 
 class TestReportingAutostart:
     """What the last line of `lmrelay status` is made of."""
@@ -345,6 +493,40 @@ class TestReportingAutostart:
         )
         assert service_is_active() is False
 
+    def test_a_system_unit_is_asked_about_through_the_system_manager(
+        self, monkeypatch, system_unit
+    ):
+        system_unit.write_text("[Unit]\n", encoding="utf-8")
+        calls: list[list[str]] = []
+        monkeypatch.setattr(
+            service.subprocess, "run",
+            systemctl_run({"is-enabled": 0, "is-active": 0}, calls=calls),
+        )
+        status = autostart_status()
+        assert (status["scope"], status["installed"], status["active"]) == ("system", True, True)
+        assert all("--user" not in argv for argv in calls) and calls
+
+    def test_and_it_is_what_the_cli_delegates_to(self, monkeypatch, system_unit):
+        """A hand-written system unit used to be invisible: `stop` signalled the
+        pid behind systemd's back, and Restart=on-failure left it down."""
+        system_unit.write_text("[Unit]\n", encoding="utf-8")
+        monkeypatch.setattr(
+            service.subprocess, "run", systemctl_run({"is-enabled": 0, "is-active": 0})
+        )
+        assert service_is_active() is True
+
+    def test_but_not_from_inside_its_main_process_even_without_the_variable(
+        self, monkeypatch, system_unit
+    ):
+        """A unit written by hand sets no LMRELAY_SERVICE, and its `lmrelay run`
+        would otherwise refuse to start because its own unit is active."""
+        system_unit.write_text("[Unit]\n", encoding="utf-8")
+        monkeypatch.setattr(
+            service.subprocess, "run",
+            systemctl_run({"is-enabled": 0, "is-active": 0}, main_pid=str(os.getpid())),
+        )
+        assert service_is_active() is False
+
     def test_under_launchd_one_probe_answers_for_enabled_and_active_alike(
         self, monkeypatch, launchd_agent
     ):
@@ -356,6 +538,35 @@ class TestReportingAutostart:
         status = autostart_status()
         assert status["enabled"] is True and status["active"] is True
         assert calls == [["launchctl", "list", LAUNCHD_LABEL]]
+
+
+class TestLinger:
+    """A user unit without linger starts at login and stops after the last
+    session ends, so it is not autostart on a headless server."""
+
+    def with_loginctl(self, monkeypatch, returncode: int, stdout: str):
+        monkeypatch.setattr(service.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(service.subprocess, "run", loginctl_run(returncode, stdout))
+
+    def test_linger_off_is_warned_about_with_both_ways_out(self, monkeypatch, systemd_unit):
+        self.with_loginctl(monkeypatch, 0, "no\n")
+        warning = linger_warning()
+        assert "does not start it at boot" in warning
+        assert "enable-linger" in warning and "lmrelay enable --system" in warning
+
+    def test_linger_on_is_not(self, monkeypatch, systemd_unit):
+        self.with_loginctl(monkeypatch, 0, "yes\n")
+        assert linger_warning() is None
+
+    def test_nor_is_a_logind_that_cannot_answer(self, monkeypatch, systemd_unit):
+        """A container with no bus: a warning there would be a guess."""
+        self.with_loginctl(monkeypatch, 1, "")
+        assert linger_warning() is None
+
+    def test_nor_is_a_system_unit_which_needs_no_linger(self, monkeypatch, system_unit):
+        system_unit.write_text("[Unit]\n", encoding="utf-8")
+        self.with_loginctl(monkeypatch, 0, "no\n")
+        assert linger_warning() is None
 
 
 def main():

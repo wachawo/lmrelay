@@ -431,6 +431,86 @@ class TestProcessControlWithoutAManager:
             run_command(["disable"])
         assert "autostart disabled" in caplog.text
 
+    def test_enable_warns_when_the_user_unit_will_not_start_at_boot(
+        self, config_path, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(cli, "enable_autostart", lambda path: "ok")
+        monkeypatch.setattr(cli, "linger_warning", lambda: "lmrelay: linger is off for u")
+        with caplog.at_level(logging.WARNING):
+            run_command(["enable", "--config", str(config_path)])
+        assert "linger is off" in caplog.text
+
+
+class TestASystemUnit:
+    """`enable --system` and `disable --system` from the command line."""
+
+    @pytest.fixture
+    def systemd(self, monkeypatch):
+        """A systemd machine, a fixed unit owner, and no ollama.service."""
+        monkeypatch.setattr(service, "detect_manager", lambda: "systemd")
+        monkeypatch.setattr(service, "unit_owner", lambda: ("relay", "staff"))
+
+    def test_without_root_it_prints_the_unit_and_how_to_install_it(
+        self, config_path, systemd, monkeypatch, capsys, caplog
+    ):
+        """The unit alone on stdout, so the printed command can pipe this same
+        invocation into `sudo tee`; everything said about it goes to the log."""
+        monkeypatch.setattr(cli, "running_as_root", lambda: False)
+        with caplog.at_level(logging.INFO):
+            run_command(["enable", "--system", "--config", str(config_path)])
+        printed = capsys.readouterr().out
+        assert printed.startswith("[Unit]\n") and "User=relay" in printed
+        assert "Run:" not in printed
+        assert f"--config {config_path.resolve()} | sudo tee" in caplog.text
+        assert "enable --now" in caplog.text
+        assert not service.SYSTEM_UNIT_PATH.exists()
+
+    def test_as_root_it_installs_the_unit(self, config_path, systemd, monkeypatch):
+        installed: list[str] = []
+        monkeypatch.setattr(cli, "running_as_root", lambda: True)
+        monkeypatch.setattr(cli, "install_system_unit", lambda text: installed.append(text) or "ok")
+        run_command(["enable", "--system", "--config", str(config_path)])
+        assert len(installed) == 1 and f"--config {config_path.resolve()}" in installed[0]
+
+    def test_disabling_it_without_root_prints_how(self, systemd, monkeypatch, caplog):
+        unit = service.SYSTEM_UNIT_PATH
+        unit.parent.mkdir(parents=True)
+        unit.write_text("[Unit]\n", encoding="utf-8")
+        monkeypatch.setattr(cli, "running_as_root", lambda: False)
+        with caplog.at_level(logging.INFO):
+            run_command(["disable", "--system"])
+        assert f"sudo rm {unit}" in caplog.text
+        assert unit.exists()
+
+    def test_stop_goes_to_the_system_manager(self, config_path, systemd, monkeypatch):
+        unit = service.SYSTEM_UNIT_PATH
+        unit.parent.mkdir(parents=True)
+        unit.write_text("[Unit]\n", encoding="utf-8")
+        calls: list[list[str]] = []
+        monkeypatch.setattr(cli, "detect_manager", lambda: "systemd")
+        monkeypatch.setattr(cli, "service_is_active", lambda: True)
+        monkeypatch.setattr(
+            service.subprocess, "run",
+            lambda argv, **unused: calls.append(argv) or subprocess.CompletedProcess(argv, 0),
+        )
+        run_command(["stop", "--config", str(config_path)])
+        assert calls == [["systemctl", "stop", SYSTEMD_UNIT_NAME]]
+
+    def test_but_reload_signals_the_process_rather_than_asking_for_root(
+        self, config_path, systemd, monkeypatch
+    ):
+        """`systemctl reload` of a system unit needs root for the same SIGHUP
+        the operator may send to their own process."""
+        unit = service.SYSTEM_UNIT_PATH
+        unit.parent.mkdir(parents=True)
+        unit.write_text("[Unit]\n", encoding="utf-8")
+        signalled: list = []
+        monkeypatch.setattr(cli, "detect_manager", lambda: "systemd")
+        monkeypatch.setattr(cli, "service_is_active", lambda: True)
+        monkeypatch.setattr(cli, "reload_daemon", lambda path: signalled.append(path) or True)
+        run_command(["reload", "--config", str(config_path)])
+        assert signalled
+
 
 class TestInit:
     """The one command that writes into $HOME, kept out of the developer's."""

@@ -111,13 +111,18 @@ state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
 limits       total 10/30m, 2 at once
-autostart    systemd: enabled, active
+autostart    systemd user unit: enabled, active
 ```
 
 `enable`은 Linux에서는 systemd `--user` 유닛을, macOS에서는 launchd 에이전트를 등록한 뒤 시작합니다.
 그다음부터 `stop`, `restart`, `reload`는 pidfile이 아니라 그 관리자를 거치므로, 둘이 프로세스의 주인을
 두고 어긋날 수 없습니다. 두 관리자가 모두 없는 POSIX 환경에서는 `lmrelay serve`가 릴레이를 분리
 실행합니다.
+
+사용자 유닛은 그 사용자가 로그인해 있는 동안에만 동작합니다. 로그인이 없는 서버에서는 linger(`sudo loginctl enable-linger $USER`)가
+켜져 있어야 부팅 때 시작되며, linger가 꺼져 있으면 `enable`과 `status`가 경고합니다. `lmrelay enable --system`은 대신 시스템
+유닛을 설치합니다. 부팅 때 시작되고, 여러분의 사용자로 실행되며, 시스템 `ollama.service`가 있으면 그 뒤에 시작됩니다. root가 아니면 유닛과 그것을
+설치하는 `sudo` 명령을 출력합니다.
 
 ### 호출자가 요구할 수 있는 양 제한하기
 
@@ -153,7 +158,8 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay status` | 무엇이 어디서 어떤 업스트림으로 실행 중인지 |
 | `lmrelay version` | 버전을 출력 |
 | `lmrelay enable` | 로그인할 때 시작하고, 지금도 시작합니다 |
-| `lmrelay disable` | `enable`을 되돌립니다 |
+| `lmrelay enable --system` | 부팅할 때 시스템 유닛으로 시작합니다 |
+| `lmrelay disable [--system]` | `enable`을 되돌립니다 |
 | `lmrelay auth true\|false` | 호출자 자격 증명을 요구하거나, 요구하지 않습니다 |
 | `lmrelay token gen [--label L]` | 토큰을 발급하고 한 번만 출력합니다 |
 | `lmrelay token add TOKEN [--label L]` | 직접 고른 토큰을 등록합니다 |
