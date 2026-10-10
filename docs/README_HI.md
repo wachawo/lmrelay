@@ -116,13 +116,19 @@ state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
 limits       total 10/30m, 2 at once
-autostart    systemd: enabled, active
+autostart    systemd user unit: enabled, active
 ```
 
 `enable` Linux पर systemd `--user` unit या macOS पर launchd agent रजिस्टर करती है, फिर उसे शुरू
 करती है। उसके बाद `stop`, `restart` और `reload` pidfile के बजाय उसी manager से होकर जाती हैं,
 इसलिए दोनों के बीच इस बात पर मतभेद हो ही नहीं सकता कि process किसका है। जिस POSIX मशीन पर इनमें
 से कोई manager नहीं है, वहाँ `lmrelay serve` relay को detached चलाती है।
+
+user unit तभी तक चलती है जब तक उसका user लॉग इन है। बिना login वाले सर्वर पर वह boot पर तभी
+शुरू होती है जब linger चालू हो, `sudo loginctl enable-linger $USER`, और linger बंद होने पर
+`enable` और `status` चेतावनी देते हैं। `lmrelay enable --system` इसकी जगह एक system unit लगाती
+है: वह boot पर शुरू होती है, आपके user के रूप में चलती है, और system `ollama.service` हो तो
+उसके बाद शुरू होती है। root के बिना यह unit और उसे इंस्टॉल करने वाले `sudo` कमांड छाप देती है।
 
 ### एक caller कितना माँग सकता है
 
@@ -166,7 +172,8 @@ command `lmrelay.toml` में लिखती है और बाकी फ�
 | `lmrelay status` | क्या चल रहा है, कहाँ, किन upstreams के साथ |
 | `lmrelay version` | संस्करण दिखाएँ |
 | `lmrelay enable` | login पर शुरू, और अभी शुरू |
-| `lmrelay disable` | `enable` को पलटती है |
+| `lmrelay enable --system` | boot पर शुरू, system unit के रूप में |
+| `lmrelay disable [--system]` | `enable` को पलटती है |
 | `lmrelay auth true\|false` | caller credential माँगे, या न माँगे |
 | `lmrelay token gen [--label L]` | token बनाकर उसे एक बार छापती है |
 | `lmrelay token add TOKEN [--label L]` | आपका ख़ुद चुना हुआ token रजिस्टर करती है |

@@ -116,13 +116,20 @@ state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
 limits       total 10/30m, 2 at once
-autostart    systemd: enabled, active
+autostart    systemd user unit: enabled, active
 ```
 
 `enable` регистрирует юнит systemd `--user` на Linux или агент launchd на macOS и сразу его
 запускает. Дальше `stop`, `restart` и `reload` идут через этот менеджер, а не через pid-файл,
 поэтому они не могут разойтись в том, кому принадлежит процесс. На POSIX-машине, где нет ни
 того, ни другого менеджера, `lmrelay serve` запускает релей демоном.
+
+Пользовательский юнит работает, пока пользователь в системе. На сервере без входа он стартует
+при загрузке только с linger, `sudo loginctl enable-linger $USER`, и `enable` со `status`
+предупреждают, если linger выключен. `lmrelay enable --system` ставит вместо него системный
+юнит: он стартует при загрузке, работает от вашего пользователя и запускается после системного
+`ollama.service`, если тот есть. Без root команда печатает юнит и команды `sudo`, которые его
+устанавливают.
 
 ### Сколько может просить один вызывающий
 
@@ -166,7 +173,8 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay status` | что запущено, где и с какими апстримами |
 | `lmrelay version` | показать версию |
 | `lmrelay enable` | запускать при входе в систему и запустить сейчас |
-| `lmrelay disable` | отменить `enable` |
+| `lmrelay enable --system` | запускать при загрузке системным юнитом |
+| `lmrelay disable [--system]` | отменить `enable` |
 | `lmrelay auth true\|false` | требовать учётные данные от клиента или не требовать |
 | `lmrelay token gen [--label L]` | выпустить токен и напечатать его один раз |
 | `lmrelay token add TOKEN [--label L]` | зарегистрировать токен, выбранный вами самими |

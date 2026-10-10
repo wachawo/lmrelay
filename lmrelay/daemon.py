@@ -27,6 +27,9 @@ STOP_TIMEOUT  = 10.0    # seconds to wait for SIGTERM before SIGKILL
 KILL_TIMEOUT  = 5.0     # seconds to wait for the kernel to finish a SIGKILL
 START_TIMEOUT = 10.0    # seconds to wait for a detached child to appear
 POLL_INTERVAL = 0.1
+# How much younger than its pidfile a process may look and still be the one
+# that wrote it: boot time in /proc/stat is whole seconds.
+PID_CLOCK_SLACK = 2.0
 
 # The three [server] keys a reload cannot apply: by the time one arrives the
 # socket is bound and the httpx client is open, and neither can be moved under a
@@ -100,17 +103,44 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+def process_started_at(pid: int) -> float | None:
+    """When a process started, as a Unix time, or None where /proc cannot say."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        boot_line = next(
+            line for line in Path("/proc/stat").read_text(encoding="ascii").splitlines()
+            if line.startswith("btime ")
+        )
+        # The command name in parentheses may hold spaces, so the fields are
+        # counted from after its closing one: starttime is the 22nd overall.
+        start_ticks = int(stat.rpartition(")")[2].split()[19])
+        return int(boot_line.split()[1]) + start_ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
 def read_pid(path: Path) -> int | None:
     """Return the pid of a live relay, or None.
 
     The liveness check belongs here so that one call answers "is a relay
     running" and a stale file behaves exactly like an absent one everywhere.
+
+    A live pid is not enough after an unclean shutdown: early boot pids repeat
+    between boots, so the one in the file often belongs to another daemon by
+    now. A process that started after its pidfile was written cannot be the
+    relay that wrote it.
     """
     try:
         pid = int(path.read_text(encoding="utf-8").splitlines()[0])
+        written = path.stat().st_mtime
     except (OSError, ValueError, IndexError):
         return None
-    return pid if process_alive(pid) else None
+    if not process_alive(pid):
+        return None
+    started = process_started_at(pid)
+    if started is not None and started > written + PID_CLOCK_SLACK:
+        return None
+    return pid
 
 
 def read_bind(path: Path) -> tuple[str, int] | None:

@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`lmrelay enable --system`** writes a systemd system unit, `/etc/systemd/system/lmrelay.service`,
+  that starts at boot with nobody logged in. It runs as the user who asked for it, waits for
+  `network-online.target`, and starts after `ollama.service` when that unit exists. As root it
+  installs and starts the unit; otherwise it prints the unit and the `sudo` commands that install
+  it. `lmrelay disable --system` undoes it.
+- **A linger warning.** `enable` and `status` say when a `--user` unit will not start at boot
+  because linger is off, and name both ways out.
+
 ### Changed
 
+- **`status`, `stop`, `restart` and `reload` drive a system unit** when one is installed, hand-written
+  or generated, instead of falling back to the pidfile. `reload` signals the process directly, so it
+  needs no root. The status line names the kind: `systemd user unit: enabled, active`.
+- **`enable` refuses while the other kind of unit is installed**, so a user unit and a system unit
+  never fight over the pidfile and the port.
+- **The unit runs the install that wrote it**: the entry point beside the running interpreter, or
+  that interpreter with `-m lmrelay`, rather than whichever `lmrelay` is first on PATH.
 - **The README shows how to add each provider**, in every translation: the key into a
   variable, then `lmrelay provider add`. Ollama needs no command, because the shipped config
   already carries it as the default upstream. OpenRouter and Gemini have no preset and take
@@ -20,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pidfile left by an unclean shutdown no longer blocks the next start** on Linux. A process that
+  started after the pidfile was written is not the relay that wrote it, so the file reads as stale.
+- **A start that keeps failing gives up.** The generated units carry `StartLimitIntervalSec=60` and
+  `StartLimitBurst=5`; before, `Restart=on-failure` retried every two seconds indefinitely.
+- **A hand-written unit without `Environment=LMRELAY_SERVICE=1` can start.** `lmrelay run` recognises
+  itself as the unit's main process instead of refusing because its own unit is active.
 - **An empty `[server] host` is warned about as exposed.** It binds every interface, and the
   auth-off warning used to read it as loopback.
 - **A refusal the framework answers, such as a 405 for `TRACE`, writes one access line**, the

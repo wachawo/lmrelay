@@ -24,6 +24,7 @@ from lmrelay.daemon import (
     pid_file,
     probe_health,
     process_alive,
+    process_started_at,
     publish_bind,
     read_bind,
     read_child_pid,
@@ -162,6 +163,18 @@ class TestReadingThePidfile:
     def test_so_does_a_file_of_garbage(self, tmp_path):
         target = tmp_path / PID_NAME
         target.write_text("not-a-pid\n", encoding="utf-8")
+        assert read_pid(target) is None
+
+    @pytest.mark.skipif(process_started_at(os.getpid()) is None, reason="needs /proc")
+    def test_so_does_a_live_pid_younger_than_the_file(self, tmp_path):
+        """After an unclean shutdown the pid in the file often belongs to a
+        daemon that started at the next boot. It cannot have written a file
+        older than itself, and refusing to start because of it looped a unit
+        for days."""
+        target = tmp_path / PID_NAME
+        write_pid(target, os.getpid())
+        before_this_process = process_started_at(os.getpid()) - 3600
+        os.utime(target, (before_this_process, before_this_process))
         assert read_pid(target) is None
 
     def test_and_so_does_one_naming_a_process_that_has_exited(self, tmp_path):

@@ -117,7 +117,7 @@ state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
 limits       total 10/30m, 2 at once
-autostart    systemd: enabled, active
+autostart    systemd user unit: enabled, active
 ```
 
 `enable` registra una unidad systemd `--user` en Linux o un agente launchd en macOS, y luego
@@ -125,6 +125,13 @@ lo arranca. A partir de ahí, `stop`, `restart` y `reload` pasan por ese gestor 
 el pidfile, de modo que los dos no pueden discrepar sobre quién es el dueño del proceso. En
 una máquina POSIX sin ninguno de los dos gestores, `lmrelay serve` ejecuta el relay en
 segundo plano.
+
+Una unidad de usuario funciona mientras su usuario tiene la sesión iniciada. En un servidor sin
+sesiones arranca al encender solo con linger, `sudo loginctl enable-linger $USER`, y `enable` y
+`status` avisan cuando linger está desactivado. `lmrelay enable --system` instala en su lugar
+una unidad de sistema: arranca al encender, se ejecuta como tu usuario y arranca después de un
+`ollama.service` de sistema si existe. Sin root imprime la unidad y los comandos `sudo` que la
+instalan.
 
 ### Limitar lo que un llamante puede pedir
 
@@ -169,7 +176,8 @@ incluidos, y luego avisa a un relay en marcha.
 | `lmrelay status` | qué se está ejecutando, dónde y con qué upstreams |
 | `lmrelay version` | mostrar la versión |
 | `lmrelay enable` | arranca al iniciar sesión, y arranca ahora |
-| `lmrelay disable` | deshace `enable` |
+| `lmrelay enable --system` | arranca al encender, como unidad de sistema |
+| `lmrelay disable [--system]` | deshace `enable` |
 | `lmrelay auth true\|false` | exigir una credencial a quien llama, o no |
 | `lmrelay token gen [--label L]` | acuña un token y lo imprime una sola vez |
 | `lmrelay token add TOKEN [--label L]` | registra un token elegido por ti |

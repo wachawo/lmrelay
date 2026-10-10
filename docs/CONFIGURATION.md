@@ -23,7 +23,7 @@ Four files live in that config's directory:
 | [`lmrelay.toml`](https://github.com/wachawo/lmrelay/blob/main/lmrelay/lmrelay.toml.example) | you | server settings, limits and hand-written upstreams |
 | `state.json` | the CLI | caller tokens, the auth switch, CLI-added providers |
 | `lmrelay.pid` | the relay | the pid, the address it bound, and its `connect_timeout` |
-| `lmrelay.log` | the relay | stdout and stderr of a detached relay |
+| `lmrelay.log` | the relay | stdout and stderr of a detached relay, or of one under launchd. Under systemd the log is the journal: `journalctl --user -u lmrelay` for a user unit, `journalctl -u lmrelay` for a system unit |
 
 The split exists so that the CLI never has to rewrite a file you are editing: your comments
 in `lmrelay.toml` survive forever. State is JSON rather than a second TOML file because it
@@ -927,6 +927,57 @@ runs the relay detached, and on Windows only `lmrelay run` works.
 From then on `stop`, `restart` and `reload` go through that manager instead of the pidfile,
 so the two cannot disagree about who owns the process; each command says which path it took.
 
+### A user unit needs linger to start at boot
+
+A systemd `--user` unit lives in your user manager, which starts when you log in and stops
+shortly after your last session ends. On a desktop that is "start at login". On a headless
+server it means the relay is down after every reboot until somebody logs in, and goes down
+again when they log out. `loginctl enable-linger` keeps the user manager running without a
+session:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+`lmrelay enable` and `lmrelay status` both warn when linger is off. A user manager also
+cannot order a unit after a system service, so a user unit cannot wait for a system
+`ollama.service`.
+
+### A system unit
+
+`lmrelay enable --system` writes `/etc/systemd/system/lmrelay.service` instead. It starts at
+boot with nobody logged in, runs as the user who asked for it (`User=` and `Group=`, also
+under `sudo`), waits for `network-online.target`, and starts after `ollama.service` when
+that unit exists. Run as root, it installs and starts the unit. Run as yourself, it prints
+the unit on standard output and the commands that install it on standard error:
+
+```bash
+lmrelay enable --system --config ~/.lmrelay/lmrelay.toml | sudo tee /etc/systemd/system/lmrelay.service > /dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now lmrelay.service
+```
+
+With a system unit installed, `status` reports it, `stop` and `restart` go to `systemctl`
+for it, and `reload` signals the process directly, since it runs as you and
+`systemctl reload` would need root for the same SIGHUP. `lmrelay disable --system` removes
+it, or prints the `sudo` commands that do. The two kinds never coexist: `enable` refuses
+while the other kind is installed.
+
+A unit written by hand under `/etc/systemd/system/lmrelay.service` is treated the same way.
+It does not need `Environment=LMRELAY_SERVICE=1`: `lmrelay run` recognises itself as the
+unit's main process by asking systemd for its `MainPID`.
+
+### Both units give up on a start that keeps failing
+
+The generated units carry `StartLimitIntervalSec=60` and `StartLimitBurst=5`. Without them,
+`Restart=on-failure` with `RestartSec=2` restarts a start that cannot succeed, a port that
+something else holds say, every two seconds for as long as the host is up.
+
+A pidfile left behind by an unclean shutdown no longer blocks the next start. Pids repeat
+between boots, so the one in the file may now belong to another daemon. On Linux the relay
+compares that process's start time with the pidfile: a process younger than the file cannot
+have written it, and the file is treated as stale.
+
 ## Reload
 
 `lmrelay reload` sends the running relay a SIGHUP, and it re-reads both sources in place:
@@ -1445,8 +1496,10 @@ another version.
 | `lmrelay: no relay appeared within 10s; see <log> for why` | `lmrelay serve`, `restart` | The process is alive but never claimed the pidfile inside the start timeout. | Read `lmrelay.log`. |
 | `lmrelay: pid <N> belongs to another user; stop it as its owner` | `lmrelay stop` | The running relay is another user's process. | Stop it as its owner. The pidfile is left in place rather than removed, which would only hide it. |
 | `lmrelay: pid <N> belongs to another user; reload it as its owner` | `lmrelay reload` | The running relay is another user's process. | Reload it as its owner. |
-| `lmrelay: <argv> failed: <detail>` | `lmrelay stop`, `restart`, `reload` under a manager | A `systemctl --user` or `launchctl` command exited non-zero. | Act on the detail, which is the manager's own words. |
-| `lmrelay: '<argv>' failed with exit <N>: <detail>` | `lmrelay enable`, `disable` | Installing or removing the unit or agent failed. | Act on the detail. A quiet failure here would mean the relay does not come back after a reboot. |
+| `lmrelay: '<argv>' failed with exit <N>: <detail>` | `lmrelay enable`, `disable`; `stop`, `restart`, `reload` under a manager | A `systemctl` or `launchctl` command exited non-zero: installing or removing the unit or agent, or asking the manager to act. | Act on the detail, which is the manager's own words. For a system unit, `stop` and `restart` may need `sudo`. |
+| `lmrelay: a system unit is already installed at <path>; a user unit beside it would fight it for the pidfile and the port` | `lmrelay enable` | `/etc/systemd/system/lmrelay.service` exists. | Keep the system unit, or remove it with `lmrelay disable --system` first. |
+| `lmrelay: a user unit is installed at <path>; run 'lmrelay disable' first, so the two do not fight for the pidfile and the port` | `lmrelay enable --system` | A `--user` unit exists. | `lmrelay disable`, then `lmrelay enable --system`. |
+| `lmrelay: --system needs systemd; 'lmrelay enable' covers launchd` | `lmrelay enable --system` | This host has no systemd. | Use `lmrelay enable`. |
 
 ### Token and provider errors
 
@@ -1488,6 +1541,7 @@ Logged and then ignored. Nothing is refused and nothing stops.
 | `lmrelay: provider(s) <names> from state.json shadow the [upstream.*] of the same name in <config>` | any command that loads the config | A CLI-added provider is winning over a hand-written table. | Nothing, if that was the intent. Otherwise `lmrelay provider delete <name>`. |
 | `lmrelay: <field> <old> -> <new>, ... in <config> but a reload cannot apply that: the socket is already bound and the client already open; restart to apply` | `lmrelay reload` | `host`, `port` or `connect_timeout` differs from what the running relay bound with, e.g. `lmrelay: port 11435 -> 8080, connect_timeout 10 -> 30 in ...`. | `lmrelay restart`. The fields are named individually, so a changed port does not hide an unchanged timeout, and each carries both values, because the running relay is the only thing that knows what it bound with. |
 | `<error message>; keeping the running config` | relay log, on reload | The re-read config or state did not parse. The relay is still serving the one it already had. | Fix what the message names, then `lmrelay reload` again. |
+| `lmrelay: linger is off for <user>, so systemd stops the relay when your last session ends and does not start it at boot. Run 'sudo loginctl enable-linger <user>', or use 'lmrelay enable --system' instead` | `lmrelay enable`, `lmrelay status` | A `--user` unit is installed and logind reports linger off. | `sudo loginctl enable-linger <user>`, or switch to a [system unit](#a-system-unit). |
 | `lmrelay: pid <N> ignored SIGTERM for 10s; forcing it with SIGKILL` | `lmrelay stop`, `restart` | The relay did not exit on SIGTERM inside the stop timeout. | Nothing: the stop continues. A relay that needs SIGKILL every time is worth reading the log about. |
 | `lmrelay: pid <N> is still there after SIGKILL` | `lmrelay stop`, `restart` | The process survived SIGKILL and the kernel has not finished tearing it down. | Check the process by hand before starting another relay on the same port. |
 | `That was the last token and auth is on, so every request will now be refused. Add a token, or run 'lmrelay auth false'.` | `lmrelay token delete` | The token set is now empty while auth stays on. | Add a token, or run `lmrelay auth false`. |

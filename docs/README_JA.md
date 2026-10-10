@@ -111,13 +111,19 @@ state        /home/u/.lmrelay/state.json
 upstreams    anthropic, ollama, openai (default: ollama)
 auth         on, 2 tokens
 limits       total 10/30m, 2 at once
-autostart    systemd: enabled, active
+autostart    systemd user unit: enabled, active
 ```
 
 `enable` は Linux では systemd の `--user` ユニットを、macOS では launchd エージェントを登録し、
 そのまま起動する。以後 `stop`、`restart`、`reload` は pidfile ではなくそのマネージャを経由するので、
 プロセスの持ち主について両者の言い分が食い違うことはない。どちらのマネージャもない POSIX 環境では、
 `lmrelay serve` がリレーをデタッチして動かす。
+
+ユーザーユニットは、そのユーザーがログインしている間しか動かない。ログインのないサーバーでは
+linger（`sudo loginctl enable-linger $USER`）がなければ起動時に立ち上がらず、linger が無効なら
+`enable` と `status` が警告する。`lmrelay enable --system` は代わりにシステムユニットを入れる。
+起動時に立ち上がり、自分のユーザーで動き、システムの `ollama.service` があればその後に起動する。
+root でなければ、ユニットとそれを入れる `sudo` コマンドを表示する。
 
 ### 呼び出し側が要求できる量を絞る
 
@@ -153,7 +159,8 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 | `lmrelay status` | 何が、どこで、どのアップストリームで動いているか |
 | `lmrelay version` | バージョンを表示する |
 | `lmrelay enable` | ログイン時に起動し、いま起動する |
-| `lmrelay disable` | `enable` を取り消す |
+| `lmrelay enable --system` | 起動時に、システムユニットとして起動する |
+| `lmrelay disable [--system]` | `enable` を取り消す |
 | `lmrelay auth true\|false` | 呼び出し元に資格情報を要求する、またはしない |
 | `lmrelay token gen [--label L]` | トークンを発行し、一度だけ表示する |
 | `lmrelay token add TOKEN [--label L]` | 自分で選んだトークンを登録する |
