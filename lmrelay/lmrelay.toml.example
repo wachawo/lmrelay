@@ -83,7 +83,7 @@ concurrent = 0
 rate       = ""
 
 # Per client address. The only scope that identifies anyone with auth off, and
-# only as trustworthy as whatever sets X-Forwarded-For in front of the relay.
+# X-Forwarded-For is believed only from a proxy on this host (loopback).
 # An address behind NAT is many callers wearing one number, so this limits the
 # office rather than the offender.
 [limits.per_address]

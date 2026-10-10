@@ -25,6 +25,7 @@ from tests.conftest import (
     bearer,
     build_relay,
     config_limits,
+    relay_records,
     relay_with,
     wait_until,
     write_config,
@@ -113,7 +114,7 @@ def limited_by_token(tmp_path, monkeypatch, recorder):
     """The same rate on the credential rather than the address."""
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(per_token='concurrent = 3\nrate = "3/1s"'), auth_enabled=True,
+        config_limits(per_token='concurrent = 3\nrate = "3/1h"'), auth_enabled=True,
     )
 
 
@@ -122,7 +123,7 @@ def limited_in_total(tmp_path, monkeypatch, recorder):
     """The same rate for the whole relay, whoever is asking."""
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(total='concurrent = 3\nrate = "3/1s"'), auth_enabled=True,
+        config_limits(total='concurrent = 3\nrate = "3/1h"'), auth_enabled=True,
     )
 
 
@@ -133,9 +134,9 @@ def limited_everywhere(tmp_path, monkeypatch, recorder):
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
         config_limits(
-            per_token='concurrent = 1\nrate = "1/1s"',
-            per_address='concurrent = 4\nrate = "4/1s"',
-            total='concurrent = 6\nrate = "6/1s"',
+            per_token='concurrent = 1\nrate = "1/1h"',
+            per_address='concurrent = 4\nrate = "4/1h"',
+            total='concurrent = 6\nrate = "6/1h"',
         ),
         auth_enabled=True,
     )
@@ -196,6 +197,15 @@ class TestTheDoor:
         assert "detail" not in body
         assert body["error"].startswith("lmrelay: ")
         assert recorder.requests == []
+
+    def test_and_it_leaves_one_access_line_marked_as_a_refusal(self, authed, caplog):
+        """The handler runs inside the middleware, so its answer returns through
+        the access log. Logging it there as well wrote two lines for one request."""
+        with caplog.at_level(logging.INFO):
+            authed.request("TRACE", "/api/tags")
+        assert [(record.levelname, record.getMessage()) for record in relay_records(caplog)] == [
+            ("WARNING", "testclient TRACE /api/tags -> -: 405 (refused)")
+        ]
 
     @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
     def test_health_is_exempt_by_method_as_well_as_by_path(self, relay, recorder, method):
@@ -469,7 +479,7 @@ class TestHowOftenACallerMayAsk:
             limited.get("/api/tags")
         error = limited.get("/api/tags").json()["error"]
         assert error == (
-            "lmrelay: rate limit exceeded for your address: 3/1s ([limits.per_address])"
+            "lmrelay: rate limit exceeded for your address: 3/1h ([limits.per_address])"
         )
 
     def test_the_token_scope_says_it_is_your_token(self, limited_by_token):
@@ -506,10 +516,10 @@ class TestHowOftenACallerMayAsk:
         """Unlike a slot refusal, this one is computable: it is the time until
         one token has refilled. Whole seconds, because the header takes no
         fraction, and rounded up because rounding down invites a retry that is
-        refused again."""
+        refused again: three an hour refill one every 1200 seconds."""
         for unused in range(3):
             limited.get("/api/tags")
-        assert limited.get("/api/tags").headers["retry-after"] == "1"
+        assert limited.get("/api/tags").headers["retry-after"] == "1200"
 
     def test_a_refused_request_reaches_no_upstream(self, limited, recorder):
         """The limit exists to keep work off the upstream, so nothing is
@@ -604,22 +614,16 @@ class TestPassingEveryScopeOrNone:
     ):
         """Without all-or-nothing charging, a caller refused by one scope still
         drained the others on the way past, and an operator got "I was refused,
-        and now I am rate limited too" with no way to see why."""
-        from lmrelay.app import app
+        and now I am rate limited too" with no way to see why.
 
+        The address scope allows 4 an hour and is asked six times by one token:
+        one served, five refused by the token scope. Charged for the refusals,
+        it would be spent, and the other caller at the same address refused."""
         limited_everywhere.get("/api/tags", headers=bearer(TOKEN))
         for unused in range(5):
             assert limited_everywhere.get(
                 "/api/tags", headers=bearer(TOKEN)
             ).status_code == 429
-        # The address scope allows 4 and has been asked six times; one of those
-        # was served and five were refused by the token scope before this one
-        # was reached, so it must still have three.
-        assert app.state.limiters["per_address"].buckets["addr:testclient"].tokens == 3.0
-
-    def test_and_the_other_caller_is_untouched_by_all_of_it(self, limited_everywhere):
-        for unused in range(6):
-            limited_everywhere.get("/api/tags", headers=bearer(TOKEN))
         assert limited_everywhere.get(
             "/api/tags", headers=bearer(OTHER_TOKEN)
         ).status_code == 200
@@ -701,26 +705,11 @@ class TestHowManyAnswersMayBeOpenAtOnce:
             capped.post("/api/tags")
         assert held.answer.result(timeout=10).content == b"".join(GATED_CHUNKS)
 
-    def test_the_slot_is_still_held_once_the_caller_has_the_headers(self, capped, recorder):
-        """The regression this shape exists to prevent. For a streamed answer
-        the handler returns as soon as the upstream's headers arrive, before a
-        byte of body has been written; a release moved there would free the slot
-        while the answer was still running, and the cap would bound nothing."""
-        from lmrelay.app import app
-
-        with answer_in_flight(capped, recorder):
-            assert app.state.inflight.counts == {TESTCLIENT_KEY: 1}
-
-    def test_and_it_is_given_back_when_the_body_ends(self, capped, recorder):
-        """The entry disappears rather than staying at zero, which is what
-        saves the counter from needing a sweep of its own."""
-        from lmrelay.app import app
-
-        with answer_in_flight(capped, recorder):
-            pass
-        assert app.state.inflight.counts == {}
-
-    def test_so_the_next_request_is_served(self, capped, recorder):
+    def test_the_slot_is_held_until_the_body_ends_and_then_given_back(self, capped, recorder):
+        """For a streamed answer the handler returns as soon as the upstream's
+        headers arrive, before a byte of body has been written; a release moved
+        there would free the slot while the answer was still running, and the
+        cap would bound nothing."""
         with answer_in_flight(capped, recorder):
             assert capped.post("/api/tags").status_code == 429
         assert capped.post("/api/tags").status_code == 200
@@ -811,10 +800,8 @@ class TestGivingTheSlotBackWhenThereIsNoAnswer:
     def test_a_dialect_refusal_costs_no_slot(self, capped, recorder):
         """It is refused before the upstream is touched, so it never took one.
         Counting it would let a mistyped path lock a caller out."""
-        from lmrelay.app import app
-
         assert capped.post("/anthropic/api/chat", json={}).status_code == 400
-        assert app.state.inflight.counts == {}
+        assert capped.post("/api/tags").status_code == 200
 
     def test_and_costs_no_rate_token_either(self, limited, recorder):
         """It used to spend one, because the rate was charged in the middleware
@@ -830,16 +817,8 @@ class TestGivingTheSlotBackWhenThereIsNoAnswer:
         assert [limited.get("/api/tags").status_code for unused in range(3)] == [200] * 3
 
     def test_an_unreachable_upstream_gives_it_back(self, capped, recorder):
-        from lmrelay.app import app
-
-        recorder.raises = httpx.ConnectError("nothing listening")
-        assert capped.post("/api/chat", json={}).status_code == 502
-        assert app.state.inflight.counts == {}
-
-    def test_and_the_caller_is_not_locked_out_by_it(self, capped, recorder):
-        """The behaviour the assertion above stands for: an Ollama that was
-        down for one request must not leave the caller unable to send another
-        once it is up."""
+        """An Ollama that was down for one request must not leave the caller
+        unable to send another once it is up."""
         recorder.raises = httpx.ConnectError("nothing listening")
         assert capped.post("/api/chat", json={}).status_code == 502
         recorder.raises = None
@@ -848,21 +827,19 @@ class TestGivingTheSlotBackWhenThereIsNoAnswer:
     def test_any_other_transport_failure_gives_it_back_too(self, capped, recorder):
         """The second 502 arm. Both of them return rather than raise, so
         neither is covered by the generator that releases at the end of a body."""
-        from lmrelay.app import app
-
         recorder.raises = httpx.ReadError("connection reset")
         assert capped.post("/api/chat", json={}).status_code == 502
-        assert app.state.inflight.counts == {}
+        recorder.raises = None
+        assert capped.post("/api/chat", json={}).status_code == 200
 
     def test_a_stream_that_breaks_part_way_through_gives_it_back(self, capped, recorder):
         """Here the body did start, so the release is the generator's `finally`
         rather than an error arm: the exception leaves through it."""
-        from lmrelay.app import app
-
         recorder.chunks = fails_after_the_first_chunk()
         with pytest.raises(httpx.ReadError):
             capped.post("/api/generate", json={"stream": True})
-        assert app.state.inflight.counts == {}
+        recorder.chunks = None
+        assert capped.post("/api/generate", json={}).status_code == 200
 
     def test_a_response_the_relay_cannot_build_gives_it_back(self, capped, recorder):
         """The one path out that is not an error arm and not the body generator.
@@ -1122,20 +1099,23 @@ class TestReloadingInPlace:
     def test_a_rate_limit_can_be_turned_on_without_a_restart(self, authed, tmp_path):
         from lmrelay.app import app, reload_config
 
-        assert app.state.limiters["per_address"] is None
-        write_config(tmp_path, config_limits(per_address='concurrent = 3\nrate = "3/1s"'))
+        write_config(tmp_path, config_limits(per_address='concurrent = 3\nrate = "3/1h"'))
         reload_config(app)
-        limiter = app.state.limiters["per_address"]
-        assert (limiter.rate, limiter.burst) == (3.0, 3.0)
+        codes = [authed.get("/api/tags").status_code for unused in range(4)]
+        assert codes == [200, 200, 200, 429]
 
     def test_and_off_again(self, authed, tmp_path):
         from lmrelay.app import app, reload_config
 
-        write_config(tmp_path, config_limits(per_address='concurrent = 3\nrate = "3/1s"'))
+        write_config(tmp_path, config_limits(per_address='concurrent = 3\nrate = "3/1h"'))
         reload_config(app)
+        for unused in range(3):
+            authed.get("/api/tags")
+        assert authed.get("/api/tags").status_code == 429
+
         write_config(tmp_path, config_limits(per_address="concurrent = 0"))
         reload_config(app)
-        assert app.state.limiters["per_address"] is None
+        assert authed.get("/api/tags").status_code == 200
 
     def test_an_unrelated_reload_leaves_the_limiter_alone(self, limited, tmp_path):
         """A fresh limiter starts every caller with a full bucket, so rebuilding
@@ -1144,16 +1124,14 @@ class TestReloadingInPlace:
         would be a way to clear the limit."""
         from lmrelay.app import app, reload_config
 
-        before = app.state.limiters["per_address"]
         for unused in range(3):
             limited.get("/api/tags")
         assert limited.get("/api/tags").status_code == 429
 
         write_config(tmp_path, with_setting(
-            config_limits(per_address='concurrent = 3\nrate = "3/1s"'), "log_level", '"INFO"'
+            config_limits(per_address='concurrent = 3\nrate = "3/1h"'), "log_level", '"INFO"'
         ))
         reload_config(app)
-        assert app.state.limiters["per_address"] is before
         assert limited.get("/api/tags").status_code == 429
 
     def test_but_a_changed_number_rebuilds_it(self, limited, tmp_path):
@@ -1161,12 +1139,14 @@ class TestReloadingInPlace:
         bucket holds an allowance measured against the old burst."""
         from lmrelay.app import app, reload_config
 
-        before = app.state.limiters["per_address"]
-        write_config(tmp_path, config_limits(per_address='concurrent = 9\nrate = "9/1s"'))
+        for unused in range(3):
+            limited.get("/api/tags")
+        assert limited.get("/api/tags").status_code == 429
+
+        write_config(tmp_path, config_limits(per_address='concurrent = 9\nrate = "9/1h"'))
         reload_config(app)
-        limiter = app.state.limiters["per_address"]
-        assert limiter is not before
-        assert (limiter.rate, limiter.burst) == (9.0, 9.0)
+        codes = [limited.get("/api/tags").status_code for unused in range(10)]
+        assert codes == [200] * 9 + [429]
 
     def test_and_only_the_scope_whose_number_moved(self, limited, tmp_path, recorder):
         """Three tables, and a caller being limited by one of them has no
@@ -1175,17 +1155,14 @@ class TestReloadingInPlace:
         allowance of whoever was being refused at that moment."""
         from lmrelay.app import app, reload_config
 
-        before = app.state.limiters["per_address"]
         for unused in range(3):
             limited.get("/api/tags")
         assert limited.get("/api/tags").status_code == 429
 
         write_config(tmp_path, config_limits(
-            per_address='concurrent = 3\nrate = "3/1s"', total='concurrent = 50\nrate = "50/1s"'
+            per_address='concurrent = 3\nrate = "3/1h"', total='concurrent = 50\nrate = "50/1h"'
         ))
         reload_config(app)
-        assert app.state.limiters["per_address"] is before
-        assert app.state.limiters["total"] is not None
         assert limited.get("/api/tags").status_code == 429
 
     def test_the_reload_log_names_the_scope_and_both_halves(
@@ -1201,14 +1178,15 @@ class TestReloadingInPlace:
             reload_config(app)
         assert "[limits.total] off -> 20/1m, 20 at once" in caplog.text
 
-    def test_a_changed_cap_is_in_force_without_a_restart(self, authed, tmp_path):
+    def test_a_changed_cap_is_in_force_without_a_restart(self, authed, recorder, tmp_path):
         """Read from the config at every request, like the upstreams and the
         tokens, so a reload is the whole of applying it."""
         from lmrelay.app import app, reload_config
 
-        write_config(tmp_path, config_limits(total="concurrent = 2"))
+        write_config(tmp_path, config_limits(total="concurrent = 1"))
         reload_config(app)
-        assert app.state.config.limits["total"].concurrent == 2
+        with answer_in_flight(authed, recorder):
+            assert authed.post("/api/tags").status_code == 429
 
     def test_and_it_is_not_named_as_needing_one(self, authed, tmp_path, caplog):
         """Listing it beside host and port would send an operator to restart a
@@ -1218,7 +1196,7 @@ class TestReloadingInPlace:
         write_config(tmp_path, config_limits(total="concurrent = 2"))
         with caplog.at_level(logging.WARNING):
             reload_config(app)
-        assert "requests" not in caplog.text
+        assert "restart to apply" not in caplog.text
 
     def test_the_counter_survives_the_reload_with_its_live_slots(
         self, capped, recorder, tmp_path

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Pidfiles, liveness and one real detached relay, started and stopped."""
 
+import ipaddress
 import os
 import socket
 import subprocess
@@ -10,6 +11,7 @@ import threading
 import time
 
 import pytest
+import uvicorn
 
 # Local imports
 from lmrelay.config import load_config
@@ -31,6 +33,7 @@ from lmrelay.daemon import (
     reload_daemon,
     remove_pid,
     restart_warning,
+    serve_app,
     start_detached,
     stop_daemon,
     unapplied_settings,
@@ -217,11 +220,28 @@ class TestWhetherAProcessIsThere:
         assert not process_alive(0)
 
 
-# Under root the refusal these tests rely on never comes: os.kill(1, SIGTERM) is
-# permitted, and stop_daemon would go on to wait out its timeout and SIGKILL init.
-@pytest.mark.skipif(
-    hasattr(os, "geteuid") and os.geteuid() == 0, reason="root may signal pid 1"
-)
+def may_signal(pid: int) -> bool:
+    """Whether signalling `pid` would go through rather than be refused.
+
+    Asked with signal 0 on POSIX only: on Windows os.kill(pid, 0) is not a
+    probe but TerminateProcess, so there the answer is assumed rather than
+    asked.
+    """
+    if not hasattr(os, "geteuid"):
+        return True
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return False
+    except ProcessLookupError:
+        return True
+    return True
+
+
+# The refusal these tests rely on never comes when pid 1 is ours to signal: as
+# root, or in a container whose pid 1 runs as the same user, which may be the
+# test run itself. stop_daemon would then SIGTERM it and go on to SIGKILL it.
+@pytest.mark.skipif(may_signal(FOREIGN_PID), reason="pid 1 is ours to signal here")
 class TestAPidWeMayNotSignal:
     """process_alive reports another user's process as alive on purpose, so a
     pid we cannot signal reaches the commands that signal it."""
@@ -366,6 +386,29 @@ class TestTheAddressTheRelayRecorded:
         status = daemon_status(load_config(config_path))
         assert (status["host"], status["port"]) == ("127.0.0.1", 9999)
         assert status["healthy"] is True
+
+
+class TestWhoseForwardedAddressIsBelieved:
+    """X-Forwarded-For decides the address [limits.per_address] counts and
+    fail2ban bans, so believing it from anybody hands both to the caller."""
+
+    def test_only_a_proxy_on_this_host_is_trusted(self, monkeypatch):
+        handed: dict = {}
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: handed.update(kwargs))
+        monkeypatch.setenv(BIND_ENV_VAR, "")
+        monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+        serve_app("0.0.0.0", 11435)
+        effective = uvicorn.Config("lmrelay.app:app", **handed)
+        assert effective.proxy_headers is True
+        # 127.0.0.1, joined by ::1 from uvicorn 0.39: loopback either way.
+        trusted = effective.forwarded_allow_ips.split(",")
+        assert all(ipaddress.ip_address(host.strip()).is_loopback for host in trusted)
+
+    def test_and_the_bind_is_published_before_uvicorn_starts(self, monkeypatch):
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: None)
+        monkeypatch.setenv(BIND_ENV_VAR, "")
+        serve_app("0.0.0.0", 8080)
+        assert os.environ[BIND_ENV_VAR] == "0.0.0.0:8080"
 
 
 class TestWhatTheRunningRelayStartedWith:

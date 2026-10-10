@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `--header` values are literal, so a `{token}` written there is sent as those seven
   characters.
 
+### Fixed
+
+- **An empty `[server] host` is warned about as exposed.** It binds every interface, and the
+  auth-off warning used to read it as loopback.
+- **A refusal the framework answers, such as a 405 for `TRACE`, writes one access line**, the
+  same `-> -: 405 (refused)` warning as before, instead of that line plus a second one.
+
+### Security
+
+- **`X-Forwarded-For` is believed only from loopback.** The relay used to trust it from any
+  sender, so a caller reaching the relay directly could choose the address that
+  `[limits.per_address]` counts and fail2ban bans. Behind an nginx on the same host nothing
+  changes; a proxy on another machine is named in uvicorn's `FORWARDED_ALLOW_IPS`.
+
 ## [0.0.8] - 2026-09-02
 
 ### Added

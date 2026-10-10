@@ -326,7 +326,7 @@ class TestHandingOverToTheServiceManager:
             calls.append(argv)
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
-        monkeypatch.setattr(cli.subprocess, "run", record)
+        monkeypatch.setattr(service.subprocess, "run", record)
         return calls
 
     def test_stopping_under_launchd_does_not_disable_the_agent(self, config_path, monkeypatch):
@@ -340,7 +340,10 @@ class TestHandingOverToTheServiceManager:
     def test_and_neither_does_restarting_it(self, config_path, monkeypatch):
         calls = self.launchctl_calls(monkeypatch)
         cli.service_control("restart", config_path)
-        assert all("-w" not in argv for argv in calls)
+        assert calls == [
+            ["launchctl", "unload", str(LAUNCHD_PLIST_PATH)],
+            ["launchctl", "load", str(LAUNCHD_PLIST_PATH)],
+        ]
 
     def systemctl_calls(self, monkeypatch, returncode: int = 0, stderr: str = "") -> list[list[str]]:
         """A systemd that owns an active relay, answering every command the same way."""
@@ -352,7 +355,7 @@ class TestHandingOverToTheServiceManager:
             calls.append(argv)
             return subprocess.CompletedProcess(argv, returncode, stdout="", stderr=stderr)
 
-        monkeypatch.setattr(cli.subprocess, "run", record)
+        monkeypatch.setattr(service.subprocess, "run", record)
         return calls
 
     @pytest.mark.parametrize("action", ["stop", "restart", "reload"])
@@ -470,8 +473,9 @@ class TestSayingWhatWasDone:
         monkeypatch.setattr(cli, "reload_daemon", lambda unused_path: True)
         with caplog.at_level(logging.INFO):
             cli.reload_running_relay(config_path)
-        assert "SIGHUP" in caplog.text
-        assert "is live" not in caplog.text
+        assert [record.getMessage() for record in caplog.records] == [
+            "Signalled the running relay to re-read it (SIGHUP)."
+        ]
 
 
 class TestReporting:

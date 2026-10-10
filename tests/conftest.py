@@ -296,10 +296,14 @@ def authed(relay):
 
 @pytest.fixture
 def limited(tmp_path, monkeypatch, recorder):
-    """One address allowed 3 a second, which is also 3 at once."""
+    """One address allowed 3 an hour, which is also 3 at once.
+
+    An hour so that no token refills while a test runs: a period of a second
+    refilled one every 333ms, and a slow runner turned an expected 429 into 200.
+    """
     yield from relay_with(
         tmp_path, monkeypatch, recorder,
-        config_limits(per_address='concurrent = 3\nrate = "3/1s"'),
+        config_limits(per_address='concurrent = 3\nrate = "3/1h"'),
     )
 
 

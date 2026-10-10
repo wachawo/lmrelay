@@ -295,16 +295,26 @@ class TestCountersOnlyGoUp:
     def test_no_series_ever_reads_lower_than_it_did(self, authed, recorder):
         """A restart resets these, and Prometheus knows how to read across that.
         A counter going backwards inside one process is a different thing, and it
-        would make every rate() over the gap read as an enormous spike."""
+        would make every rate() over the gap read as an enormous spike.
+
+        `before` is taken once every family has a series, so the comparison
+        covers the request and error counters and not only a zero."""
+        authed.post("/api/chat", json={})
+        recorder.raises = httpx.ConnectError("no route")
+        authed.post("/api/chat", json={})
+        recorder.raises = None
         before = scrape(authed)
+        counted = {key for key in before if key[0].endswith("_total") and before[key] > 0}
+        assert {key[0] for key in counted} >= {
+            "lmrelay_requests_total", "lmrelay_upstream_errors_total"
+        }
         authed.post("/api/chat", json={})
         recorder.raises = httpx.ConnectError("no route")
         authed.post("/api/chat", json={})
         recorder.raises = None
         after = scrape(authed)
-        for key, was in before.items():
-            if key[0].endswith("_total"):
-                assert after.get(key, -1.0) >= was, f"{key} went backwards"
+        for key in counted:
+            assert after.get(key, -1.0) >= before[key], f"{key} went backwards"
 
     def test_a_reload_does_not_reset_them(self, authed, tmp_path):
         """The counters are not rebuilt with the config: a chart must not show a

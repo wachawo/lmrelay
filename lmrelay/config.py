@@ -638,7 +638,8 @@ def check_exposure(config: RelayConfig) -> str | None:
     try:
         is_loopback = ipaddress.ip_address(config.host).is_loopback
     except ValueError:
-        is_loopback = config.host in ("localhost", "")
+        # Not "": an empty host binds every interface.
+        is_loopback = config.host == "localhost"
     if is_loopback:
         return None
     return (

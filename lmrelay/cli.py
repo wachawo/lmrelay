@@ -5,13 +5,10 @@
 import argparse
 import logging
 import os
-import subprocess
 import sys
 from dataclasses import replace
 from importlib import resources
 from pathlib import Path
-
-import uvicorn
 
 # Local imports
 from lmrelay import __version__
@@ -44,10 +41,10 @@ from lmrelay.daemon import (
     daemon_status,
     log_file,
     pid_file,
-    publish_bind,
     read_startup_settings,
     reload_daemon,
     restart_warning,
+    serve_app,
     start_detached,
     stop_daemon,
     unapplied_settings,
@@ -62,6 +59,7 @@ from lmrelay.service import (
     detect_manager,
     disable_autostart,
     enable_autostart,
+    run_service_command,
     service_is_active,
 )
 from lmrelay.state import (
@@ -106,14 +104,6 @@ def config_path_from(args: argparse.Namespace) -> Path:
     """
     apply_config_env(args)
     return find_config_path() or HOME_CONFIG_PATH
-
-
-def run_service_command(argv: list[str]) -> None:
-    """Run a service-manager command, turning a non-zero exit into an operator message."""
-    result = subprocess.run(argv, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
-        raise LmrelayError(f"lmrelay: {' '.join(argv)} failed: {detail}")
 
 
 def service_control(action: str, config_path: Path) -> str:
@@ -228,16 +218,7 @@ def run_relay(args: argparse.Namespace) -> None:
         if exposure_warning:
             logger.warning(exposure_warning)
 
-    publish_bind(args.host or config.host, args.port or config.port)
-    uvicorn.run(
-        "lmrelay.app:app",
-        host=args.host or config.host,
-        port=args.port or config.port,
-        log_config=None,     # uvicorn must not override our logging
-        access_log=False,    # the middleware writes the request line itself
-        proxy_headers=True,
-        forwarded_allow_ips="*",
-    )
+    serve_app(args.host or config.host, args.port or config.port)
 
 
 def serve_relay(args: argparse.Namespace) -> None:

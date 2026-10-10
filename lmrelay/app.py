@@ -413,13 +413,11 @@ async def handle_http_exception(
     relay route sees it. Not reachable for a bad URL: uvicorn answers that in
     plain text before the application is entered at all, which is a layer no
     handler here can reach.
+
+    Not logged here: this handler runs inside the middleware, whose access line
+    already covers the answer. Marking it refused makes that line the warning.
     """
-    logger.warning(
-        f"{request.client.host if request.client else '-'} "
-        f"{request.method} {request.url.path} -> -: "
-        f"{exc.status_code} (refused)",
-        extra=log_extra(request),
-    )
+    request.state.refused = "refused"
     return JSONResponse(
         {"error": f"lmrelay: {exc.detail.lower()} for {request.method} {request.url.path}"},
         status_code=exc.status_code,
