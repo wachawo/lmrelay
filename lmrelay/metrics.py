@@ -1,36 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Aggregate counters and the Prometheus text they are scraped as. In memory, reset by a restart."""
+"""Aggregate counters and their Prometheus text exposition. In memory, reset by a restart."""
 
 from bisect import bisect_left
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
-# What a scrape has to be served as. The 0.0.4 here is the version of the text
-# exposition format and has nothing to do with lmrelay's own, which is the same
-# number today by coincidence: Prometheus reads this header to decide how to
-# parse the body, so it moves when the format does and never when the relay does.
+# 0.0.4 is the exposition format version, unrelated to lmrelay's own version.
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
-# The one family whose samples are spread over three names, so they are spelled
-# once here rather than four times below.
 TTFB_NAME = "lmrelay_request_ttfb_seconds"
 
-# Seconds to the upstream's first byte. Chosen for what this relay sits in front
-# of rather than taken from the Prometheus default, which runs .005 to 10: a
-# local model that is not resident has to be read off disk before it can produce
-# a token, which is tens of seconds for a large one and minutes on a cold cache,
-# so under the default buckets almost every local answer lands in +Inf, where a
-# histogram has recorded that something took longer than ten seconds and nothing
-# else at all. The low end still has to resolve a hosted provider, which answers
-# in well under a second, so the range spans four orders of magnitude and is
-# deliberately coarse in the middle: the questions here are "was that a hosted
-# answer or a local one" and "did a model have to load", not "3.4s or 3.6s".
+# Seconds to the upstream's first byte. Wider than the Prometheus default (.005
+# to 10): a local model loading from disk takes tens of seconds to minutes, and
+# would all land in +Inf. Coarse in the middle on purpose: the questions are
+# "hosted or local" and "did a model have to load".
 TTFB_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0)
 
-# One line of the exposition: the sample's own name, its labels in order, and its
-# value. The name travels with the sample rather than belonging to the family
-# because a histogram writes three different names under one family header.
+# (sample name, labels, value). The name is per sample because a histogram
+# writes three names under one family header.
 Sample = tuple[str, Sequence[tuple[str, str]], float]
 
 
@@ -38,11 +26,8 @@ Sample = tuple[str, Sequence[tuple[str, str]], float]
 class Histogram:
     """One upstream's times to first byte: a slot per bucket, plus one for the rest.
 
-    Counts are held per bucket and added up at render time. The format wants
-    them cumulative, but keeping them cumulative in memory means every
-    observation writes to every bucket above it, which is the same total work
-    and one more thing to get wrong. The number of observations is not stored
-    either: it is the last cumulative bucket, so it cannot drift from them.
+    Counts are per bucket and made cumulative at render time; the observation
+    count is the last cumulative bucket, so it is not stored separately.
     """
 
     counts: list[int]
@@ -51,20 +36,11 @@ class Histogram:
 
 @dataclass
 class Metrics:
-    """Everything the relay counts. Aggregate, and with no caller named anywhere.
+    """Everything the relay counts, aggregate only.
 
-    No key here identifies a caller: not a token, not an address. Two reasons,
-    both load-bearing. It keeps "No token accounting, usage database or budgets"
-    true, and a label per credential is unbounded cardinality: one time series
-    per token that ever presented itself, kept by whatever scrapes this, forever.
-
-    The counters live here and nowhere else, so a restart resets them. Prometheus
-    understands a counter reset and reads across one; the alternative, a number
-    that survives a restart, is a file on disk written on the hot path, which is
-    the usage database this project says it is not.
-
-    Not shared between processes, exactly as the limiter tables are not: under
-    several uvicorn workers a scrape reaches one worker and reports that worker.
+    No label identifies a caller: a label per token is unbounded cardinality and
+    would amount to usage accounting. Not shared between processes: under several
+    uvicorn workers a scrape reports only the worker it reached.
     """
 
     requests: dict[tuple[str, str], int] = field(default_factory=dict)
@@ -78,21 +54,16 @@ class Metrics:
 def bump(table: dict[tuple[str, str], int], key: tuple[str, str]) -> None:
     """Add one to a labelled counter, creating the series at its first sample.
 
-    Series are created on use rather than declared up front, which is what keeps
-    the label sets honest: a status this relay has never returned has no line,
-    instead of a zero that reads as "measured, and it did not happen".
+    Created on use, so an unseen status has no line rather than a misleading zero.
     """
     table[key] = table.get(key, 0) + 1
 
 
 def observe_request(metrics: Metrics, upstream: str, status: int, ttfb: float | None) -> None:
-    """One answered request: counted by upstream and status, and timed if an upstream answered.
+    """Count one answered request by upstream and status, and time it if an upstream answered.
 
-    `ttfb` is None for a request the relay answered itself, and those are counted
-    but not timed. A dialect refusal costs microseconds and a refused request
-    costs the price of refusing it; a client looping on either would pull the
-    distribution down until the number an operator reads is this relay's own
-    overhead rather than a model's first token.
+    Requests the relay answered itself (`ttfb` None) are not timed, so their
+    near-zero latency does not drag the distribution toward relay overhead.
     """
     bump(metrics.requests, (upstream, str(status)))
     if ttfb is not None:
@@ -112,9 +83,7 @@ def observe_ttfb(metrics: Metrics, upstream: str, seconds: float) -> None:
 def bucket_index(seconds: float) -> int:
     """Which slot one observation falls in; the last one is everything above the top bound.
 
-    bisect_left, not bisect_right: a bucket's label is `le`, less than or equal,
-    so an observation exactly on a bound belongs to that bound's bucket and not
-    to the next one up.
+    bisect_left because buckets are `le`: a value exactly on a bound belongs to it.
     """
     return bisect_left(TTFB_BUCKETS, seconds)
 
@@ -127,9 +96,7 @@ def count_refusal(metrics: Metrics, scope: str, kind: str) -> None:
 def count_auth_failure(metrics: Metrics) -> None:
     """One request refused for a missing or invalid credential.
 
-    Unlabelled, and not also counted as a request: it never reached the point
-    where an upstream is chosen, so it has no upstream to be counted under, and
-    a series labelled `-` would be a second meaning for that label.
+    Unlabelled and not counted as a request: no upstream was chosen yet.
     """
     metrics.auth_failures += 1
 
@@ -137,10 +104,7 @@ def count_auth_failure(metrics: Metrics) -> None:
 def count_upstream_error(metrics: Metrics, upstream: str, error: str) -> None:
     """One failure reaching an upstream, by upstream and exception type.
 
-    Reaching, specifically. A stream that breaks after the headers have arrived
-    is not counted here: the relay has already answered the caller with the
-    upstream's own status, and the failure belongs to that answer rather than to
-    getting there. It is in the log, with its traceback.
+    A stream that breaks after headers arrived is not counted here; it is logged.
     """
     bump(metrics.upstream_errors, (upstream, error))
 
@@ -148,19 +112,9 @@ def count_upstream_error(metrics: Metrics, upstream: str, error: str) -> None:
 def track_in_flight(metrics: Metrics, release: Callable[[], None]) -> Callable[[], None]:
     """Count one request as in flight, wrapping the release that ends it.
 
-    Wrapped rather than counted beside it so the gauge cannot drift from the
-    slots. They have one lifetime and several ways home, and every path that
-    gives a slot back now ends the request's time in flight in the same call
-    instead of each path having to remember two.
-
-    The result is idempotent for the same reason `release_all` is: those paths
-    are meant not to overlap, but a gauge decremented twice would count a live
-    request as finished, and unlike a counter a gauge that has gone wrong stays
-    wrong for the life of the process.
-
-    The wrapped release runs on every call and the gauge only on the first, so
-    the two safety nets do not depend on each other: whatever a later edit does
-    to the count here, the slots underneath still go home.
+    Wrapping ties the gauge to the slots' lifetime. Idempotent like `release_all`,
+    since a gauge decremented twice stays wrong; the wrapped release still runs on
+    every call so the slots do not depend on the gauge logic.
     """
     metrics.in_flight += 1
     finished = False
@@ -179,11 +133,8 @@ def track_in_flight(metrics: Metrics, release: Callable[[], None]) -> Callable[[
 def escape_label(value: str) -> str:
     """Escape a label value: backslash first, then quote and newline.
 
-    Backslash first because the other two replacements produce backslashes, and
-    the other order would escape what this had just added. It matters because
-    label values are not all ours: an upstream name is whatever an operator put
-    in a TOML table key, which may be a quoted string holding a quote, and one
-    unescaped quote makes Prometheus drop the entire scrape rather than the line.
+    Backslash first, or it would re-escape the backslashes the others add.
+    Upstream names come from TOML keys, and one bad quote drops the whole scrape.
     """
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
@@ -197,22 +148,12 @@ def render_labels(labels: Sequence[tuple[str, str]]) -> str:
 
 
 def render_value(value: float) -> str:
-    """A sample value, in the shortest spelling that reads back as the same number.
-
-    repr rather than a fixed format: it round-trips, so a sum of seconds is
-    neither rounded to six figures the way %g would nor padded with digits it
-    never had. An int reprs as itself, which is what a counter should look like.
-    """
+    """A sample value via repr, which round-trips floats and prints ints plainly."""
     return repr(value)
 
 
 def render_family(name: str, kind: str, description: str, samples: Iterable[Sample]) -> list[str]:
-    """One metric family: its two metadata lines, then all of its samples together.
-
-    Emitted even when it has no samples. A HELP and a TYPE with nothing under
-    them is valid, and it lets a relay that has served nothing yet still
-    describe what it will measure rather than answer with a nearly empty page.
-    """
+    """One metric family: HELP and TYPE lines, then its samples, even when there are none."""
     lines = [f"# HELP {name} {description}", f"# TYPE {name} {kind}"]
     lines += [
         f"{sample_name}{render_labels(labels)} {render_value(value)}"
@@ -224,10 +165,7 @@ def render_family(name: str, kind: str, description: str, samples: Iterable[Samp
 def ttfb_samples(histograms: dict[str, Histogram]) -> list[Sample]:
     """Every histogram's buckets, sum and count, made cumulative as the format requires.
 
-    Cumulative means each bucket holds everything at or below its bound, and the
-    last one, +Inf, holds every observation there has been, which is also what
-    `_count` reports. A Prometheus given non-cumulative buckets does not
-    complain: it computes quantiles from them and answers nonsense.
+    Prometheus does not reject non-cumulative buckets; it computes wrong quantiles.
     """
     samples: list[Sample] = []
     for upstream, histogram in sorted(histograms.items()):
@@ -246,11 +184,7 @@ def ttfb_samples(histograms: dict[str, Histogram]) -> list[Sample]:
 def render(metrics: Metrics, version: str) -> str:
     """The whole exposition, one family after another, ending in a newline.
 
-    Sorted within each family so that two scrapes of an unchanged relay are the
-    same bytes: nothing requires it, but a diff between two scrapes is how an
-    operator reads this by hand, and dictionary order would make every line look
-    changed. A malformed body is dropped whole and silently by Prometheus, which
-    is why the families here are built rather than formatted at their call sites.
+    Sorted within each family so two scrapes of an unchanged relay diff cleanly.
     """
     lines: list[str] = []
     lines += render_family(

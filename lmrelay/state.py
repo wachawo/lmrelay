@@ -22,9 +22,8 @@ STATE_VERSION  = 1
 
 DIALECTS       = ("ollama", "openai", "anthropic")
 
-# An upstream under either name would swallow the path root that every Ollama
-# (/api/...) and OpenAI (/v1/...) client already sends to, and the breakage
-# would surface as an unexplained 404 far from its cause.
+# An upstream under either name would swallow the Ollama (/api/...) or OpenAI
+# (/v1/...) path root.
 RESERVED_UPSTREAM_NAMES = ("api", "v1")
 
 # Display
@@ -35,10 +34,8 @@ MASKED_TOKEN    = "***"
 DEFAULT_PROVIDER_DIALECT = "openai"
 DEFAULT_PROVIDER_HEADERS = {"Authorization": "Bearer {token}"}
 
-# base_url, dialect and headers for the providers worth knowing by name, so
-# `lmrelay provider add openai sk-...` is four words instead of a TOML table.
-# {token} is substituted literally, not through string.Template: an API key
-# containing a $ must not be treated as a variable reference.
+# Known providers by name. {token} is substituted literally, not through
+# string.Template, so a key containing $ is not read as a variable.
 PROVIDER_PRESETS = {
     "openai":    {"base_url": "https://api.openai.com",    "dialect": "openai",
                   "headers": {"Authorization": "Bearer {token}"}},
@@ -83,11 +80,10 @@ def state_path_for(config_path: Path) -> Path:
 
 
 def empty_state(path: Path) -> RelayState:
-    """The state of a fresh install.
+    """Return the state of a fresh install.
 
-    Auth is off: a relay on loopback with no tokens yet is a transparent proxy,
-    and starting closed would lock the operator out of their own Ollama before
-    they had a credential to offer it.
+    Auth starts off: with no tokens yet, starting closed would lock the operator
+    out of their own Ollama.
     """
     return RelayState(
         auth_enabled=False,
@@ -99,7 +95,7 @@ def empty_state(path: Path) -> RelayState:
 
 
 def parse_token(entry: object, path: Path) -> CallerToken:
-    """Read one token record, refusing anything that would silently drop a credential."""
+    """Read one token record, refusing a malformed one rather than dropping it."""
     if (
         not isinstance(entry, dict)
         or not isinstance(entry.get("id"), int)
@@ -136,16 +132,14 @@ def load_state(path: Path) -> RelayState:
     if not isinstance(providers, dict) or not all(
         isinstance(entry, dict) for entry in providers.values()
     ):
-        # The entries are checked here and not only where they are read, so a
-        # hand-edited file fails as the StateError naming it that every command
-        # is written to report, rather than as an AttributeError from the parser.
+        # Fail a hand-edited file as a StateError, not a later AttributeError.
         raise StateError(f"lmrelay: {path} has a malformed providers table")
 
     tokens = tuple(parse_token(entry, path) for entry in data.get("tokens") or ())
     highest_id = max((token.id for token in tokens), default=0)
     next_token_id = data.get("next_token_id")
-    # Recomputed rather than trusted when it would collide: an id printed by
-    # `token list` must never come to name a second token.
+    # Recomputed on collision: an id `token list` printed must never name a
+    # second token.
     if not isinstance(next_token_id, int) or next_token_id <= highest_id:
         next_token_id = highest_id + 1
 
@@ -161,16 +155,8 @@ def load_state(path: Path) -> RelayState:
 def write_private(path: Path, text: str) -> None:
     """Write a file only its owner can read, atomically.
 
-    mkstemp rather than write_text plus chmod, for two reasons. It creates the
-    file at 0600, so what is in it is never on disk world-readable: a chmod
-    after the write leaves it so for as long as the two calls are apart, and
-    forever if the process dies in between. And it names the file uniquely, so
-    two concurrent writers cannot write into one another's temp file and rename
-    a payload neither of them reported.
-
-    Shared by state.json, the export bundle and the config an import writes,
-    because all three hold caller tokens or provider keys and a second copy of
-    this would be the one that forgot.
+    mkstemp creates the file at 0600, so secrets are never briefly world-readable
+    as with write-then-chmod, and its unique name keeps concurrent writers apart.
     """
     temp_path = None
     try:
@@ -200,7 +186,7 @@ def save_state(state: RelayState) -> None:
 
 
 def generate_token() -> str:
-    """Mint a caller token. The prefix makes a leaked one recognisable in a log."""
+    """Mint a caller token; the prefix makes a leaked one recognisable."""
     return TOKEN_PREFIX + secrets.token_urlsafe(TOKEN_BYTES)
 
 
@@ -213,7 +199,7 @@ def mask_token(token: str) -> str:
 
 
 def utc_now() -> str:
-    """ISO-8601 UTC to the second: state.json is read by people as well as by code."""
+    """Return the current UTC time as ISO-8601, to the second."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -244,7 +230,7 @@ def delete_token(state: RelayState, token_id: int) -> RelayState:
 
 
 def set_auth_enabled(state: RelayState, enabled: bool) -> RelayState:
-    """Flip the auth switch. Nothing else decides whether callers need a credential."""
+    """Flip the auth switch that decides whether callers need a credential."""
     return replace(state, auth_enabled=enabled)
 
 
@@ -257,9 +243,7 @@ def merge_headers(preset: dict[str, str], extra: dict[str, str]) -> dict[str, st
     """Lay extra headers over the preset ones, matching names case-insensitively.
 
     A plain dict update would keep both `Authorization` and `authorization`, and
-    the request would carry two of them, and an operator who typed the lowercase
-    one to replace a preset's key would still be shipping the old key, and which
-    one the provider honours would be the provider's choice.
+    still ship the preset key the operator meant to replace.
     """
     merged = dict(preset)
     for name, value in extra.items():
@@ -278,25 +262,15 @@ def add_provider(
     dialect: str | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> RelayState:
-    """Add a provider upstream, overwriting one of the same name.
-
-    Overwriting rather than refusing because rotating a key is the common case,
-    and a refusal would make it a delete-then-add dance.
-    """
+    """Add a provider upstream, overwriting one of the same name (key rotation)."""
     if name in RESERVED_UPSTREAM_NAMES:
         raise StateError(
             f"lmrelay: provider name '{name}' is reserved: it would shadow the "
             f"Ollama/OpenAI path root"
         )
     preset = PROVIDER_PRESETS.get(name, {})
-    # An upstream this relay already carries is its own preset. Without this, a
-    # relay imported from a --no-secrets bundle could not act on the line that
-    # import prints: the bundle carried the custom endpoint, the import wrote it
-    # into the state, and `provider add myllm <key>` still answered that myllm
-    # is not a known provider and asked for a --base-url that was already on
-    # disk. A custom endpoint is exactly the upstream such a bundle carries.
-    # Consulted only where no preset applies, so rotating a key on a listed
-    # provider keeps landing on the preset it always did.
+    # A stored custom upstream acts as its own preset, so `provider add myllm <key>`
+    # works after a --no-secrets import. Named presets still take precedence.
     stored = {} if preset else (state.providers.get(name) or {})
     fallback_url = stored.get("base_url") or preset.get("base_url")
     if base_url is None and not fallback_url:
@@ -319,9 +293,8 @@ def add_provider(
             f"expected one of {', '.join(DIALECTS)}"
         )
 
-    # A preset with no headers (Ollama) takes no credential; a provider no
-    # preset knows still has to carry the token it was given, and a bearer is
-    # what an unlisted OpenAI-compatible endpoint expects.
+    # A preset with no headers (Ollama) takes no credential; an unknown provider
+    # gets a bearer, as OpenAI-compatible endpoints expect.
     template = preset.get("headers", DEFAULT_PROVIDER_HEADERS)
     headers = merge_headers(
         {key: substitute_token(value, token) for key, value in template.items()},

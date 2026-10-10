@@ -36,15 +36,12 @@ logger = logging.getLogger(__name__)
 CONFIG_NAME       = "lmrelay.toml"
 HOME_CONFIG_PATH  = Path.home() / ".lmrelay" / CONFIG_NAME
 
-# The one environment variable that configures anything, and it names a path
-# rather than a setting: which file to read. Settings themselves are in that
-# file and in state.json, and nowhere else. There was briefly an environment
-# spelling for every key, and what it cost is written up in docs/ROADMAP.md.
+# Names which file to read, not a setting: settings come only from that file and
+# state.json, never from the environment.
 CONFIG_ENV_VAR = "LMRELAY_CONFIG"
 
-# Re-exported from the modules that own them so `from lmrelay.config import ...`
-# keeps working: state.py and ratelimit.py cannot import config.py without a
-# cycle, so the definitions live there and are surfaced here.
+# Some names are defined in state.py and ratelimit.py (which cannot import this
+# module without a cycle) and re-exported here.
 __all__ = [
     "DIALECTS",
     "RESERVED_UPSTREAM_NAMES",
@@ -69,24 +66,16 @@ DEFAULT_DIALECT         = "openai"
 DEFAULT_CONNECT_TIMEOUT = 10
 DEFAULT_LOG_LEVEL       = "INFO"
 
-# Every [server] key, in the order the documented file lists them.
 SERVER_KEYS = ("host", "port", "default_upstream", "connect_timeout", "log_level")
 
-# The keys `concurrent` and `rate` replaced, refused by name rather than
-# reported as unrecognised. A scope whose numbers are all in keys nobody reads
-# is a scope that is off, and an operator who wrote them believes it is on.
-#
-# `requests` and `period` shipped in 0.0.5, so this refusal is the upgrade note
-# for anyone who set a limit there. `burst` never shipped at all.
+# Old limit keys, refused with an explanation: a scope written only in keys
+# nobody reads is off while its author believes it is on.
 RETIRED_LIMIT_KEYS = ("burst", "requests", "period")
 
-# For `lmrelay limits set`, which edits one number in place rather than
-# rewriting the file. A table header of its own, and anything else that opens a
-# table, which is where this scope's body ends.
+# For `lmrelay limits set`: a scope's body runs from its header to the next table.
 LIMIT_TABLE_HEADER = re.compile(r"^\s*\[\s*limits\s*\.\s*([A-Za-z0-9_]+)\s*\]\s*$")
 ANY_TABLE_HEADER   = re.compile(r"^\s*\[")
-# The column the example config aligns its `=` on, so a key this writes in looks
-# like the ones already there.
+# The `=` column of the example config, so inserted keys line up.
 LIMIT_KEY_WIDTH    = max(len(key) for key in LIMIT_KEYS)
 
 
@@ -102,7 +91,7 @@ class Upstream:
 
 @dataclass(frozen=True)
 class RelayConfig:
-    """The whole of lmrelay.toml, the environment over it, and state.json merged in."""
+    """The validated lmrelay.toml with state.json merged in."""
 
     host: str
     port: int
@@ -121,8 +110,7 @@ def find_config_path() -> Path | None:
     """Return the first config location that applies: env var, CWD, then home."""
     from_env = os.getenv(CONFIG_ENV_VAR)
     if from_env:
-        # Returned even when absent, so a wrong LMRELAY_CONFIG reports itself
-        # instead of silently falling through to an unrelated file.
+        # Returned even when missing, so a wrong path is reported, not skipped.
         return Path(from_env).expanduser()
     local_candidate = Path.cwd() / CONFIG_NAME
     if local_candidate.exists():
@@ -152,11 +140,9 @@ def expand_env_value(value: str, upstream_name: str, header_name: str) -> str:
 def parse_upstream(name: str, table: dict, expand_env: bool = True) -> Upstream:
     """Validate one [upstream.<name>] table and freeze it.
 
-    `expand_env` is the one thing a hand-written table and a CLI-added provider
-    do not share: `${VAR}` in the file is a documented way to keep a key out of
-    it, while a key the CLI stored was already substituted literally, and
-    expanding it again would rewrite an API key containing a $ with the value of
-    an environment variable, and send that value to the provider.
+    `expand_env` is off for CLI-added providers and bundles: their values are
+    already final, and expanding an API key that contains `$` would replace part
+    of it with an environment variable and send that to the provider.
     """
     if name in RESERVED_UPSTREAM_NAMES:
         raise ConfigError(
@@ -187,8 +173,7 @@ def parse_upstream(name: str, table: dict, expand_env: bool = True) -> Upstream:
         for key, value in raw_headers.items()
     }
 
-    # A trailing slash here would double up against the forwarded path, which
-    # some upstreams answer with a redirect and others with a 404.
+    # A trailing slash doubles up with the forwarded path (redirect or 404).
     return Upstream(name=name, base_url=base_url.rstrip("/"), dialect=dialect, headers=headers)
 
 
@@ -201,12 +186,9 @@ def parse_upstreams(data: dict) -> dict[str, Upstream]:
 
 
 def state_upstreams(providers: dict[str, dict]) -> dict[str, Upstream]:
-    """Validate CLI-added providers through the parser hand-written tables go through.
+    """Validate CLI-added providers with parse_upstream, without env expansion.
 
-    A provider added by one word of CLI and one written out by hand must be able
-    to fail in exactly the same ways, so the state record is shaped into a table
-    and handed to parse_upstream rather than checked by a second validator. Env
-    expansion is the exception: see parse_upstream.
+    One validator for both sources, so they fail in the same ways.
     """
     return {
         name: parse_upstream(
@@ -240,10 +222,8 @@ def merge_upstreams(
 def collect_auth_tokens(state: RelayState, data: dict) -> tuple[str, ...]:
     """Every credential a caller may present, in the order they were configured.
 
-    The `[auth] token` in the file is an additional valid token rather than an
-    override: it is how an install that never runs the CLI gets a credential,
-    and it must not invalidate the tokens an operator generated on the same
-    relay. It does not turn checking on; only `lmrelay auth true` does.
+    `[auth] token` from the file is added to the stored tokens, not a
+    replacement for them. It does not turn checking on; `lmrelay auth true` does.
     """
     auth = data.get("auth") or {}
     candidates = [record.token for record in state.tokens]
@@ -254,26 +234,14 @@ def collect_auth_tokens(state: RelayState, data: dict) -> tuple[str, ...]:
 def read_int(
     table: dict, section: str, name: str, default: int, minimum: int | None = None
 ) -> int:
-    """Read one numeric key as the operator's error rather than int()'s.
+    """Read one whole-number key, raising ConfigError rather than ValueError.
 
-    A bare int() raises ValueError, which is a sibling of ConfigError rather than
-    one of its own kind, so a reload's `except LmrelayError` does not catch it:
-    `port = "eleven"` left the signal handler as a traceback, from a file that
-    had parsed perfectly well as TOML.
-
-    `section` is passed rather than hardcoded because the same reader is used by
-    [server] and by three [limits.*] tables, and an error naming the wrong table
-    sends an operator to edit a key that is not there.
-
-    `minimum` is passed only by keys where a number below it would be read as
-    something the operator did not write: `concurrent = -1` is a mistake, and
-    admitting it as another spelling of "off" would hide the mistake behind the
-    behaviour they were trying to change. Ports and timeouts pass none and are
-    unaffected.
+    ValueError is not an LmrelayError, so a reload would not catch it. `section`
+    names the table in the error; `minimum` rejects values such as
+    `concurrent = -1` instead of treating them as "off".
     """
     value = table.get(name, default)
-    # A string is what the command line hands in. A float is refused rather
-    # than truncated, and so is a bool, which int() reads as 0 or 1.
+    # Strings come from the CLI. Floats and bools are refused, not coerced.
     whole = isinstance(value, (int, str)) and not isinstance(value, bool)
     try:
         number = int(value) if whole else None
@@ -289,20 +257,11 @@ def read_int(
 
 
 def read_rate(table: dict, section: str, name: str) -> str:
-    """Read a rate as `count/period`, refusing anything that is not one.
+    """Read a rate as `count/period`; empty (the default) means no rate limit.
 
-    Empty is how a scope says it limits how many at once and nothing else, so it
-    is the default and not an error.
-
-    A bare number is refused on both halves. `rate = 30` names no period, and
-    `30/30` names no unit, which is half an hour to whoever wrote it about as
-    often as it is half a minute. It is also what keeps one spelling everywhere:
-    the `10/30m` typed into `lmrelay limits set` is the `10/30m` in the file.
-
-    This is where `inf` and `nan` stop too. Both are spellable in TOML and in
-    JSON, and neither is a rate: a limiter built on nan compares false against
-    every threshold, so it would be swept for the life of the process and refuse
-    nobody, while printing as though it were on.
+    A period without a unit (`30/30`) is ambiguous and refused. Non-strings,
+    including TOML's `inf` and `nan`, are refused too: a nan limiter would
+    compare false against every threshold and refuse nobody.
     """
     value = table.get(name, NO_RATE)
     if not isinstance(value, str) or (value and parse_rate(value) is None):
@@ -316,12 +275,7 @@ def read_rate(table: dict, section: str, name: str) -> str:
 
 
 def read_log_level(server: dict) -> str:
-    """Read log_level, refusing a name logging would quietly read as INFO.
-
-    getattr(logging, level) falls back on its own, so an unrecognised level was
-    announced as applied by the reload and then discarded: the relay ran at INFO
-    while the log said it was running at something else.
-    """
+    """Read log_level, refusing a name logging would silently treat as INFO."""
     value = str(server.get("log_level", DEFAULT_LOG_LEVEL))
     if value.upper() not in logging.getLevelNamesMapping():
         raise ConfigError(
@@ -334,9 +288,8 @@ def read_log_level(server: dict) -> str:
 def parse_server(data: dict) -> dict:
     """Validate [server] and fill in its defaults.
 
-    A key nobody reads is refused rather than ignored, as in [limits]: a
-    misspelt `prot = 8080` is a setting that silently does nothing, and so is
-    a limit key from before the three scopes.
+    Unknown keys are refused, not ignored: a misspelt `prot = 8080` would
+    otherwise silently do nothing.
     """
     server = data.get("server") or {}
     if not isinstance(server, dict):
@@ -360,7 +313,7 @@ def parse_server(data: dict) -> dict:
 
 
 def check_retired_limit_keys(table: dict, scope: str) -> None:
-    """Refuse the three keys `requests` and `period` replaced."""
+    """Refuse the retired limit keys that `concurrent` and `rate` replaced."""
     found = [name for name in RETIRED_LIMIT_KEYS if name in table]
     if found:
         raise ConfigError(
@@ -375,9 +328,8 @@ def check_retired_limit_keys(table: dict, scope: str) -> None:
 def parse_limits(data: dict) -> dict[str, ScopeLimits]:
     """Validate [limits.*]: three scopes, the same two keys, everything off by default.
 
-    A scope or a key nobody recognises is refused rather than ignored, because a
-    misspelt table is indistinguishable from a limit that is on until the moment
-    it fails to refuse anybody.
+    Unknown scopes and keys are refused, not ignored: a misspelt table looks
+    like a limit that is on but never refuses anybody.
     """
     section = data.get("limits") or {}
     if not isinstance(section, dict):
@@ -419,7 +371,7 @@ def read_config_file(target: Path) -> dict:
 
 
 def read_config_text(target: Path) -> str:
-    """The config as text, for the one command that edits it rather than reading it."""
+    """Return the config as text, for `lmrelay limits set`."""
     try:
         return target.read_text(encoding="utf-8")
     except OSError as exc:
@@ -427,7 +379,7 @@ def read_config_text(target: Path) -> str:
 
 
 def parse_config_text(text: str, target: Path) -> dict:
-    """Parse config text, naming the file it came from. Same words read_config_file uses."""
+    """Parse config text, naming the file it came from in any error."""
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -435,12 +387,12 @@ def parse_config_text(text: str, target: Path) -> dict:
 
 
 def render_limit_value(value: int | str) -> str:
-    """One limit as the file should spell it: a bare count, a quoted period."""
+    """Render one limit value as TOML: a bare count or a quoted rate."""
     return f'"{value}"' if isinstance(value, str) else str(value)
 
 
 def is_key_line(line: str, name: str) -> bool:
-    """Whether this line assigns `name`, and not something merely starting with it."""
+    """Return whether this line assigns exactly `name`, not a longer key."""
     remainder = line.lstrip()
     if not remainder.startswith(name):
         return False
@@ -448,11 +400,7 @@ def is_key_line(line: str, name: str) -> bool:
 
 
 def rewrite_key_line(line: str, rendered: str) -> str:
-    """Replace the value on an assignment, keeping the indent, the column and any note.
-
-    The trailing comment survives because it is the operator's, and a number
-    changed by a command is exactly the number somebody wrote a reason beside.
-    """
+    """Replace the value on an assignment, keeping the indent and any trailing comment."""
     head, unused_separator, remainder = line.partition("=")
     ending = "\n" if line.endswith("\n") else ""
     body = remainder.rstrip("\n")
@@ -460,13 +408,13 @@ def rewrite_key_line(line: str, rendered: str) -> str:
     if "#" in body:
         at = body.index("#")
         value, comment = body[:at], body[at:]
-        # The gap as it was, so the comment stays about where it was written.
+        # Keep the original gap before the comment.
         comment = value[len(value.rstrip()):] + comment
     return f"{head}= {rendered}{comment}{ending}"
 
 
 def new_limit_section(scope: str, values: dict[str, str]) -> str:
-    """A whole `[limits.<scope>]` table, for a file that has not got one."""
+    """Render a new `[limits.<scope>]` table to append to the file."""
     written = [
         f"{key:<{LIMIT_KEY_WIDTH}} = {render_limit_value(values[key])}\n"
         for key in LIMIT_KEYS if key in values
@@ -475,15 +423,10 @@ def new_limit_section(scope: str, values: dict[str, str]) -> str:
 
 
 def edit_limit_section(text: str, scope: str, values: dict[str, int | str]) -> str:
-    """Return the config with one scope's numbers changed and nothing else touched.
+    """Return the config with one scope's values changed and nothing else touched.
 
-    A line rewrite rather than a re-render of the whole file, because this file
-    belongs to the operator: `lmrelay init` ships it with sixty lines of comment
-    explaining the numbers, and a command that dropped those to change one of
-    them would be a command nobody runs twice.
-
-    Only the assignments named in `values` move. A key the scope has not got is
-    appended to it, and a scope the file has not got is appended to the file.
+    Edited line by line rather than re-rendered, so the operator's comments
+    survive. Missing keys are appended to the scope; a missing scope to the file.
     """
     lines = text.splitlines(keepends=True)
     opens = [
@@ -508,8 +451,7 @@ def edit_limit_section(text: str, scope: str, values: dict[str, int | str]) -> s
                 body[offset] = rewrite_key_line(line, rendered)
                 break
         else:
-            # After the last line that says something, so the blank line before
-            # the next table stays where it is.
+            # Before trailing blank lines, which separate the next table.
             place = len(body)
             while place > 0 and not body[place - 1].strip():
                 place -= 1
@@ -521,19 +463,11 @@ def edit_limit_section(text: str, scope: str, values: dict[str, int | str]) -> s
 def set_scope_limits(
     target: Path, scope: str, wanted: ScopeLimits
 ) -> tuple[ScopeLimits, ScopeLimits]:
-    """Write one scope into the config file. Returns what it was and what it now is.
+    """Write one whole scope into the config file. Returns (before, after).
 
-    The whole scope rather than one key of it, because the command that calls
-    this sets a scope: `limits set total 1` is "one at a time and no period",
-    and leaving a period behind from last time would make the same command mean
-    different things on two machines.
-
-    Everything is decided before anything is written. The file is read, the edit
-    is made to a string, and that string is parsed and checked to carry the
-    numbers that were asked for. Only then does it reach the disk. So a file
-    this editor cannot handle, an inline `limits.total = {...}` say, ends as a
-    refusal with the file untouched rather than as a config the relay will not
-    start from.
+    Both keys are always written, so `limits set total 1` also clears an old
+    rate. The edited text is parsed and checked before writing, so a layout this
+    editor cannot handle (e.g. inline tables) is refused with the file untouched.
     """
     text = read_config_text(target)
     if text and not text.endswith("\n"):
@@ -556,7 +490,7 @@ def set_scope_limits(
             f"hand; nothing has been written."
         )
 
-    # 0600 like every other writer of this file: it is meant to hold provider keys.
+    # 0600: the file may hold provider keys.
     write_private(target, edited)
     return before, after
 
@@ -599,8 +533,7 @@ def load_config(path: Path | None = None) -> RelayConfig:
             f"run 'lmrelay auth true' to require them"
         )
     if limits["per_token"].configured() and not auth_enabled:
-        # Legal, because turning auth on later makes it live, but said once
-        # rather than doing nothing quietly.
+        # Legal (it applies once auth is on), but worth a warning.
         logger.warning(
             "lmrelay: [limits.per_token] is configured but auth is off, so nothing is "
             "keyed by a token. [limits.per_address] and [limits.total] still apply. "
@@ -619,15 +552,15 @@ def load_config(path: Path | None = None) -> RelayConfig:
 
 
 def describe_upstreams(config: RelayConfig) -> str:
-    """The upstream list as the startup log, `status` and the reload log all print it."""
+    """Return the upstream names as one line for logs and `status`."""
     return ", ".join(sorted(config.upstreams))
 
 
 def check_exposure(config: RelayConfig) -> str | None:
     """Return a warning if a non-loopback bind demands no credential.
 
-    Not a refusal: running uncredentialed behind an authenticated nginx is
-    legitimate, and refusing would break that deployment.
+    A warning, not a refusal: running without auth behind an authenticating
+    proxy is legitimate.
     """
     if config.auth_enabled:
         return None

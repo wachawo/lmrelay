@@ -11,21 +11,17 @@ from starlette.requests import Request
 # Local imports
 from lmrelay.config import RelayConfig, Upstream
 
-# Hop-by-hop headers are meaningful only to the single connection they arrived
-# on and must not be relayed (RFC 9110 7.6.1).
+# Hop-by-hop headers belong to one connection and must not be relayed (RFC 9110 7.6.1).
 HOP_BY_HOP = {
     "connection", "keep-alive", "transfer-encoding", "te",
     "trailer", "upgrade", "proxy-authenticate", "proxy-authorization",
 }
 
-# `host` is recomputed by httpx from the target URL. `authorization` and
-# `x-api-key` carry the CALLER's credential for lmrelay itself and must never
-# reach a provider. An upstream with no configured headers (Ollama) therefore
-# receives no credential at all.
+# `host` is recomputed by httpx. `authorization` and `x-api-key` carry the
+# caller's credential for lmrelay itself and must never reach a provider.
 DROPPED_REQUEST_HEADERS = HOP_BY_HOP | {"host", "authorization", "x-api-key"}
 
-# Starlette re-frames the relayed body as chunked, so a forwarded content-length
-# would no longer match: clients either hang or truncate.
+# The body is re-framed as chunked; a stale content-length hangs or truncates clients.
 DROPPED_RESPONSE_HEADERS = HOP_BY_HOP | {"content-length"}
 
 # Paths that exist in exactly one dialect. Used to refuse, never to allow.
@@ -37,19 +33,16 @@ DIALECT_LABELS = {"ollama": "Ollama", "openai": "OpenAI", "anthropic": "Anthropi
 
 
 def extract_caller_token(headers: Mapping[str, str]) -> str | None:
-    """Return the credential the caller presented, by either carrier.
+    """Return the caller's credential from a bearer Authorization or `x-api-key`.
 
-    Both carriers are accepted because an Anthropic SDK pointed at the relay
-    sends `x-api-key` and cannot easily be made to send a bearer; accepting only
-    one would leave half the callers unable to authenticate at all.
+    `x-api-key` is accepted because Anthropic SDKs send it and not a bearer.
     """
     authorization = headers.get("authorization", "")
     if authorization:
         parts = authorization.split(None, 1)
         if len(parts) == 2 and parts[0].lower() == "bearer":
             return parts[1].strip()
-        # An Authorization the relay cannot read is not a reason to fall back to
-        # x-api-key: the caller has already said which credential it is using.
+        # An unreadable Authorization does not fall back to x-api-key.
         return None
     api_key = headers.get("x-api-key", "")
     if api_key:
@@ -58,22 +51,15 @@ def extract_caller_token(headers: Mapping[str, str]) -> str | None:
 
 
 def check_caller_token(headers: Mapping[str, str], tokens: Sequence[str]) -> bool:
-    """Constant-time check of the caller's credential against every configured token.
-
-    An empty token set refuses: auth turned on with nothing to match against is
-    closed, not open.
-    """
+    """Constant-time check of the caller's credential; an empty token set refuses."""
     presented = extract_caller_token(headers)
     if presented is None or not tokens:
         return False
-    # Compared as bytes: compare_digest raises TypeError on a str holding any
-    # non-ASCII character, and both sides can hold one, and the credential arrives
-    # from a header Starlette decodes as latin-1, and a stored token is whatever
-    # the operator pasted. A 500 on an unauthenticated request is not a refusal.
+    # Compared as bytes: compare_digest raises TypeError on a non-ASCII str, and
+    # either side may contain one.
     candidate = presented.encode("utf-8")
-    # Every token is compared before any of the results is read. Stopping at the
-    # first match would make the elapsed time reveal which position matched, and
-    # with it the size of the token set a caller's credential sits in.
+    # Compare every token before reading any result, so timing does not reveal
+    # which position matched.
     matches = [hmac.compare_digest(candidate, token.encode("utf-8")) for token in tokens]
     return any(matches)
 
@@ -82,9 +68,7 @@ def select_upstream(path: str, config: RelayConfig) -> tuple[Upstream, str]:
     """Return the upstream for a request path and the path to forward.
 
     The leading segment selects an upstream only when it exactly names one;
-    anything else falls through to the default with the path untouched. That is
-    what lets an Ollama client that has never heard of lmrelay keep sending
-    /api/chat to port 11434.
+    otherwise the default gets the path untouched, so plain Ollama clients work.
     """
     segments = path.lstrip("/").split("/", 1)
     if segments[0] in config.upstreams:
@@ -96,14 +80,10 @@ def select_upstream(path: str, config: RelayConfig) -> tuple[Upstream, str]:
 def check_dialect(upstream: Upstream, path: str) -> str | None:
     """Return a refusal message for a path that certainly does not exist upstream.
 
-    A denylist of known-wrong shapes rather than an allowlist of known-good
-    ones: an allowlist would start refusing legitimate traffic the day a
-    provider ships a new endpoint, making the relay something you have to keep
-    updated.
+    A denylist, not an allowlist, so a provider's new endpoint is never refused.
     """
     if upstream.dialect == "ollama":
-        # Ollama serves both its native /api/* and an OpenAI-compatible /v1/*,
-        # so nothing is certainly wrong.
+        # Ollama serves both /api/* and an OpenAI-compatible /v1/*.
         return None
     if path.startswith(OLLAMA_PREFIX):
         return describe_dialect_mismatch(upstream, path, "ollama")
@@ -116,7 +96,7 @@ def check_dialect(upstream: Upstream, path: str) -> str | None:
 
 def describe_dialect_mismatch(upstream: Upstream, path: str, path_dialect: str) -> str:
     """Phrase the refusal so the caller knows it came from lmrelay, not the provider."""
-    # "an" is fixed rather than derived: all three dialect labels begin with a vowel.
+    # "an" is fixed: every dialect label begins with a vowel.
     return (
         f"lmrelay: upstream '{upstream.name}' speaks the {DIALECT_LABELS[upstream.dialect]} API; "
         f"'{path}' is an {DIALECT_LABELS[path_dialect]}-dialect path. lmrelay forwards requests "
@@ -125,7 +105,7 @@ def describe_dialect_mismatch(upstream: Upstream, path: str, path_dialect: str) 
 
 
 def build_upstream_headers(headers: Mapping[str, str], upstream: Upstream) -> dict[str, str]:
-    """Forward the caller's headers minus the dropped ones, with the upstream's on top."""
+    """Forward the caller's headers minus dropped ones; upstream headers win, any case."""
     configured = {name.lower() for name in upstream.headers}
     forwarded = {
         name: value
@@ -145,7 +125,7 @@ def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
 
 
 def build_upstream_url(upstream: Upstream, forward_path: str, query: str) -> str:
-    """Concatenate base_url with the forwarded path; the query string rides along verbatim."""
+    """Join base_url, the forwarded path and the verbatim query string."""
     url = upstream.base_url + forward_path
     return f"{url}?{query}" if query else url
 
@@ -153,9 +133,8 @@ def build_upstream_url(upstream: Upstream, forward_path: str, query: str) -> str
 def has_request_body(headers: Mapping[str, str]) -> bool:
     """Report whether the caller sent a body at all.
 
-    A GET with no body must not be re-framed as chunked, which some upstreams reject,
-    so an empty request is forwarded with no body rather than an empty
-    stream.
+    An empty request is forwarded without a body, not as an empty chunked
+    stream, which some upstreams reject.
     """
     if headers.get("content-length"):
         return headers["content-length"] != "0"
@@ -169,11 +148,8 @@ def build_upstream_request(
     forward_path: str,
 ) -> httpx.Request:
     """Build the outbound request: same method, path, query and body bytes."""
-    # Built directly rather than through client.build_request so httpx's default
-    # Accept / Accept-Encoding / User-Agent do not join headers the caller never
-    # sent: an Accept-Encoding we invented would come back as a compressed body
-    # the caller never asked for. The client's timeout still has to be attached
-    # by hand as a result.
+    # Built directly, not via client.build_request, so httpx invents no
+    # Accept-Encoding (and no compressed reply). The timeout is attached by hand.
     body = request.stream() if has_request_body(request.headers) else b""
     return httpx.Request(
         method=request.method,

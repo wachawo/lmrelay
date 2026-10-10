@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Centralized logging configuration. Set at startup, and again by a reload that moves the level."""
+"""Centralized logging configuration, applied at startup and again on reload."""
 
 import logging
 import secrets
@@ -8,45 +8,31 @@ import secrets
 LOG_FORMAT  = "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s) [%(request_id)s] %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-# Command output that is data (a status block, a token table) is a table only
-# without a timestamp and a logger name in front of every row. No request id
-# either: a command is not serving anybody's request.
+# Command output that is data (a status block, a token table) reads as a table
+# only without a timestamp and logger name on every row.
 PLAIN_FORMAT = "%(message)s"
 
-# What a line that belongs to no request carries: startup, shutdown, a reload,
-# and everything uvicorn says on its own account.
+# Request id for lines outside any request (startup, reload, uvicorn).
 NO_REQUEST = "-"
 
-# What this module's own handler is called, so that a second call can find the
-# one the last call installed and replace exactly that.
+# Name of our handler, so a later call replaces exactly that one.
 HANDLER_NAME = "lmrelay"
 
 
 def new_request_id() -> str:
-    """A short id for one request, so its lines can be picked out of the log.
+    """Return a short id that ties one request's log lines together.
 
-    Eight hex characters rather than a whole uuid4. This is one relay writing one
-    file, not a trace across services, and the job is to tie an access line to
-    the upstream failure it caused a few lines above it. Four random bytes
-    collide at around sixty thousand requests by the birthday bound, which in a
-    file an operator greps a page of is a coincidence, not a wrong answer, and
-    the id is never used to look anything up.
+    Eight hex characters, not a uuid4: it only correlates nearby lines in one
+    file and is never used as a lookup key, so a rare collision is harmless.
     """
     return secrets.token_hex(4)
 
 
 def supply_request_id(record: logging.LogRecord) -> bool:
-    """Give a record with no request id the placeholder, so the format cannot raise.
+    """Give a record without a request id the placeholder, so the format cannot raise.
 
-    A plain function rather than a logging.Filter subclass: logging has accepted
-    a callable here since 3.2, and this needs no state. Attached to the handler
-    and not to a logger, because a filter on a logger is not consulted for the
-    records its children propagate, and nearly every line here is propagated.
-
-    Never overwrites an id that is already set. The id arrives by `extra=` from
-    whatever is serving the request; this only covers the lines that have none,
-    which without it would each raise a KeyError inside logging and be printed
-    as a formatting error instead of as the line.
+    Attached to the handler, not a logger: a logger's filter is not consulted for
+    records propagated from its children. An id set via `extra=` is kept.
     """
     if not hasattr(record, "request_id"):
         record.request_id = NO_REQUEST
@@ -56,20 +42,13 @@ def supply_request_id(record: logging.LogRecord) -> bool:
 def setup_logging(level: str = "INFO", plain: bool = False) -> None:
     """Initialize logging. Safe to call again under a live process, as a reload does."""
     numeric_level = getattr(logging, level.upper(), logging.INFO)
-    # The filter goes on the handler this call installs, and the loop below drops
-    # the handler the last call left, so a reload that moves the level ends with
-    # exactly one of ours carrying exactly one copy of the filter.
     handler = logging.StreamHandler()
     handler.set_name(HANDLER_NAME)
     handler.addFilter(supply_request_id)
     handler.setFormatter(logging.Formatter(PLAIN_FORMAT if plain else LOG_FORMAT, LOG_DATEFMT))
 
-    # Ours by name, rather than every root handler. `logging.basicConfig(...,
-    # force=True)` said this in one word and said too much: it removes and closes
-    # whatever else is attached, and under pytest that is the handler behind
-    # caplog. A reload switches the level here and then writes several lines
-    # about what it applied, so a test that asserted on any of them was reading
-    # an empty capture and passing for the wrong reason.
+    # Remove only our previous handler, by name: other root handlers (such as
+    # pytest's caplog) must survive a reload.
     root = logging.getLogger()
     for previous in [one for one in root.handlers if one.get_name() == HANDLER_NAME]:
         root.removeHandler(previous)
@@ -77,23 +56,19 @@ def setup_logging(level: str = "INFO", plain: bool = False) -> None:
     root.addHandler(handler)
     root.setLevel(numeric_level)
 
-    # Uvicorn installs its own handlers and formats; stripping them makes every
-    # line in the process share the format above.
+    # Strip uvicorn's own handlers so every line shares the format above.
     for name in ("uvicorn", "uvicorn.error"):
         logger = logging.getLogger(name)
         logger.handlers = []
         logger.propagate = True
 
-    # The relay writes its own request line, naming the chosen upstream, so
-    # uvicorn's access log would only repeat it. Silenced here rather than via
-    # `access_log=False` because that flag is not passed when the app is run as
-    # a bare `uvicorn lmrelay.app:app`.
+    # The relay logs its own request line. Silenced here rather than via
+    # `access_log=False`, which a bare `uvicorn lmrelay.app:app` does not pass.
     access_logger = logging.getLogger("uvicorn.access")
     access_logger.handlers = []
     access_logger.propagate = False
 
-    # httpx announces every outbound request at INFO, which duplicates the
-    # request line as well.
+    # httpx logs every outbound request at INFO, duplicating the request line.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 

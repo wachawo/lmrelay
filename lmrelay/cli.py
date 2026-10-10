@@ -98,8 +98,8 @@ BACKUP_SUFFIX       = ".bak"
 def apply_config_env(args: argparse.Namespace) -> None:
     """Publish --config as $LMRELAY_CONFIG.
 
-    uvicorn imports app.py itself, and app.py loads the config again from
-    scratch, so the choice has to travel by environment, not by argument.
+    uvicorn re-imports app.py, which loads the config from scratch, so the
+    choice has to travel by environment.
     """
     if getattr(args, "config", None):
         os.environ[CONFIG_ENV_VAR] = str(Path(args.config).expanduser())
@@ -108,8 +108,7 @@ def apply_config_env(args: argparse.Namespace) -> None:
 def config_path_from(args: argparse.Namespace) -> Path:
     """Locate the config this command applies to, whether or not it exists yet.
 
-    Falling back to the home path rather than refusing lets `token gen` run
-    before `init`: the state lands where the config will.
+    The home-path fallback lets `token gen` run before `init`.
     """
     apply_config_env(args)
     return find_config_path() or HOME_CONFIG_PATH
@@ -118,25 +117,24 @@ def config_path_from(args: argparse.Namespace) -> Path:
 def service_control(action: str, config_path: Path) -> str:
     """Hand stop/restart/reload to the service manager that owns the process.
 
-    Signalling the pid behind the manager's back would leave the two disagreeing
-    about who owns the relay, and the next Restart=on-failure would undo it.
+    Signalling the pid behind the manager's back would be undone by the next
+    Restart=on-failure.
     """
     if detect_manager() == "systemd":
         scope = systemd_scope()
         if action == "reload" and scope == "system":
-            # A signal to the process, which runs as this user, rather than
-            # `systemctl reload`, which would need root for the same SIGHUP.
+            # The process runs as this user, so signal it directly; `systemctl
+            # reload` would need root for the same SIGHUP.
             reload_daemon(config_path)
             return "lmrelay: signalled the systemd-managed process to re-read its config (SIGHUP)."
         run_service_command([*systemctl(scope), action, SYSTEMD_UNIT_NAME])
         return f"lmrelay: {action} via systemd ({scope} unit)."
     if action == "reload":
-        # launchd has no reload verb, and it is the same process either way.
+        # launchd has no reload verb.
         reload_daemon(config_path)
         return "lmrelay: signalled the launchd-managed process to re-read its config (SIGHUP)."
-    # No -w: that flag writes the job into launchd's disabled database, where it
-    # survives a reboot. A stop is meant to be temporary, and only `lmrelay
-    # disable` may decide the relay stops coming back at login.
+    # No -w: it marks the job disabled across reboots. A stop is temporary;
+    # only `lmrelay disable` turns autostart off.
     run_service_command(["launchctl", "unload", str(LAUNCHD_PLIST_PATH)])
     if action == "restart":
         run_service_command(["launchctl", "load", str(LAUNCHD_PLIST_PATH)])
@@ -146,9 +144,8 @@ def service_control(action: str, config_path: Path) -> str:
 def reload_running_relay(config_path: Path) -> None:
     """Ask a running relay to pick a saved change up, or say when it will."""
     if reload_daemon(config_path):
-        # Not "the change is live": SIGHUP is delivered, not acknowledged, and a
-        # relay that cannot parse what it re-reads keeps the config it had. The
-        # reason is in its log, so the claim made here stops at what was done.
+        # "Signalled", not "live": SIGHUP is not acknowledged, and a relay that
+        # cannot parse the new config keeps the old one and says why in its log.
         logger.info("Signalled the running relay to re-read it (SIGHUP).")
     else:
         logger.info("No relay is running; the change applies at the next start.")
@@ -188,13 +185,10 @@ def describe_autostart(status: dict) -> str:
 
 
 def save_new_token(state: RelayState, record: CallerToken) -> None:
-    """Persist a freshly added token, and say so if it is not yet being required.
+    """Persist a freshly added token, and say so if tokens are not yet required.
 
-    Minting a credential and requiring one are two decisions, and this command
-    only makes the first: an operator who adds a token to a relay that is still
-    serving other traffic has not asked for that traffic to start failing. The
-    reminder is here because the alternative, saying nothing, leaves them
-    believing the relay is closed when it is not.
+    Minting a token and requiring tokens are separate decisions: adding one must
+    not start refusing traffic already flowing, so the operator gets a reminder.
     """
     save_state(state)
     label = f" ({record.label})" if record.label else ""
@@ -224,14 +218,12 @@ def run_relay(args: argparse.Namespace) -> None:
             f"run 'lmrelay stop' first, or 'lmrelay restart'"
         )
 
-    # Loaded here as well so a broken config fails at the command line with a
-    # readable message instead of inside a uvicorn worker.
+    # Loaded here too so a broken config fails readably, not in a uvicorn worker.
     config = load_config()
     setup_logging(config.log_level)
 
     if args.host:
-        # The app checks the configured host at startup, so an overridden one
-        # would otherwise be exposed without the warning.
+        # The app checks only the configured host for exposure.
         exposure_warning = check_exposure(replace(config, host=args.host))
         if exposure_warning:
             logger.warning(exposure_warning)
@@ -242,8 +234,7 @@ def run_relay(args: argparse.Namespace) -> None:
 def serve_relay(args: argparse.Namespace) -> None:
     """Start the relay detached and report where it went."""
     apply_config_env(args)
-    # Loaded before the fork so a broken config fails at the terminal rather
-    # than inside a detached process nobody is watching.
+    # Loaded before the fork so a broken config fails at the terminal.
     config = load_config()
     setup_logging(config.log_level)
 
@@ -277,25 +268,16 @@ def restart_relay(args: argparse.Namespace) -> None:
 
 
 def warn_about_settings_a_reload_cannot_apply(config_path: Path) -> None:
-    """Say in the terminal what the relay would otherwise say only in its log.
+    """Warn in the terminal about changed settings that only a restart applies.
 
-    An operator who edits the port and reloads gets "signalled" and a relay
-    still on the old port. The relay does warn, but into lmrelay.log, which is
-    not where somebody who has just typed a command is looking.
-
-    Worked out here rather than reported back by the relay. SIGHUP is delivered,
-    not acknowledged, so asking it would mean polling for an answer that may not
-    have been written yet and deciding what its absence meant. Both halves are
-    already on this side: the pidfile records what the process started with,
-    which is the only record that survives the process that chose it, and the
-    config on disk is what it is being asked to move to. Same comparison, same
-    sentence, no round trip.
+    The relay warns only into its log. Computed here because SIGHUP is not
+    acknowledged: the pidfile holds the startup settings, the config on disk
+    holds the new ones.
     """
     try:
         config = load_config()
     except LmrelayError:
-        # A config the relay will refuse is the relay's own to report, in its
-        # log, where the reason it kept the old one also is.
+        # The relay reports a config it refuses, in its own log.
         return
     started = read_startup_settings(pid_file(config_path))
     unapplied = unapplied_settings(started, config)
@@ -311,9 +293,7 @@ def reload_relay(args: argparse.Namespace) -> None:
         warn_about_settings_a_reload_cannot_apply(config_path)
         return
     if reload_daemon(config_path):
-        # "Signalled", not "reloaded", for the reason spelled out at
-        # reload_running_relay: a relay that cannot parse what it re-reads keeps
-        # the config it had, and this command exits 0 either way.
+        # "Signalled", not "reloaded": see reload_running_relay.
         logger.info("lmrelay: signalled the running relay to re-read its config (SIGHUP).")
         warn_about_settings_a_reload_cannot_apply(config_path)
     else:
@@ -332,8 +312,7 @@ def show_status(args: argparse.Namespace) -> None:
         health = "healthy" if info["healthy"] else "not responding"
         process = f"running (pid {info['pid']}), {health}"
     else:
-        # The rest is still shown: "what would it do if I started it" is the
-        # question a stopped relay raises.
+        # The rest still shows what a start would do.
         process = "stopped"
     count = info["token_count"]
     tokens = "1 token" if count == 1 else f"{count} tokens"
@@ -344,8 +323,6 @@ def show_status(args: argparse.Namespace) -> None:
         ("state", str(info["state_path"])),
         ("upstreams", f"{info['upstreams']} (default: {info['default_upstream']})"),
         ("auth", f"{'on' if info['auth_enabled'] else 'off'}, {tokens}"),
-        # What is actually enforced, which was otherwise visible only by
-        # exporting the whole configuration and reading the bundle.
         ("limits", describe_limits(config.limits)),
         ("autostart", describe_autostart(autostart)),
     ]
@@ -357,8 +334,7 @@ def show_status(args: argparse.Namespace) -> None:
 
 
 def show_version(unused_args: argparse.Namespace) -> None:
-    """The same line `--version` prints, as a command: it is what an operator
-    types when asked which lmrelay they are running, and a flag is not."""
+    """Print the line `--version` prints, as a command."""
     setup_logging(plain=True)
     logger.info(f"lmrelay {__version__}")
 
@@ -367,8 +343,7 @@ def enable_service(args: argparse.Namespace) -> None:
     """Register the relay with the platform's service manager and start it."""
     apply_config_env(args)
     config = load_config()
-    # A unit runs from an unknown working directory, so the path it names has to
-    # be absolute even when the operator typed a relative one.
+    # A unit runs from an unknown working directory, so the path must be absolute.
     config_path = config.config_path.resolve()
     if args.system:
         enable_system_service(config_path)
@@ -382,8 +357,8 @@ def enable_service(args: argparse.Namespace) -> None:
 def enable_system_service(config_path: Path) -> None:
     """Install the system unit as root, or print it and the commands that install it.
 
-    The unit goes to standard output and every word about it to stderr, so
-    the printed command can pipe this same invocation into `sudo tee`.
+    The unit goes to stdout and messages to stderr, so the printed command can
+    pipe this same invocation into `sudo tee`.
     """
     text = system_unit_for(config_path)
     if running_as_root():
@@ -409,18 +384,15 @@ def disable_service(args: argparse.Namespace) -> None:
 
 
 def acceptable_token_count(config_path: Path, state: RelayState) -> int:
-    """How many credentials a caller could actually present.
+    """Count the credentials a caller could actually present.
 
-    Not just the ones the CLI stored: an `[auth] token` written into the config
-    file is equally valid, and it is how an install that never runs `token gen`
-    gets one. Counting only the state would refuse to turn auth on in exactly
-    the setup load_config warns about, telling the operator to run the command
-    that just refused.
+    Includes an `[auth] token` from the config file, not only CLI-stored tokens,
+    so `auth true` works on an install that never ran `token gen`.
     """
     try:
         return len(load_config(config_path).auth_tokens)
     except LmrelayError:
-        # A config that will not load cannot contribute a token; the state can.
+        # A config that will not load contributes no token; the state still can.
         return len(state.tokens)
 
 
@@ -430,8 +402,7 @@ def set_auth(args: argparse.Namespace) -> None:
     state = load_state(state_path_for(config_path))
     enabled = args.value == "true"
     if enabled and not acceptable_token_count(config_path, state):
-        # Auth on with an empty token set 401s every request, the operator's own
-        # included.
+        # Auth on with no tokens would 401 every request.
         raise LmrelayError("lmrelay: no tokens configured; run 'lmrelay token gen' first")
     save_state(set_auth_enabled(state, enabled))
     logger.info(f"Auth is now {'on' if enabled else 'off'}.")
@@ -509,8 +480,7 @@ def provider_add(args: argparse.Namespace) -> None:
     )
     save_state(state)
     provider = state.providers[args.name]
-    # Reported because a preset chose the base_url and the dialect, and an
-    # operator who never typed them deserves to see what they got.
+    # A preset may have chosen base_url and dialect, so show what was set.
     logger.info(
         f"Provider '{args.name}' -> {provider['base_url']} ({provider['dialect']} dialect)."
     )
@@ -540,8 +510,7 @@ def provider_delete(args: argparse.Namespace) -> None:
     config_path = config_path_from(args)
     state = load_state(state_path_for(config_path))
     if args.name not in state.providers:
-        # `provider list` may well show the name, because lmrelay.toml defines
-        # it; deleting nothing and saying so would read as a delete that worked.
+        # The name may come from lmrelay.toml; a silent no-op would read as success.
         raise LmrelayError(
             f"lmrelay: provider '{args.name}' was not added by the CLI; if it is defined "
             f"in {config_path}, remove its [upstream.{args.name}] section by hand"
@@ -552,21 +521,14 @@ def provider_delete(args: argparse.Namespace) -> None:
 
 
 def scope_limits_from(args: argparse.Namespace) -> ScopeLimits:
-    """The scope this invocation asks for, validated the way the file validates it.
-
-    Three forms, and the shape of the argument says which:
+    """Build the requested scope limits, validated by the config's own readers.
 
         limits set total 1              one at a time
         limits set total 1/60s          one a minute, and one at a time
         limits set per_address 2 10/30m ten every half hour, two at a time
 
-    A rate on its own carries a cap, because "one a minute" said with nothing
-    about at-once means one at a time, and leaving the cap off would let ten
-    arrive together on the minute they are allowed.
-
-    Everything goes through the config's own readers rather than argparse's
-    `type=`, so a value typed on the command line is refused in the words the
-    same value in the TOML is refused in.
+    A rate alone also sets the at-once cap to its count. The config readers,
+    not argparse `type=`, keep CLI errors worded like TOML errors.
     """
     section = f"limits.{args.scope}"
     if args.rate is not None and "/" in args.concurrent:
@@ -587,12 +549,10 @@ def scope_limits_from(args: argparse.Namespace) -> ScopeLimits:
 
 
 def warn_about_a_cap_the_rate_cannot_reach(scope: str, limits: ScopeLimits) -> None:
-    """Say when the how-many-at-once is above what the how-often can ever start.
+    """Warn when the at-once cap exceeds what the rate can ever start together.
 
-    The bucket holds the rate's own count, so at most that many requests can
-    start in quick succession, and a cap above it is a number that will never
-    refuse anybody. Legal, and worth one line: it is almost always a slip, and
-    the two numbers sitting beside each other look like they agree.
+    The bucket holds the rate's count, so a higher cap never refuses anybody.
+    Legal, but almost always a slip.
     """
     allowance = limits.allowance()
     if allowance is None or limits.concurrent <= allowance[0]:
@@ -604,11 +564,9 @@ def warn_about_a_cap_the_rate_cannot_reach(scope: str, limits: ScopeLimits) -> N
 
 
 def warn_about_a_scope_nothing_keys(scope: str, config_path: Path, limits) -> None:
-    """Say when the scope just set is keyed by something that does not exist yet.
+    """Warn when per_token limits are set while auth is off.
 
-    load_config says this too, at the next start. It is worth saying twice: there
-    it lands in a log, and here it lands in front of the operator at the moment
-    they can still make the other choice.
+    load_config warns too, but only into the log at the next start.
     """
     if scope != "per_token" or not limits.configured():
         return
@@ -625,17 +583,14 @@ def limits_set(args: argparse.Namespace) -> None:
     config_path = config_path_from(args)
     wanted = scope_limits_from(args)
     if not config_path.exists():
-        # Writing one would produce a config with limits and no upstream, which
-        # is a file the relay refuses to start from.
+        # A new file with limits and no upstream would not start.
         raise ConfigError(
             f"lmrelay: no config at {config_path} to edit; limits live in lmrelay.toml. "
             f"Run 'lmrelay init' first."
         )
 
     before, after = set_scope_limits(config_path, args.scope, wanted)
-    # Before and after in the words `status` and the reload log use, because a
-    # command that only said "written" leaves the operator running `status` to
-    # find out whether it wrote what they meant.
+    # Before and after, worded as `status` words them.
     logger.info(
         f"[limits.{args.scope}] {describe_scope(before)} -> {describe_scope(after)} "
         f"in {config_path}."
@@ -646,23 +601,16 @@ def limits_set(args: argparse.Namespace) -> None:
 
 
 def plural(count: int, noun: str) -> str:
-    """N nouns, with the s only when there is not exactly one of them."""
+    """Return 'N noun', with an s unless N is 1."""
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
 def check_export_destination(destination: str, config: RelayConfig, force: bool) -> None:
     """Refuse a destination an export would quietly ruin.
 
-    Two refusals rather than one, because the two ways to lose something here
-    are not the same size. The relay's own two files are refused outright: a
-    bundle written over state.json is still readable to load_state, which finds
-    no tokens and no providers in it and turns auth off without a word, and the
-    only copy of the credentials is then in a file the next `token gen`
-    overwrites. No flag makes that the thing anybody meant.
-
-    Anything else that exists is refused until it is asked for twice, which is
-    what `init` and `import` already do with the files they write. Export
-    used to be the one verb in the set that overwrote in silence.
+    The relay's own config and state are always refused: a bundle written over
+    state.json still loads, with no tokens and auth silently off. Any other
+    existing file needs --force, as with `init` and `import`.
     """
     if destination == STDIO_PATH:
         return
@@ -685,15 +633,13 @@ def config_export(args: argparse.Namespace) -> None:
     apply_config_env(args)
     config = load_config()
     state = load_state(config.state_path)
-    # No path means the terminal, so `lmrelay export | ssh ...` is the whole of
-    # moving a relay. The bundle goes to stdout and every word about it to
-    # stderr, so the pipe carries the file and nothing else.
+    # No path means stdout, so `lmrelay export | ssh ...` moves a relay; messages
+    # go to stderr so the pipe carries only the bundle.
     destination = args.path or STDIO_PATH
     check_export_destination(destination, config, args.force)
     keep_secrets = not args.no_secrets
-    # The configuration in effect, not the two files verbatim: an upstream whose
-    # header is written ${OPENAI_API_KEY} is exported expanded, because a bundle
-    # reproduces the relay rather than the machine it ran on.
+    # The effective config, not the files verbatim: ${VAR} headers are exported
+    # expanded, since a bundle reproduces the relay, not the machine.
     bundle = build_bundle(config, state, keep_secrets=keep_secrets)
     write_bundle(bundle, destination)
 
@@ -702,10 +648,8 @@ def config_export(args: argparse.Namespace) -> None:
     where = "standard output" if to_terminal else f"{destination} (0600)"
     logger.info(f"Wrote {where}.")
     if keep_secrets:
-        # Said out loud because this is a file people attach to an issue, and
-        # louder still when it went to a terminal, where it is now in the
-        # scrollback and in any screenshot of it. --no-secrets is named rather
-        # than described, so the fix is one thing to copy.
+        # Bundles get attached to issues; on a terminal the secrets are also in
+        # the scrollback, so that case is a warning.
         count = f"{plural(tokens, 'caller token')} and {plural(keyed, 'provider key')}"
         if to_terminal and (tokens or keyed):
             logger.warning(f"That was {count} in clear, on your terminal. --no-secrets masks them.")
@@ -725,12 +669,10 @@ def backup_path(path: Path) -> Path:
 
 
 def plan_replacement(paths: tuple[Path, ...], force: bool) -> list[tuple[Path, Path]]:
-    """Refuse to overwrite anything, or say where the existing files are going.
+    """Refuse to overwrite anything, or return where the existing files will move.
 
-    Symmetric with `lmrelay init`, which refuses to overwrite a config too. The
-    .bak check is what stops this losing anything: a backup silently replaced by
-    a second import is exactly the file the operator would reach for, and
-    accumulating timestamped copies instead would leave secrets lying around.
+    An existing .bak is never overwritten: it is the file the operator would
+    reach for, and timestamped copies would leave secrets lying around.
     """
     existing = [path for path in paths if path.exists()]
     if not existing:
@@ -755,10 +697,9 @@ def plan_replacement(paths: tuple[Path, ...], force: bool) -> list[tuple[Path, P
 
 
 def report_missing_secrets(missing: tuple[str, ...]) -> None:
-    """Say what a masked bundle did not carry, rather than importing a mask.
+    """Warn about the secrets a masked bundle did not carry.
 
-    A masked value restored as a header is sent to the provider and refused,
-    and reads as a wrong key rather than as a bundle exported without one.
+    A mask restored as a header would be refused upstream and look like a wrong key.
     """
     if not missing:
         return
@@ -772,22 +713,16 @@ def config_import(args: argparse.Namespace) -> None:
     state_path = state_path_for(config_path)
     origin = args.path or STDIO_PATH
     if origin == STDIO_PATH and sys.stdin.isatty():
-        # Refused rather than left waiting: with nothing piped in, reading
-        # stdin is a command that hangs with no output, which reads as a relay
-        # that has locked up rather than as a missing argument.
+        # Refused rather than hanging silently on an unpiped terminal.
         raise BundleError(
             "lmrelay: no bundle to read. Give a path, or pipe one in: "
             "'lmrelay import relay.toml', or 'cat relay.toml | lmrelay import'."
         )
     source = describe_source(origin)
 
-    # Both halves are validated, and the backups are planned, before anything is
-    # touched, so a bundle this relay will not accept leaves the existing pair
-    # exactly as it was rather than configured by neither it nor the bundle.
-    # That covers everything this command decides. It does not cover the four
-    # filesystem operations below, which cannot be made one: if the disk fails
-    # between them, what the operator has is what the .bak names say they have,
-    # which is why the moves are announced one at a time as they happen.
+    # Validate the bundle and plan the backups before touching anything, so a
+    # rejected bundle leaves the existing files intact. The file operations
+    # below cannot be atomic, so each move is announced as it happens.
     bundle = parse_bundle(read_bundle(origin), source)
     moves = plan_replacement((config_path, state_path), args.force)
 
@@ -813,8 +748,7 @@ def config_import(args: argparse.Namespace) -> None:
             "refused. Run 'lmrelay token gen', or 'lmrelay auth false'."
         )
     reload_running_relay(config_path)
-    # Said whether or not one is running, because the operator who imports on a
-    # stopped relay is the one who will start it next.
+    # Said even when nothing is running: that relay gets started next.
     logger.info(
         "host, port and connect_timeout are read at startup only; run 'lmrelay restart' if "
         "the bundle moved any of them."
@@ -897,9 +831,7 @@ def add_limits_commands(subparsers: argparse._SubParsersAction) -> None:
         "set", help="write one scope's numbers into the config file"
     )
     set_parser.add_argument("scope", choices=SCOPES, help="whose requests the number counts")
-    # Left as strings, and read by the config's own readers in the handler: a
-    # number argparse refused would be refused in argparse's words rather than
-    # in the ones the same number in the file is refused in.
+    # Strings, so the handler's config readers word errors as the TOML would.
     set_parser.add_argument(
         "concurrent", metavar="N|N/PERIOD",
         help="how many at once, or a rate on its own, which also caps at once; 0 turns it off",
@@ -917,10 +849,7 @@ def add_transfer_commands(subparsers: argparse._SubParsersAction) -> None:
     export_parser = subparsers.add_parser(
         "export", help="write everything needed to reproduce this relay"
     )
-    # Optional, and the terminal is what no path means, so moving a relay is one
-    # pipe. '-' is still accepted, because a script that spells it out should
-    # keep working and because it reads as deliberate where a bare command does
-    # not.
+    # No path means stdout, so moving a relay is one pipe; '-' is also accepted.
     export_parser.add_argument(
         "path", nargs="?", default=None,
         help=f"file to write. Left off, or '{STDIO_PATH}', it goes to standard output",
@@ -1022,8 +951,7 @@ def main() -> None:
     try:
         args.handler(args)
     except LmrelayError as exc:
-        # The message is already written for the operator; a traceback would
-        # only bury it.
+        # The message is written for the operator; a traceback would bury it.
         logger.error(str(exc))
         raise SystemExit(1)
 
