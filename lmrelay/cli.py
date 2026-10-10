@@ -203,10 +203,8 @@ def init_config(unused_args: argparse.Namespace) -> None:
     if HOME_CONFIG_PATH.exists():
         raise ConfigError(f"lmrelay: {HOME_CONFIG_PATH} already exists; not overwriting")
     example = resources.files("lmrelay").joinpath(EXAMPLE_CONFIG_NAME).read_text(encoding="utf-8")
-    HOME_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HOME_CONFIG_PATH.write_text(example, encoding="utf-8")
-    # The file is meant to hold provider keys.
-    HOME_CONFIG_PATH.chmod(0o600)
+    # 0600 from creation: the file is meant to hold provider keys.
+    write_private(HOME_CONFIG_PATH, example)
     logger.info(f"Wrote {HOME_CONFIG_PATH}. Edit it, then run 'lmrelay run'.")
 
 
@@ -268,7 +266,7 @@ def restart_relay(args: argparse.Namespace) -> None:
     serve_relay(args)
 
 
-def warn_about_settings_a_reload_cannot_apply(config_path: Path) -> None:
+def warn_unapplied_settings(config_path: Path) -> None:
     """Warn in the terminal about changed settings that only a restart applies.
 
     The relay warns only into its log. Computed here because SIGHUP is not
@@ -291,12 +289,12 @@ def reload_relay(args: argparse.Namespace) -> None:
     config_path = config_path_from(args)
     if service_is_active():
         logger.info(service_control("reload", config_path))
-        warn_about_settings_a_reload_cannot_apply(config_path)
+        warn_unapplied_settings(config_path)
         return
     if reload_daemon(config_path):
         # "Signalled", not "reloaded": see reload_running_relay.
         logger.info("lmrelay: signalled the running relay to re-read its config (SIGHUP).")
-        warn_about_settings_a_reload_cannot_apply(config_path)
+        warn_unapplied_settings(config_path)
     else:
         logger.info("lmrelay: not running; nothing to reload.")
 
@@ -549,7 +547,7 @@ def scope_limits_from(args: argparse.Namespace) -> ScopeLimits:
     )
 
 
-def warn_about_a_cap_the_rate_cannot_reach(scope: str, limits: ScopeLimits) -> None:
+def warn_unreachable_cap(scope: str, limits: ScopeLimits) -> None:
     """Warn when the at-once cap exceeds what the rate can ever start together.
 
     The bucket holds the rate's count, so a higher cap never refuses anybody.
@@ -564,7 +562,7 @@ def warn_about_a_cap_the_rate_cannot_reach(scope: str, limits: ScopeLimits) -> N
     )
 
 
-def warn_about_a_scope_nothing_keys(scope: str, config_path: Path, limits) -> None:
+def warn_unkeyed_scope(scope: str, config_path: Path, limits: ScopeLimits) -> None:
     """Warn when per_token limits are set while auth is off.
 
     load_config warns too, but only into the log at the next start.
@@ -596,8 +594,8 @@ def limits_set(args: argparse.Namespace) -> None:
         f"[limits.{args.scope}] {describe_scope(before)} -> {describe_scope(after)} "
         f"in {config_path}."
     )
-    warn_about_a_scope_nothing_keys(args.scope, config_path, after)
-    warn_about_a_cap_the_rate_cannot_reach(args.scope, after)
+    warn_unkeyed_scope(args.scope, config_path, after)
+    warn_unreachable_cap(args.scope, after)
     reload_running_relay(config_path)
 
 

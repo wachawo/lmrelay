@@ -300,6 +300,28 @@ class TestProvidersSpelledOut:
         assert headers["OpenAI-Organization"] == "org-1"
         assert headers["Authorization"] == "Bearer sk-test"
 
+    def test_rotating_a_custom_providers_key_keeps_its_other_headers(self, tmp_path):
+        """Rebuilt from the default bearer instead, an x-api-key and a version
+        header given with --header would be dropped."""
+        state = add_provider(
+            fresh(tmp_path), "claude2", "sk-old", base_url="https://claude.test",
+            dialect="anthropic",
+            extra_headers={"x-api-key": "sk-old", "anthropic-version": "2023-06-01"},
+        )
+        rotated = add_provider(state, "claude2", "sk-new")
+        assert rotated.providers["claude2"]["headers"] == {
+            "Authorization": "Bearer sk-new",
+            "x-api-key": "sk-new",
+            "anthropic-version": "2023-06-01",
+        }
+
+    def test_but_a_custom_provider_with_no_stored_key_gets_the_default_bearer(self, tmp_path):
+        """What a --no-secrets import leaves: the endpoint, and no key to find."""
+        state = add_provider(fresh(tmp_path), "acme", "tok", base_url="https://acme.test")
+        state.providers["acme"]["headers"] = {}
+        rotated = add_provider(state, "acme", "tok2")
+        assert rotated.providers["acme"]["headers"] == {"Authorization": "Bearer tok2"}
+
     def test_deleting_an_unknown_provider_is_refused_by_name(self, tmp_path):
         with pytest.raises(StateError, match="openai"):
             delete_provider(fresh(tmp_path), "openai")

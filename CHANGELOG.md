@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StartLimitBurst=5`; before, `Restart=on-failure` retried every two seconds indefinitely.
 - **A hand-written unit without `Environment=LMRELAY_SERVICE=1` can start.** `lmrelay run` recognises
   itself as the unit's main process instead of refusing because its own unit is active.
+- **Rotating the key of a custom provider keeps its other headers.** `lmrelay provider add <name> <key>`
+  on a provider added with `--base-url` rebuilt its headers from the default bearer, dropping an
+  `x-api-key` or a version header given with `--header`. The new key now replaces the old one
+  wherever it appears.
+- **`lmrelay init` creates the config at 0600** instead of writing it and then narrowing it.
 - **An export carries an upstream whose name needs quotes.** `[upstream."my.relay"]` was written
   bare, so the bundle read back as a table `my` holding `relay`, and a name with a space or a
   quote did not parse at all.
@@ -64,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A 500 no longer echoes the exception to the caller.** It names the request id, under which
+  the relay's log has the traceback; the message itself could carry paths or header values.
 - **`X-Forwarded-For` is believed only from loopback.** The relay used to trust it from any
   sender, so a caller reaching the relay directly could choose the address that
   `[limits.per_address]` counts and fail2ban bans. Behind an nginx on the same host nothing

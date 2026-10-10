@@ -328,11 +328,17 @@ async def handle_http_exception(
 
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception) -> JSONResponse:
-    """Report anything unhandled as lmrelay's own 500 rather than a bare traceback."""
-    logger.error(
-        f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}", extra=log_extra(request)
+    """Report anything unhandled as lmrelay's own 500 rather than a bare traceback.
+
+    The caller gets the request id and nothing of the exception: its message can
+    carry paths, header values or a fragment of the upstream's answer.
+    """
+    extra = log_extra(request)
+    logger.error(f"{type(exc).__name__}: {str(exc)}\n{traceback.format_exc()}", extra=extra)
+    return JSONResponse(
+        {"error": f"lmrelay: internal error; the relay log has it under request {extra['request_id']}"},
+        status_code=500,
     )
-    return JSONResponse({"error": f"lmrelay: {type(exc).__name__}: {str(exc)}"}, status_code=500)
 
 
 @app.get(HEALTH_PATH)

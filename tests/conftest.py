@@ -312,6 +312,29 @@ def limited(tmp_path, monkeypatch, recorder):
     )
 
 
+# What the in-process client's address resolves to, and therefore the key a
+# relay with auth off counts every request against.
+TESTCLIENT_KEY = "addr:testclient"
+
+
+def fails_after_the_first_chunk():
+    """An upstream body that starts an answer and then breaks.
+
+    Synchronous because the recorder iterates its chunks synchronously, and a
+    generator rather than a list because a list has no way to stop badly.
+    """
+    yield FIRST_CHUNK
+    raise httpx.ReadError("connection reset")
+
+
+@pytest.fixture
+def capped(tmp_path, monkeypatch, recorder):
+    """A relay that admits one answer at a time from one address."""
+    yield from relay_with(
+        tmp_path, monkeypatch, recorder, config_limits(per_address="concurrent = 1")
+    )
+
+
 class Held(NamedTuple):
     """An answer part-way through, and the pool it and its rivals run in."""
 
