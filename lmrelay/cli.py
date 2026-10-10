@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import replace
 from importlib import resources
 from pathlib import Path
@@ -51,7 +52,7 @@ from lmrelay.daemon import (
 )
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.logging_setup import setup_logging
-from lmrelay.ratelimit import ScopeLimits, describe_limits, describe_scope, parse_rate
+from lmrelay.ratelimit import ScopeLimits, describe_limits, describe_scope
 from lmrelay.service import (
     LAUNCHD_PLIST_PATH,
     SYSTEMD_UNIT_NAME,
@@ -162,7 +163,7 @@ def parse_headers(pairs: list[str] | None) -> dict[str, str]:
     return headers
 
 
-def log_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+def log_table(header: tuple[str, ...], rows: Sequence[tuple[str, ...]]) -> None:
     """Log a table whose columns are as wide as their widest cell."""
     widths = [max(len(cell) for cell in column) for column in zip(header, *rows, strict=True)]
     for row in (header, *rows):
@@ -539,8 +540,8 @@ def scope_limits_from(args: argparse.Namespace) -> ScopeLimits:
 
     if args.rate is None and "/" in args.concurrent:
         spelled = read_rate({"rate": args.concurrent}, section, "rate")
-        allowance = parse_rate(spelled)
-        return ScopeLimits(concurrent=allowance[0], rate=spelled)
+        # read_rate has refused anything that is not `count/period`.
+        return ScopeLimits(concurrent=int(spelled.partition("/")[0]), rate=spelled)
 
     return ScopeLimits(
         concurrent=read_int({"concurrent": args.concurrent}, section, "concurrent", 0, minimum=0),

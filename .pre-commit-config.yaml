@@ -1,5 +1,5 @@
 # Install once per clone: `pre-commit install --hook-type pre-commit --hook-type pre-push`.
-# ruff runs on every commit; the test suite runs before a push, where its 15 seconds
+# ruff and mypy run on every commit; the test suite runs before a push, where its 15 seconds
 # are not paid per commit. ruff format is deliberately absent: the code aligns
 # assignments in columns, which the formatter would flatten.
 repos:
@@ -22,23 +22,13 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        # `language: python` with the project's own test extra, rather than
-        # `language: system` with a bare `pytest`. System meant whatever was on
-        # PATH when git ran, and on a machine where the suite is run from a
-        # virtualenv that is nothing: the hook answered `Executable pytest not
-        # found` and refused every push, including the ones whose tests passed.
-        # A hook that cannot run is worse than no hook, because it fails in the
-        # one direction that looks like a real failure.
+        # `language: python`, not `system`: a bare `pytest` on PATH is missing
+        # whenever the suite normally runs from a virtualenv, and the hook then
+        # refused every push. pre-commit builds and caches this environment.
         #
-        # `.[test]` installs the relay and the four packages the suite needs
-        # into an environment pre-commit builds and caches itself, so a fresh
-        # clone needs nothing beyond `pre-commit install`.
-        # Named rather than `.[test]`: pre-commit resolves a local path against
-        # its own working directory, and the extra brought in no pytest at all.
-        # Spelled out, the environment is built once and cached. The runtime
-        # four are here because the suite imports lmrelay, which imports them;
-        # lmrelay itself is not installed, and does not need to be, since
-        # pre-commit runs with the repository as the working directory.
+        # The dependencies are spelled out rather than taken from `.[test]`,
+        # which pre-commit resolves against its own directory and which brought
+        # in no pytest. lmrelay itself is imported from the working tree.
         entry: pytest
         language: python
         additional_dependencies:
@@ -52,3 +42,18 @@ repos:
           - httpx>=0.27,<1
         pass_filenames: false
         stages: [pre-push]
+
+      - id: mypy
+        name: mypy
+        # The same pin as the CI lint job, and the runtime dependencies so the
+        # FastAPI and httpx types are checked rather than treated as Any.
+        entry: mypy lmrelay
+        language: python
+        additional_dependencies:
+          - mypy~=2.4.0
+          - fastapi>=0.115,<1
+          - starlette>=0.37,<2
+          - uvicorn[standard]>=0.30,<1
+          - httpx>=0.27,<1
+        pass_filenames: false
+        types: [python]

@@ -9,6 +9,7 @@ import tempfile
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 # Local imports
 from lmrelay.errors import StateError
@@ -36,7 +37,7 @@ DEFAULT_PROVIDER_HEADERS = {"Authorization": "Bearer {token}"}
 
 # Known providers by name. {token} is substituted literally, not through
 # string.Template, so a key containing $ is not read as a variable.
-PROVIDER_PRESETS = {
+PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "openai":    {"base_url": "https://api.openai.com",    "dialect": "openai",
                   "headers": {"Authorization": "Bearer {token}"}},
     "anthropic": {"base_url": "https://api.anthropic.com", "dialect": "anthropic",

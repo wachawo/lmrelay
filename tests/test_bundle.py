@@ -178,6 +178,22 @@ def edited(bundle_path, **changes):
 class TestTheRoundTrip:
     """Export here, import there, and the relay is the same relay."""
 
+    @pytest.mark.parametrize("name", ["my.relay", 'team "a"', "two words"])
+    def test_an_upstream_whose_name_needs_quotes_survives_the_move(
+        self, tmp_path, monkeypatch, bundle_path, target, name
+    ):
+        """Written bare, `[upstream.my.relay]` reads back as a table `my`
+        holding a table `relay`, and a quote or a space does not parse at all."""
+        quoted = name.replace('"', '\\"')
+        source = write_config(tmp_path / "source", SOURCE_CONFIG.replace(
+            "[upstream.anthropic]", f'[upstream."{quoted}"]\nbase_url = "https://example.invalid"\n'
+            f"\n[upstream.anthropic]",
+        ))
+        monkeypatch.setenv("ANTHROPIC_KEY", ANTHROPIC_KEY)
+        export(source, bundle_path)
+        run_command(["import", str(bundle_path), "--config", str(target)])
+        assert load_config(target).upstreams[name].base_url == "https://example.invalid"
+
     def test_the_imported_relay_is_the_exported_one(
         self, source, bundle_path, target, monkeypatch
     ):

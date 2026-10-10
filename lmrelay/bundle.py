@@ -3,6 +3,7 @@
 """The transfer bundle: one TOML file that reproduces this relay on another machine."""
 
 import json
+import re
 import sys
 import tomllib
 from dataclasses import asdict, dataclass
@@ -24,6 +25,9 @@ from lmrelay.ratelimit import LIMIT_KEYS, SCOPES
 from lmrelay.state import MASKED_TOKEN, CallerToken, RelayState, utc_now, write_private
 
 BUNDLE_VERSION = 1
+
+# What TOML accepts as a key without quotes.
+BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 
 # Stdin for import, stdout for export.
 STDIO_PATH = "-"
@@ -422,10 +426,19 @@ def render_inline_table(table: dict) -> str:
     return f"{{ {pairs} }}" if pairs else "{}"
 
 
+def toml_key(name: str) -> str:
+    """Render a table key bare when TOML allows it, quoted otherwise.
+
+    An upstream name is a TOML key the operator chose, and `my.relay` written
+    bare would be read back as a table `my` holding a table `relay`.
+    """
+    return name if BARE_KEY.fullmatch(name) else json.dumps(name)
+
+
 def render_upstream(name: str, upstream: dict) -> list[str]:
     """Render one [upstream.<name>] table as lmrelay.toml spells it."""
     return [
-        f"[upstream.{name}]",
+        f"[upstream.{toml_key(name)}]",
         f"base_url = {toml_value(upstream['base_url'])}",
         f"dialect  = {toml_value(upstream['dialect'])}",
         f"headers  = {render_inline_table(upstream.get('headers') or {})}",
