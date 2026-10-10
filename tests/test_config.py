@@ -15,7 +15,7 @@ from lmrelay.config import (
     find_config_path,
     load_config,
 )
-from lmrelay.ratelimit import LIMIT_KEYS, SCOPES, ScopeLimits, default_limits
+from lmrelay.ratelimit import ScopeLimits, default_limits
 from tests.conftest import MINIMAL, write_config, write_state
 
 LIMITS = """
@@ -445,28 +445,29 @@ class TestTheThreeScopes:
         assert "is configured but auth is off" not in caplog.text
 
 
-class TestTheKeysThatWereReplaced:
-    """The per-caller [server] keys, refused with a pointer for one release."""
+class TestAServerKeyNobodyReads:
+    """[server] refuses what it does not know, as [limits] does."""
 
-    @pytest.mark.parametrize(
-        ("key", "replacement"),
-        [("rate_limit", "rate"), ("rate_burst", "rate"), ("max_concurrent", "concurrent")],
-    )
-    def test_an_old_limit_key_is_refused_rather_than_ignored(
-        self, tmp_path, key, replacement
-    ):
-        """Ignored, it leaves an operator believing a limit is on when it is
-        off. Refused, they find out at the moment they reload."""
+    @pytest.mark.parametrize("key", ["prot", "rate_limit", "max_concurrent"])
+    def test_it_is_refused_rather_than_ignored(self, tmp_path, key):
+        """Ignored, a misspelt key or a limit key from before the three scopes
+        leaves an operator believing a setting is on when it is not."""
         target = write_config(tmp_path, f"[server]\n{key} = 2\n" + MINIMAL)
-        with pytest.raises(ConfigError) as raised:
+        with pytest.raises(ConfigError, match=f"no key {key}") as raised:
             load_config(target)
-        message = str(raised.value)
-        assert key in message
-        # Every scope it could have meant, since the old key named none of them.
-        assert all(f"[limits.{scope}] {replacement}" in message for scope in SCOPES)
-        # And a key that exists there: 0.0.5's `requests` was itself retired,
-        # and a pointer to it sent the operator into a second refusal.
-        assert replacement in LIMIT_KEYS
+        assert "[limits.*]" in str(raised.value)
+
+    @pytest.mark.parametrize("value", ["2.5", "true"])
+    def test_a_whole_number_key_refuses_what_int_would_quietly_round(self, tmp_path, value):
+        """int() reads 2.5 as 2 and true as 1, so port = true bound port 1."""
+        target = write_config(tmp_path, f"[server]\nport = {value}\n" + MINIMAL)
+        with pytest.raises(ConfigError, match="port must be a whole number"):
+            load_config(target)
+
+    def test_a_host_that_is_not_a_string_is_refused(self, tmp_path):
+        target = write_config(tmp_path, "[server]\nhost = 127\n" + MINIMAL)
+        with pytest.raises(ConfigError, match="host must be a string"):
+            load_config(target)
 
 
 class TestSayingWhenThePortIsOpen:

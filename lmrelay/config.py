@@ -72,15 +72,6 @@ DEFAULT_LOG_LEVEL       = "INFO"
 # Every [server] key, in the order the documented file lists them.
 SERVER_KEYS = ("host", "port", "default_upstream", "connect_timeout", "log_level")
 
-# The per-caller keys 0.0.4 shipped without, which now have three scopes each.
-# Refused rather than ignored, for one release: a silently ignored key leaves an
-# operator believing a limit is on when it is off.
-RETIRED_SERVER_KEYS = {
-    "rate_limit": "rate",
-    "rate_burst": "rate",
-    "max_concurrent": "concurrent",
-}
-
 # The keys `concurrent` and `rate` replaced, refused by name rather than
 # reported as unrecognised. A scope whose numbers are all in keys nobody reads
 # is a scope that is off, and an operator who wrote them believes it is on.
@@ -281,9 +272,14 @@ def read_int(
     unaffected.
     """
     value = table.get(name, default)
+    # A string is what the command line hands in. A float is refused rather
+    # than truncated, and so is a bool, which int() reads as 0 or 1.
+    whole = isinstance(value, (int, str)) and not isinstance(value, bool)
     try:
-        number = int(value)
-    except (TypeError, ValueError):
+        number = int(value) if whole else None
+    except ValueError:
+        number = None
+    if number is None:
         raise ConfigError(f"lmrelay: [{section}] {name} must be a whole number, got {value!r}")
     if minimum is not None and number < minimum:
         raise ConfigError(
@@ -319,16 +315,6 @@ def read_rate(table: dict, section: str, name: str) -> str:
     return value
 
 
-def is_log_level(value: str) -> bool:
-    """Whether logging would recognise this level.
-
-    Named rather than inlined because the bundle importer has to make the same
-    decision before it writes a config file, and a second spelling of "is this a
-    level" is a second thing to keep in step.
-    """
-    return value.upper() in logging.getLevelNamesMapping()
-
-
 def read_log_level(server: dict) -> str:
     """Read log_level, refusing a name logging would quietly read as INFO.
 
@@ -337,7 +323,7 @@ def read_log_level(server: dict) -> str:
     while the log said it was running at something else.
     """
     value = str(server.get("log_level", DEFAULT_LOG_LEVEL))
-    if not is_log_level(value):
+    if value.upper() not in logging.getLevelNamesMapping():
         raise ConfigError(
             f"lmrelay: [server] log_level '{value}' is not a logging level; "
             f"expected DEBUG, INFO, WARNING, ERROR or CRITICAL"
@@ -345,17 +331,32 @@ def read_log_level(server: dict) -> str:
     return value
 
 
-def check_retired_keys(server: dict) -> None:
-    """Refuse the per-caller limit keys the three scopes replaced."""
-    for name in RETIRED_SERVER_KEYS:
-        if name not in server:
-            continue
-        replacement = RETIRED_SERVER_KEYS[name]
-        scopes = ", ".join(f"[limits.{scope}] {replacement}" for scope in SCOPES)
+def parse_server(data: dict) -> dict:
+    """Validate [server] and fill in its defaults.
+
+    A key nobody reads is refused rather than ignored, as in [limits]: a
+    misspelt `prot = 8080` is a setting that silently does nothing, and so is
+    a limit key from before the three scopes.
+    """
+    server = data.get("server") or {}
+    if not isinstance(server, dict):
+        raise ConfigError("lmrelay: [server] must be a table")
+    unknown = sorted(set(server) - set(SERVER_KEYS))
+    if unknown:
         raise ConfigError(
-            f"lmrelay: [server] {name} was replaced by {scopes}. "
-            f"Pick the scope you meant; see docs/CONFIGURATION.md."
+            f"lmrelay: [server] has no key {', '.join(unknown)}; expected "
+            f"{', '.join(SERVER_KEYS)}. Limits live in [limits.*]; see docs/CONFIGURATION.md."
         )
+    host = server.get("host", DEFAULT_HOST)
+    if not isinstance(host, str):
+        raise ConfigError(f"lmrelay: [server] host must be a string, got {host!r}")
+    return {
+        "host": host,
+        "port": read_int(server, "server", "port", DEFAULT_PORT),
+        "default_upstream": server.get("default_upstream", DEFAULT_UPSTREAM),
+        "connect_timeout": read_int(server, "server", "connect_timeout", DEFAULT_CONNECT_TIMEOUT),
+        "log_level": read_log_level(server),
+    }
 
 
 def check_retired_limit_keys(table: dict, scope: str) -> None:
@@ -581,9 +582,8 @@ def load_config(path: Path | None = None) -> RelayConfig:
             f"{state_file}. Run 'lmrelay provider add' or add an [upstream.*] table."
         )
 
-    server = data.get("server") or {}
-    check_retired_keys(server)
-    default_upstream = server.get("default_upstream", DEFAULT_UPSTREAM)
+    server = parse_server(data)
+    default_upstream = server["default_upstream"]
     if default_upstream not in upstreams:
         raise ConfigError(
             f"lmrelay: default_upstream '{default_upstream}' is not defined; "
@@ -608,11 +608,7 @@ def load_config(path: Path | None = None) -> RelayConfig:
         )
 
     return RelayConfig(
-        host=server.get("host", DEFAULT_HOST),
-        port=read_int(server, "server", "port", DEFAULT_PORT),
-        default_upstream=default_upstream,
-        connect_timeout=read_int(server, "server", "connect_timeout", DEFAULT_CONNECT_TIMEOUT),
-        log_level=read_log_level(server),
+        **server,
         limits=limits,
         auth_enabled=auth_enabled,
         auth_tokens=auth_tokens,

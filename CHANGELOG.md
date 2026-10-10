@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never fight over the pidfile and the port.
 - **The unit runs the install that wrote it**: the entry point beside the running interpreter, or
   that interpreter with `-m lmrelay`, rather than whichever `lmrelay` is first on PATH.
+- **`[server]` refuses a key it does not read**, a typo included, as `[limits]` already did. The
+  pre-scope limit keys `rate_limit`, `rate_burst` and `max_concurrent` are refused by the same
+  rule rather than by a message of their own.
+- **`lmrelay import` validates `server` and `limits` with the config's own parsers**, so a bundle
+  is refused in the words the config file would be, and never writes a file the relay refuses.
 - **The README shows how to add each provider**, in every translation: the key into a
   variable, then `lmrelay provider add`. Ollama needs no command, because the shipped config
   already carries it as the default upstream. OpenRouter and Gemini have no preset and take
@@ -43,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StartLimitBurst=5`; before, `Restart=on-failure` retried every two seconds indefinitely.
 - **A hand-written unit without `Environment=LMRELAY_SERVICE=1` can start.** `lmrelay run` recognises
   itself as the unit's main process instead of refusing because its own unit is active.
+- **A whole-number key refuses a fraction or a boolean** instead of truncating it: `concurrent =
+  2.5` was read as 2 and `port = true` as port 1.
+- **`status` reaches a relay bound to an IPv6 address**, and one bound to `::` or an empty host,
+  instead of calling a healthy relay not responding.
 - **An empty `[server] host` is warned about as exposed.** It binds every interface, and the
   auth-off warning used to read it as loopback.
 - **A refusal the framework answers, such as a 405 for `TRACE`, writes one access line**, the

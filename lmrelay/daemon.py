@@ -402,13 +402,24 @@ def reload_daemon(config_path: Path) -> bool:
     return True
 
 
+def probe_address(host: str) -> str:
+    """The host part of a URL that reaches a listener bound to `host`.
+
+    A wildcard bind is not an address to connect to: loopback is the one
+    interface it is certain to be reachable on. An IPv6 literal goes in
+    brackets, or its colons read as a port.
+    """
+    if host in ("", "0.0.0.0"):
+        return "127.0.0.1"
+    if host == "::":
+        return "[::1]"
+    return f"[{host}]" if ":" in host else host
+
+
 def probe_health(host: str, port: int, timeout: float = 2.0) -> bool:
     """Whether the relay answers /healthz on the address it was told to bind."""
-    # A wildcard bind is not an address to connect to; loopback is the one
-    # interface a 0.0.0.0 listener is certain to be reachable on.
-    target = "127.0.0.1" if host == "0.0.0.0" else host
     try:
-        response = httpx.get(f"http://{target}:{port}/healthz", timeout=timeout)
+        response = httpx.get(f"http://{probe_address(host)}:{port}/healthz", timeout=timeout)
     except Exception:
         # A probe asks a yes/no question: a refused connection, a timeout and an
         # unusable host all answer it the same way.

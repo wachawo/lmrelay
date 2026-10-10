@@ -10,7 +10,7 @@ import tomllib
 import pytest
 
 # Local imports
-from lmrelay.bundle import BUNDLE_VERSION, LIMIT_TYPES, SERVER_TYPES, STDIO_PATH
+from lmrelay.bundle import BUNDLE_VERSION, STDIO_PATH
 from lmrelay.config import SERVER_KEYS, RelayConfig, load_config
 from lmrelay.errors import BundleError, LmrelayError
 from lmrelay.ratelimit import LIMIT_KEYS, SCOPES
@@ -638,7 +638,7 @@ class TestRefusingABundleItCannotApply:
         looking for a different mistake than the one they made."""
         data = export(source, bundle_path)
         data["server"]["port"] = "eleven"
-        with pytest.raises(BundleError, match="not a whole number"):
+        with pytest.raises(BundleError, match="port must be a whole number"):
             run_command(["import", str(edited(bundle_path, server=data["server"])),
                          "--config", str(target)])
 
@@ -646,7 +646,7 @@ class TestRefusingABundleItCannotApply:
         """concurrent = 2.5 is a number and not a count of requests."""
         data = export(source, bundle_path)
         data["limits"]["total"]["concurrent"] = 2.5
-        with pytest.raises(BundleError, match="not a whole number"):
+        with pytest.raises(BundleError, match="concurrent must be a whole number"):
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
@@ -695,7 +695,7 @@ class TestRefusingABundleItCannotApply:
         it, and config.py refuses one for the same reason."""
         data = export(source, bundle_path)
         data["limits"]["total"]["concurrent"] = -1
-        with pytest.raises(BundleError, match="negative"):
+        with pytest.raises(BundleError, match="less than 0"):
             run_command(["import", str(edited(bundle_path, limits=data["limits"])),
                          "--config", str(target)])
 
@@ -787,14 +787,6 @@ class TestRefusingABundleItCannotApply:
 
 class TestTheKeysCannotDrift:
     """The bundle spells the config's own keys, and a test says so."""
-
-    def test_every_server_key_has_a_type_the_import_checks(self):
-        """A key added to [server] and forgotten here would import as anything
-        at all, and fail at the next start instead of at this suite."""
-        assert set(SERVER_TYPES) == set(SERVER_KEYS)
-
-    def test_and_so_does_every_limit_key(self):
-        assert set(LIMIT_TYPES) == set(LIMIT_KEYS)
 
     def test_a_masked_value_is_the_one_the_state_module_already_uses(self):
         """One spelling of "not shown", so `token list` and a bundle agree."""

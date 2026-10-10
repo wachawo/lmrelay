@@ -3,7 +3,6 @@
 """The transfer bundle: one TOML file that reproduces this relay on another machine."""
 
 import json
-import math
 import sys
 import tomllib
 from dataclasses import asdict, dataclass
@@ -12,49 +11,22 @@ from pathlib import Path
 # Local imports
 from lmrelay import __version__
 from lmrelay.config import (
+    DEFAULT_DIALECT,
     DEFAULT_UPSTREAM,
     SERVER_KEYS,
     RelayConfig,
-    is_log_level,
+    parse_limits,
+    parse_server,
     parse_upstream,
 )
-from lmrelay.errors import BundleError
-from lmrelay.ratelimit import LIMIT_KEYS, SCOPES, parse_rate
+from lmrelay.errors import BundleError, ConfigError
+from lmrelay.ratelimit import LIMIT_KEYS, SCOPES
 from lmrelay.state import MASKED_TOKEN, CallerToken, RelayState, utc_now, write_private
 
 BUNDLE_VERSION = 1
 
 # The path that means the terminal rather than a file, for both verbs.
 STDIO_PATH = "-"
-
-# A setting is a path, and the bundle spells it flat: [limits.total] concurrent
-# in the file is limits.total.concurrent here. The key names are taken from the
-# config and the limiter rather than restated, so a scope or a [server] key
-# added there arrives here without an edit and cannot come to mean something
-# else.
-#
-# The type is what an import checks a value against, and is the one thing this
-# module has to say for itself: a config written with port = "eleven" parses as
-# TOML and then refuses to start, which is a bundle that half applied. The two
-# tables are held to the config's own key lists by a test, so a key added there
-# and forgotten here fails at the suite rather than at an operator's import.
-SERVER_TYPES: dict[str, type] = {
-    "host":             str,
-    "port":             int,
-    "default_upstream": str,
-    "connect_timeout":  int,
-    "log_level":        str,
-}
-LIMIT_TYPES: dict[str, type] = {
-    "concurrent": int,
-    "rate":       str,
-}
-
-# What a refused value is told it should have been, in the words the config's
-# own reader uses: it says a port and a concurrency "must be a whole number",
-# and a bundle that called both of them "a number" sent an operator looking for
-# a different mistake than the one they had made.
-TYPE_NAMES: dict[type, str] = {str: "a string", int: "a whole number", float: "a number"}
 
 # The three metadata keys, which are the whole of what a bundle carries that a
 # config file does not. Written before the first table, because TOML reads a
@@ -281,83 +253,23 @@ def check_version(data: dict, source: str) -> int:
     return version
 
 
-def check_types(table: dict, types: dict[str, type], where: str, source: str) -> None:
-    """Refuse a value whose type the config parser would reject at the next start."""
-    for name, value in table.items():
-        wanted = types[name]
-        accepted = (int, float) if wanted is float else (wanted,)
-        # bool is a subclass of int, and `port = true` is not a port. nan and
-        # inf are floats, and json.loads reads both, and neither is a limit: the
-        # config refuses one, so a bundle carrying one writes a file that parses
-        # as TOML and then refuses to start, which is an import that half
-        # applied.
-        unusable = isinstance(value, float) and not math.isfinite(value)
-        if isinstance(value, bool) or unusable or not isinstance(value, accepted):
-            raise BundleError(
-                f"lmrelay: {source} has {where} {name} = {value!r}, "
-                f"which is not {TYPE_NAMES[wanted]}"
-            )
+def check_settings(data: dict, source: str) -> tuple[dict, dict]:
+    """Validate [server] and [limits.*] with the config's own parsers.
 
-
-def check_server_values(server: dict, source: str) -> None:
-    """Refuse a [server] value that is the right type and still unusable.
-
-    The type table cannot reach this one: log_level is a string, and so is
-    "VERBOSE", and the pair of files an import writes with it in them is a relay
-    that refuses to start on every command afterwards, on a machine whose
-    working config the import has already moved aside. It is the one [server]
-    key the config has a value validator for, so this is the whole of the list.
-    The predicate is the config's own, so there is one definition of a level.
+    The config file an import writes is read by those same functions at the
+    next start, so asking them now is what keeps an import from writing a
+    file the relay then refuses. Returned as the bundle spelled them, since
+    that is what the import writes.
     """
-    level = server.get("log_level")
-    if level is not None and not is_log_level(str(level)):
-        raise BundleError(
-            f"lmrelay: {source} has server log_level = {level!r}, which is not a logging "
-            f"level; expected DEBUG, INFO, WARNING, ERROR or CRITICAL"
-        )
-
-
-def parse_server(data: dict, source: str) -> dict:
-    """Validate the [server] half, refusing a value the config could not load."""
     server = data.get("server") or {}
-    if not isinstance(server, dict):
-        raise BundleError(f"lmrelay: {source} has a server section that is not an object")
-    check_keys(server, SERVER_KEYS, "server key(s)", source)
-    check_types(server, SERVER_TYPES, "server", source)
-    check_server_values(server, source)
-    return server
-
-
-def parse_limits(data: dict, source: str) -> dict:
-    """Validate the [limits.*] half: the three scopes, and the same two keys in each."""
     limits = data.get("limits") or {}
-    if not isinstance(limits, dict):
-        raise BundleError(f"lmrelay: {source} has a limits section that is not an object")
-    check_keys(limits, SCOPES, "limit scope(s)", source)
-    for scope, table in limits.items():
-        if not isinstance(table, dict):
-            raise BundleError(f"lmrelay: {source} has a limits {scope} that is not an object")
-        check_keys(table, LIMIT_KEYS, f"key(s) in limits {scope}", source)
-        check_types(table, LIMIT_TYPES, f"limits {scope}", source)
-        # 0 is off, so a negative is a mistake rather than another spelling of
-        # it, and config.py refuses one for the same reason.
-        if table.get("concurrent", 0) < 0:
-            raise BundleError(
-                f"lmrelay: {source} has limits {scope} concurrent = {table['concurrent']!r}, "
-                f"and a limit cannot be negative"
-            )
-        # The second value validator, and it exists for the reason log_level's
-        # does: "1d" is a string, and the pair of files an import writes with it
-        # in them is a relay that refuses to start on every command afterwards,
-        # on a machine whose working config the import has already moved aside.
-        rate = table.get("rate")
-        if rate and parse_rate(str(rate)) is None:
-            raise BundleError(
-                f"lmrelay: {source} has limits {scope} rate = {rate!r}, which is not a count, "
-                f'a slash and a period: "10/30m", "2/1h", "1/60s", or "" for no limit on how '
-                f"often"
-            )
-    return limits
+    try:
+        parse_server({"server": server})
+        parse_limits({"limits": limits})
+    except ConfigError as exc:
+        reason = str(exc).removeprefix("lmrelay: ")
+        raise BundleError(f"lmrelay: {source} would not load as a config: {reason}")
+    return server, limits
 
 
 def parse_bundle_token(entry: object, next_id: int, source: str) -> tuple[CallerToken, bool]:
@@ -449,7 +361,7 @@ def parse_bundle_upstreams(data: dict, source: str) -> tuple[dict[str, dict], li
         # an environment variable and send that to the provider.
         upstream = parse_upstream(
             name,
-            {"base_url": table.get("base_url"), "dialect": table.get("dialect", "openai"),
+            {"base_url": table.get("base_url"), "dialect": table.get("dialect", DEFAULT_DIALECT),
              "headers": headers},
             expand_env=False,
         )
@@ -465,8 +377,7 @@ def parse_bundle(data: dict, source: str) -> Bundle:
     """Validate the whole bundle. Nothing is written until this has returned."""
     version = check_version(data, source)
     check_keys(data, TOP_LEVEL_KEYS, "top-level key(s)", source)
-    server = parse_server(data, source)
-    limits = parse_limits(data, source)
+    server, limits = check_settings(data, source)
     auth_enabled, tokens, missing_tokens = parse_auth(data, source)
     providers, missing_headers = parse_bundle_upstreams(data, source)
 
