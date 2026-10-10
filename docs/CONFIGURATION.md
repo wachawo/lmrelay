@@ -73,7 +73,7 @@ concurrent = 2
 rate       = "2/120s"
 
 # Per client address. The only scope that identifies anyone with auth off, and
-# only as trustworthy as whatever sets X-Forwarded-For in front of the relay.
+# X-Forwarded-For is believed only from a proxy on this host (loopback).
 [limits.per_address]
 concurrent = 4
 rate       = "10/60s"
@@ -410,20 +410,19 @@ Limits are checked **after** authentication, one rule with no exception, so a gu
 credential never spends the allowance of the caller being guessed at. The consequence is
 that credential guessing is not rate limited at all. Charging the address bucket before auth
 was considered and dropped: it would make the rule "the address scope is before auth and the
-other five are after", and a forged `X-Forwarded-For` defeats it anyway, which the
-[fail2ban section](#the-jail-ships-disabled) already measures.
+other five are after", and an address bucket is the wrong tool against a guesser that
+fail2ban already [bans](#banning-repeat-offenders-with-fail2ban).
 
-**The address key is only as trustworthy as whatever is in front of the relay.** The relay
-runs uvicorn with `proxy_headers` on and every forwarder trusted, so the address it counts
-against is taken from `X-Forwarded-For` when that header is present. Behind an nginx that
-sets it, that is the point: the count follows the real client rather than the proxy.
-Reachable directly by anyone, it is a header the caller writes, and rotating it defeats
-`per_address` entirely. Measured, with auth off and `rate = "1/1s"`: three requests with no header
-gave `200, 429, 429`, while six requests each carrying a different made-up `X-Forwarded-For`
-all gave `200`, and left six buckets behind. `[limits.total]` is the scope that forgery
-cannot move, which is another reason to set it.
+**The address key believes `X-Forwarded-For` only from this host.** The relay runs uvicorn
+with `proxy_headers` on and uvicorn's default trusted forwarders, loopback only. Behind an
+nginx on the same machine, the count follows the real client rather than the proxy. A
+caller that reaches the relay directly is counted by its own socket address, and an
+`X-Forwarded-For` it sends is ignored, so it cannot rotate its way into fresh buckets. A
+proxy on another machine is trusted by naming it in uvicorn's `FORWARDED_ALLOW_IPS`
+environment variable, for example `FORWARDED_ALLOW_IPS=10.0.0.5 lmrelay serve`.
 
-So `per_address` bounds a cooperating client, not an adversarial one. If the per-caller
+A process on the relay's own host can still write the header, since it connects from
+loopback. An address behind NAT is many callers wearing one number. If the per-caller
 scopes have to hold against callers you do not trust, turn auth on and let them key on the
 token, which a caller cannot choose.
 
@@ -1586,18 +1585,15 @@ seconds hits the shipped `maxretry = 5` in seventy-five seconds, well inside the
 than the filter: a scrape refused at the door is a credential the relay does not accept,
 which is exactly what this jail is for.
 
-### The jail ships disabled
+### Whose address the jail bans
 
-`forwarded_allow_ips` is `"*"`, so uvicorn takes the client address from `X-Forwarded-For`
-whenever that header is present, whoever sent it. Against a relay its callers reach
-directly, anyone can pair a wrong token with a forged header and choose the address this
-jail bans: a gateway, a colleague, the operator. A request carrying
-`X-Forwarded-For: 198.51.100.42` and a bad token logs 198.51.100.42; that is measured, not
-supposed.
+uvicorn believes `X-Forwarded-For` only from loopback, so a remote caller cannot pair a
+wrong token with a forged header and choose the address this jail bans. The address logged
+is its own, or, behind an nginx on the same host, the client nginx saw. If you trust a proxy
+on another machine through `FORWARDED_ALLOW_IPS`, the jail is only as honest as that proxy.
 
-The jail is therefore safe in one arrangement only: the relay bound to `127.0.0.1`, with a
-trusted reverse proxy as the sole route in, so the header can only have come from that
-proxy. A relay listening on `0.0.0.0` must not run it.
+The shipped jail is still `enabled = false`, because its `logpath` names a placeholder user.
+Set the path `lmrelay status` prints, then enable it.
 
 ## Not in scope
 

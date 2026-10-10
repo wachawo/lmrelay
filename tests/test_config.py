@@ -499,6 +499,10 @@ class TestSayingWhenThePortIsOpen:
     def test_localhost_by_name_is_not(self, tmp_path):
         assert check_exposure(self.make(tmp_path, "localhost")) is None
 
+    def test_an_empty_host_is_exposed(self, tmp_path):
+        """An empty host binds every interface, so it is a wildcard, not loopback."""
+        assert check_exposure(self.make(tmp_path, "")) is not None
+
     def test_auth_being_on_settles_it_wherever_it_binds(self, tmp_path):
         """The switch, not the presence of a token: tokens that nothing checks
         leave the port as open as none at all."""

@@ -83,7 +83,7 @@ def rate_limited(tmp_path, monkeypatch, recorder):
     relay writes, which the filter must not confuse with a refused credential.
     """
     yield from relay_with(
-        tmp_path, monkeypatch, recorder, config_limits(per_address='concurrent = 1\nrate = "1/1s"')
+        tmp_path, monkeypatch, recorder, config_limits(per_address='concurrent = 1\nrate = "1/1h"')
     )
 
 

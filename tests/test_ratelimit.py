@@ -204,6 +204,18 @@ class TestForgettingIdleCallers:
         limiter.sweep(NOW + IDLE_EVICTION + 1)
         assert limiter.buckets == {}
 
+    def test_admission_is_what_runs_the_sweep(self):
+        """Nothing else in the relay calls it, so an admit that stopped
+        sweeping would bring back the table that grows for ever."""
+        limiter = fresh(1.0, 1.0)
+        limiters = {scope: None for scope in SCOPES} | {"per_address": limiter}
+        limits = limits_of(per_address=ScopeLimits(rate="1/1s"))
+        counter = InflightCounter({})
+        admit(limiters, limits, counter, scope_keys(None, "198.51.100.4"), NOW)
+        later = NOW + IDLE_EVICTION + SWEEP_INTERVAL
+        admit(limiters, limits, counter, scope_keys(None, "198.51.100.9"), later)
+        assert list(limiter.buckets) == ["addr:198.51.100.9"]
+
 
 class TestTheBucketOneNumberBuys:
     """`build_limiter`: what a scope with a period gets, and what one without does not."""

@@ -55,6 +55,25 @@ def publish_bind(host: str, port: int) -> None:
     os.environ[BIND_ENV_VAR] = f"{host}:{port}"
 
 
+def serve_app(host: str, port: int) -> None:
+    """Run the relay under uvicorn: the one invocation `run` and `serve` share.
+
+    forwarded_allow_ips is left at uvicorn's default, loopback only, so
+    X-Forwarded-For is believed only from a proxy on this host. Trusting every
+    sender let any caller choose the address [limits.per_address] counts and
+    fail2ban bans. A proxy elsewhere is named in $FORWARDED_ALLOW_IPS.
+    """
+    publish_bind(host, port)
+    uvicorn.run(
+        "lmrelay.app:app",
+        host=host,
+        port=port,
+        log_config=None,     # uvicorn must not override our logging
+        access_log=False,    # the middleware writes the request line itself
+        proxy_headers=True,
+    )
+
+
 def recorded_bind(config: RelayConfig) -> str:
     """The address to record in the pidfile: what was published, else the config."""
     return os.getenv(BIND_ENV_VAR) or f"{config.host}:{config.port}"
@@ -242,16 +261,7 @@ def run_detached_server(config_path: Path, host: str | None, port: int | None) -
     exit_code = 0
     try:
         config = load_config(config_path)
-        publish_bind(host or config.host, port or config.port)
-        uvicorn.run(
-            "lmrelay.app:app",
-            host=host or config.host,
-            port=port or config.port,
-            log_config=None,     # uvicorn must not override our logging
-            access_log=False,    # the middleware writes the request line itself
-            proxy_headers=True,
-            forwarded_allow_ips="*",
-        )
+        serve_app(host or config.host, port or config.port)
     except Exception as exc:
         # Nothing is watching this process, so the reason has to reach the log
         # the operator will be pointed at.
