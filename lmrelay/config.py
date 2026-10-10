@@ -413,7 +413,7 @@ def rewrite_key_line(line: str, rendered: str) -> str:
     return f"{head}= {rendered}{comment}{ending}"
 
 
-def new_limit_section(scope: str, values: dict[str, str]) -> str:
+def new_limit_section(scope: str, values: dict[str, int | str]) -> str:
     """Render a new `[limits.<scope>]` table to append to the file."""
     written = [
         f"{key:<{LIMIT_KEY_WIDTH}} = {render_limit_value(values[key])}\n"
@@ -474,7 +474,7 @@ def set_scope_limits(
         text += "\n"
     before = parse_limits(parse_config_text(text, target))[scope]
 
-    values = {"concurrent": wanted.concurrent, "rate": wanted.rate}
+    values: dict[str, int | str] = {"concurrent": wanted.concurrent, "rate": wanted.rate}
     edited = edit_limit_section(text, scope, values)
     try:
         after = parse_limits(parse_config_text(edited, target))[scope]

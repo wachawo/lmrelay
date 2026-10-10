@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`[server]` refuses a key it does not read**, a typo included, as `[limits]` already did. The
   pre-scope limit keys `rate_limit`, `rate_burst` and `max_concurrent` are refused by the same
   rule rather than by a message of their own.
+- **Development tooling agrees with itself.** CI and the pre-commit hook run the same ruff
+  series, both now run mypy, and the unused flake8 is gone from `requirements-dev.txt`.
 - **`lmrelay import` validates `server` and `limits` with the config's own parsers**, so a bundle
   is refused in the words the config file would be, and never writes a file the relay refuses.
 - **The README shows how to add each provider**, in every translation: the key into a
@@ -48,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StartLimitBurst=5`; before, `Restart=on-failure` retried every two seconds indefinitely.
 - **A hand-written unit without `Environment=LMRELAY_SERVICE=1` can start.** `lmrelay run` recognises
   itself as the unit's main process instead of refusing because its own unit is active.
+- **An export carries an upstream whose name needs quotes.** `[upstream."my.relay"]` was written
+  bare, so the bundle read back as a table `my` holding `relay`, and a name with a space or a
+  quote did not parse at all.
 - **A whole-number key refuses a fraction or a boolean** instead of truncating it: `concurrent =
   2.5` was read as 2 and `port = true` as port 1.
 - **`status` reaches a relay bound to an IPv6 address**, and one bound to `::` or an empty host,
