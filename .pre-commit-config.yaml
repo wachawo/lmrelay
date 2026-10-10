@@ -20,6 +20,16 @@ repos:
 
   - repo: local
     hooks:
+      - id: no-em-dash
+        name: no em dash
+        # House rule, also checked in CI. Spelled as an escape so this file
+        # does not trip it.
+        entry: "\u2014"
+        language: pygrep
+        types: [text]
+
+  - repo: local
+    hooks:
       - id: pytest
         name: pytest
         # `language: python`, not `system`: a bare `pytest` on PATH is missing

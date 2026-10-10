@@ -255,6 +255,23 @@ def merge_headers(preset: dict[str, str], extra: dict[str, str]) -> dict[str, st
     return merged
 
 
+def rotated_headers(stored: dict[str, str], token: str) -> dict[str, str] | None:
+    """A stored custom provider's headers with its key replaced, or None if it cannot be found.
+
+    The old key is read off the bearer every CLI-added custom provider carries,
+    and replaced wherever it appears, so a rotation keeps headers given with --header.
+    """
+    bearer = next(
+        (value for name, value in stored.items()
+         if name.lower() == "authorization" and value.startswith("Bearer ")),
+        "",
+    )
+    old = bearer.removeprefix("Bearer ")
+    if not old:
+        return None
+    return {name: value.replace(old, token) for name, value in stored.items()}
+
+
 def add_provider(
     state: RelayState,
     name: str,
@@ -294,13 +311,13 @@ def add_provider(
             f"expected one of {', '.join(DIALECTS)}"
         )
 
-    # A preset with no headers (Ollama) takes no credential; an unknown provider
-    # gets a bearer, as OpenAI-compatible endpoints expect.
-    template = preset.get("headers", DEFAULT_PROVIDER_HEADERS)
-    headers = merge_headers(
-        {key: substitute_token(value, token) for key, value in template.items()},
-        extra_headers or {},
-    )
+    base = rotated_headers(stored.get("headers") or {}, token) if stored else None
+    if base is None:
+        # A preset with no headers (Ollama) takes no credential; an unknown
+        # provider gets a bearer, as OpenAI-compatible endpoints expect.
+        template = preset.get("headers", DEFAULT_PROVIDER_HEADERS)
+        base = {key: substitute_token(value, token) for key, value in template.items()}
+    headers = merge_headers(base, extra_headers or {})
 
     providers = dict(state.providers)
     providers[name] = {

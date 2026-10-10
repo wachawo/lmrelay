@@ -39,6 +39,12 @@ jobs:
       - name: Type check
         run: mypy lmrelay
 
+      # House rule: no em dash anywhere in the tree. Spelled as an escape so
+      # this file does not trip it.
+      - name: No em dash
+        run: |
+          if git grep -nIP '\x{2014}'; then exit 1; fi
+
   test:
     runs-on: ${{ matrix.os }}
     # The suite forks, binds sockets and runs uvicorn. Without this a child

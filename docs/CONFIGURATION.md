@@ -1387,7 +1387,7 @@ These are JSON bodies of the form `{"error": "..."}` returned to the caller.
 | `lmrelay: method not allowed for <METHOD> <path>` | any method outside the relayed set, TRACE being the one a scanner tries | Starlette refused the request before the relay saw it. Phrased here so it carries the prefix and the `error` key every other refusal uses. | Nothing: the method is not one the relay forwards. |
 | `lmrelay: upstream '<name>' at <base_url> is unreachable: ConnectError` | relay response, 502 | The connection to the upstream was refused or timed out. `ConnectTimeout` appears in place of `ConnectError` when `connect_timeout` expired. | For `ollama`, usually Ollama itself is not running: start it. Otherwise check `base_url` and the network. |
 | `lmrelay: upstream '<name>' failed: <Type>` | relay response, 502 | Any other transport failure against the upstream, named by its httpx exception type. | Read `lmrelay.log`: the full message and traceback are there. |
-| `lmrelay: <Type>: <message>` | relay response, 500 | An unhandled exception inside the relay. | Read `lmrelay.log` for the traceback and report it. |
+| `lmrelay: internal error; the relay log has it under request <id>` | relay response, 500 | An unhandled exception inside the relay. The caller gets only the request id: the exception's own message can carry paths, header values or part of an upstream's answer. | Find the id in the relay's log, where the traceback carries it, and report it. |
 
 One dialect refusal in full, as an OpenAI-shaped client aimed at `anthropic` receives it:
 
