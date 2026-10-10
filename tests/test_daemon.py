@@ -22,6 +22,7 @@ from lmrelay.daemon import (
     daemon_status,
     log_file,
     pid_file,
+    probe_address,
     probe_health,
     process_alive,
     process_started_at,
@@ -312,6 +313,23 @@ class TestAskingTheRelayIfItIsWell:
         """Any exception is a no: a refused connection and a timeout mean the
         same thing to the operator reading `status`."""
         assert not probe_health("127.0.0.1", free_port(), timeout=1.0)
+
+    @pytest.mark.parametrize(
+        ("bound", "reached"),
+        [
+            ("127.0.0.1", "127.0.0.1"),
+            ("0.0.0.0", "127.0.0.1"),
+            ("", "127.0.0.1"),
+            ("::", "[::1]"),
+            ("::1", "[::1]"),
+            ("fd00::5", "[fd00::5]"),
+            ("gpu2.internal", "gpu2.internal"),
+        ],
+    )
+    def test_the_address_it_asks_reaches_what_was_bound(self, bound, reached):
+        """An unbracketed IPv6 literal is not a URL host, so a relay on ::1 was
+        reported as not responding while it answered."""
+        assert probe_address(bound) == reached
 
 
 class TestNothingToActOn:

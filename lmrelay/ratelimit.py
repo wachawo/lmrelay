@@ -1,47 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Request limiting, held in memory: three scopes, how often and how many at once."""
+"""In-memory request limiting: three scopes, each with a rate and a concurrency cap."""
 
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-# The three scopes, narrowest first. The order is the whole of the rule about
-# which limit a refusal names: when several would refuse at the same instant the
-# caller is told the most specific true thing, which is also the number their
-# operator raises first. Being told the relay is full while you personally are
-# the reason is the wrong answer even though it is true.
+# Narrowest first: when several scopes would refuse, the refusal names the most
+# specific one, which is also the limit the operator raises first.
 SCOPES = ("per_token", "per_address", "total")
 
-# The two keys every scope has: how many at once, and how often. Two, because
-# they answer two questions that have different answers. "Ten every half hour"
-# says nothing about whether those ten may run together, and for a machine
-# holding one model in memory the answer is usually no. `concurrent = 2` beside
-# `rate = "10/30m"` is what an operator actually means.
-#
-# There is still no burst. The bucket holds the rate's own count, which is what
-# "ten every half hour" means to the person who wrote it, and the third number
-# that used to sit here had no job but to be wrong.
+# Two separate questions: "10/30m" says nothing about whether those ten may run
+# together, and for a machine holding one model the answer is usually no.
 LIMIT_KEYS = ("concurrent", "rate")
 
-# How a rate is spelled, on the command line and in the file alike, so that the
-# `10/30m` an operator typed is the `10/30m` they find written down: a count,
-# a slash, and a period. The period is a whole number and a unit; a bare number
-# is refused rather than read as seconds, because `30` is half an hour to
-# whoever wrote it about as often as it is half a minute.
+# A rate is `count/period`, e.g. `10/30m`. A bare number is refused rather than
+# read as seconds, since `30` means half an hour as often as half a minute.
 PERIOD_UNITS   = {"s": 1, "m": 60, "h": 3600}
 PERIOD_PATTERN = re.compile(r"^(\d+)([smh])$")
 RATE_PATTERN   = re.compile(r"^(\d+)/(\d+[smh])$")
 NO_RATE        = ""
 
-# Buckets are dropped once they have been full and untouched for this long.
-# Full means the caller owes nothing, so forgetting them changes no decision;
-# without it the table grows by one entry per address that ever knocked.
+# A bucket that is full and idle this long is dropped: forgetting it changes no
+# decision, and without it the table grows by one entry per address ever seen.
 IDLE_EVICTION = 300.0
 
-# How often the sweep runs. Every request would be wasteful and never would let
-# the table grow between quiet periods.
 SWEEP_INTERVAL = 60.0
 
 
@@ -54,35 +38,23 @@ def parse_period(value: str) -> float | None:
 
 
 def parse_rate(value: str) -> tuple[int, float] | None:
-    """A count and its period in seconds for `10/30m`, or None when it is not one.
-
-    Empty is not a rate and is not an error either: it is how a scope says it
-    limits how many at once and nothing else.
-    """
+    """A count and its period in seconds for `10/30m`, or None when it is not one."""
     match = RATE_PATTERN.match(value.strip())
     if match is None:
         return None
     seconds = parse_period(match.group(2))
     if not seconds:
-        # `5/0s` parses as a shape and is not a rate: dividing by it would be a
-        # limit of infinity, which is what "off" already spells as an empty rate.
+        # `5/0s` would be an infinite rate; "off" is spelled as an empty rate.
         return None
     return int(match.group(1)), seconds
 
 
 @dataclass(frozen=True)
 class ScopeLimits:
-    """What one scope allows: how many at once, and how often.
+    """What one scope allows: how many at once, and how often. Both off by default.
 
-    Both off by default, which is the whole table: a relay in front of one
-    operator's own Ollama has nobody to limit, and a limit nobody chose is a
-    refusal nobody expects.
-
-    `rate` is kept as the operator spelled it rather than as a number of
-    requests and a number of seconds. It is their file: a command whose point is
-    that it does not rewrite what they wrote must not answer `10/60s` with
-    `10/1m`, and every line that quotes a rate back, the refusal a caller sees
-    included, then quotes the one they set.
+    `rate` is kept as the operator spelled it, so everything that quotes it back,
+    refusals included, shows `10/60s` rather than a normalised `10/1m`.
     """
 
     concurrent: int = 0
@@ -114,11 +86,9 @@ def default_limits() -> dict[str, ScopeLimits]:
 class Refusal:
     """Which scope turned a request away, and on which of its two measures.
 
-    `wait` is the seconds until a rate refusal would pass, and is what an honest
-    Retry-After needs. A slot refusal leaves it at zero and carries no header at
-    all: a slot frees when a model finishes answering somebody else, and with no
-    read timeout that may be minutes away, so a guessed number would be a lie
-    and a client obeying it would retry into the same refusal.
+    `wait` is the seconds until a rate refusal would pass, for Retry-After. A slot
+    refusal leaves it at zero: a slot frees when someone else's answer ends, which
+    may be minutes away, so any guessed number would be wrong.
     """
 
     scope: str
@@ -138,19 +108,9 @@ class Bucket:
 class RateLimiter:
     """A token bucket per key, refilling at `rate` per second.
 
-    A bucket rather than a counter per fixed window: a window lets a caller
-    spend its whole allowance in the last instant of one window and again in
-    the first instant of the next, which is twice the rate over the boundary
-    and exactly the burst a limit is meant to prevent.
-
-    One limiter per scope, each with its own table, because the three scopes
-    hold different numbers. Asking and charging are two calls rather than one so
-    that admission can ask every scope before it charges any: see `admit`.
-
-    Not shared between processes. Under several uvicorn workers each holds its
-    own table and the effective limit multiplies, which is a reason to say so
-    in the documentation rather than to reach for Redis: this relay is one
-    process in front of one Ollama.
+    A bucket rather than a fixed window, which would allow the whole allowance at
+    the end of one window and again at the start of the next. Not shared between
+    processes: under several uvicorn workers the effective limit multiplies.
     """
 
     rate: float
@@ -162,8 +122,6 @@ class RateLimiter:
         """Bring one key's bucket up to date, creating it full, spending nothing."""
         bucket = self.buckets.get(key)
         if bucket is None:
-            # A caller starts full, so the first request after a restart is
-            # never the one that gets refused.
             bucket = Bucket(tokens=self.burst, updated=now)
             self.buckets[key] = bucket
         bucket.tokens = min(self.burst, bucket.tokens + (now - bucket.updated) * self.rate)
@@ -173,9 +131,7 @@ class RateLimiter:
     def wait_for(self, key: str, now: float) -> float:
         """0.0 when a request would be allowed, else the seconds until it would be.
 
-        Costs the caller nothing, which is what makes all-or-nothing admission
-        possible: a request refused by a later scope must not have drained this
-        one on its way past.
+        Spends nothing, so a request refused by a later scope has not drained this one.
         """
         bucket = self.bucket_at(key, now)
         if bucket.tokens >= 1.0:
@@ -189,17 +145,10 @@ class RateLimiter:
     def sweep(self, now: float) -> None:
         """Forget keys idle long enough that their bucket has refilled to full.
 
-        Full is measured after the refill the next `wait_for` would apply, not on
-        the count as stored. Every charged request leaves the stored count below
-        `burst`, so a bucket is never recorded as full, and testing the stored
-        count kept every caller that had ever knocked for the life of the
-        process: the eviction this exists for could not fire at all.
-
-        Dropping a full bucket changes no decision, since a caller with no
-        bucket starts with one. Dropping a bucket that has not refilled would
-        hand back an allowance the caller has not waited for, which is why the
-        refill is computed rather than assumed from the idle time alone: at a
-        rate low enough, IDLE_EVICTION is not long enough to refill one.
+        Fullness is computed with the pending refill, not read from the stored
+        count, which is never full after a charge. At a low enough rate
+        IDLE_EVICTION alone does not refill a bucket, and dropping it early would
+        hand back an allowance the caller has not waited for.
         """
         if now - self.swept < SWEEP_INTERVAL:
             return
@@ -212,13 +161,10 @@ class RateLimiter:
 
 
 def build_limiter(limits: ScopeLimits) -> RateLimiter | None:
-    """A limiter for a scope that has a period, or None when it has not.
+    """A limiter for a scope that has a rate, or None when it has not.
 
-    The bucket holds the rate's own count, so `10/30m` is ten that may arrive
-    together and then a wait, which is what an operator who wrote it expects and
-    what the separate burst setting used to get wrong in both directions. How
-    many of those ten run at the same time is `concurrent`, which the counter
-    enforces and this knows nothing about.
+    The bucket holds the rate's own count, so `10/30m` allows ten together and
+    then a wait. How many of those run at once is `concurrent`, not this.
     """
     allowance = limits.allowance()
     per_second = limits.per_second()
@@ -230,7 +176,7 @@ def build_limiter(limits: ScopeLimits) -> RateLimiter | None:
 
 
 def build_limiters(limits: dict[str, ScopeLimits]) -> dict[str, RateLimiter | None]:
-    """One limiter per scope, None where that scope has no period."""
+    """One limiter per scope, None where that scope has no rate."""
     return {scope: build_limiter(limits[scope]) for scope in SCOPES}
 
 
@@ -238,23 +184,9 @@ def build_limiters(limits: dict[str, ScopeLimits]) -> dict[str, RateLimiter | No
 class InflightCounter:
     """How many relayed requests each key is holding open right now.
 
-    A different measure from the bucket above, not a second spelling of it: the
-    bucket says how often a caller may start, this says how many answers they
-    may be receiving at once. A relayed answer runs for as long as the model
-    takes, so a rate an operator would call generous still lets one caller
-    occupy every generation the machine can do at once.
-
-    One table for all three scopes, which is safe because their keys are
-    prefixed apart: an address and a credential spelled the same are two rows.
-
-    Self-cleaning, which is why there is no sweep beside RateLimiter's: an entry
-    exists only while something is in flight against it, and the last release
-    deletes it. Nothing to forget, and no second timer.
-
-    Not shared between processes, exactly as the buckets are not: under several
-    uvicorn workers each holds its own table and the effective cap multiplies.
-    That is worse for the total scope than for the other two, since the total is
-    the one protecting the machine.
+    One table for all scopes; keys are prefixed apart. Self-cleaning, since the
+    last release deletes an entry, so it needs no sweep. Not shared between
+    processes, which matters most for `total`, the scope protecting the machine.
     """
 
     counts: dict[str, int]
@@ -262,11 +194,9 @@ class InflightCounter:
     def acquire(self, key: str, limit: int) -> bool:
         """Take a slot for `key`, or return False when `limit` is already spent.
 
-        The limit is an argument rather than a field so that a reload has
-        nothing to rebuild: a fresh counter would start empty, dropping the
-        count of every answer already streaming, and each of those would then
-        release a slot that had never been taken. Live requests keep what they
-        hold and a new number governs the next arrival.
+        The limit is passed per call rather than stored so a reload needs no new
+        counter: answers already streaming keep their slots and release them
+        correctly, and the new limit governs the next arrival.
         """
         if limit > 0 and self.counts.get(key, 0) >= limit:
             return False
@@ -285,19 +215,9 @@ class InflightCounter:
 def release_all(counter: InflightCounter, keys: tuple[str, ...]) -> Callable[[], None]:
     """A release for one admission's whole set of slots, safe to call more than once.
 
-    The set is fixed when the slots are taken rather than recomputed on the way
-    out, so a reload that turns a scope off between the two cannot leave that
-    scope's slot held for the life of the process.
-
-    A slot has several ways home: the body generator gives it back when the
-    answer ends or the caller hangs up, and every path that never reaches a body
-    gives it back on the way to its error. Those paths are meant not to overlap,
-    but a slot released twice would decrement a count belonging to another live
-    request and let that caller past the cap, so the belt and the braces are
-    only worth wearing if the second one does nothing.
-
-    An admission that took nothing, which includes every refusal, gets a release
-    that does nothing, so no caller has to ask whether it holds anything.
+    The keys are fixed at acquire time, so a reload that turns a scope off cannot
+    strand its slot. Idempotent because a slot has several release paths, and a
+    double release would let another live caller past the cap.
     """
     released = False
 
@@ -315,13 +235,7 @@ def release_all(counter: InflightCounter, keys: tuple[str, ...]) -> Callable[[],
 def scope_keys(token: str | None, client: str) -> dict[str, str | None]:
     """What each scope counts against. None means the scope does not apply.
 
-    With auth off there is no credential, so `per_token` matches nothing and is
-    skipped rather than refused: no bucket is created and no slot is held. The
-    other two still apply, and `per_address` is doing the whole job.
-
-    With auth on every request has passed auth, so every request has a token and
-    there is no third case. It is charged against its token, its address and the
-    total, all three. That is not double counting, it is passing three ceilings.
+    With auth off there is no token, so `per_token` is skipped, not refused.
     """
     return {
         "per_token": f"token:{token}" if token else None,
@@ -373,19 +287,10 @@ def admit(
 ) -> tuple[Refusal | None, Callable[[], None]]:
     """Charge every configured scope, or none of them. Returns the refusal and the release.
 
-    Three phases, and the order is the point. Every rate limiter is asked before
-    any is charged, the slots are taken next and given back if a later scope
-    refuses, and only once every scope has said yes is a single token spent
-    anywhere. So a refused request costs nothing, in any scope. Without that, a
-    caller refused by the total still had its own bucket drained, and an
-    operator got "I was refused, and now I am rate limited too" with no way to
-    see why.
-
-    `limiters` is held state and `limits` is read from the config at every call,
-    which is the difference between the two limits: a rate limiter has to be
-    rebuilt when its numbers move because a bucket holds an allowance measured
-    against the old burst, while a cap is a number the counter is handed per
-    acquire so that answers already streaming keep the slots they hold.
+    Order matters: check every rate, then take slots (rolled back on refusal),
+    and only then spend tokens, so a refused request costs nothing in any scope.
+    `limiters` hold bucket state and are rebuilt when rates change; `limits` are
+    read per call, so caps change without disturbing slots already held.
     """
     refusal = check_rates(limiters, keys, now)
     taken: tuple[str, ...] = ()
@@ -397,8 +302,7 @@ def admit(
             if key is not None and limiter is not None:
                 limiter.spend(key, now)
 
-    # Swept on the way out whatever the answer was, so a relay that is refusing
-    # everything still forgets the callers that have gone away.
+    # Swept regardless of the outcome, so a relay refusing everything still forgets.
     for limiter in limiters.values():
         if limiter is not None:
             limiter.sweep(now)
@@ -406,13 +310,7 @@ def admit(
 
 
 def describe_rate(limits: ScopeLimits) -> str:
-    """How often, for the refusal that is about how often.
-
-    The spelling the operator wrote, `10/30m` and not `10 per 1800 seconds`.
-    A refusal is the one place a caller ever sees a limit at all, and quoting it
-    back in words nobody used sends them asking about a setting that is not
-    there.
-    """
+    """The rate as the operator wrote it, e.g. `10/30m`, or 'off'."""
     return limits.rate if limits.per_second() > 0 else "off"
 
 
@@ -422,12 +320,7 @@ def describe_slots(limits: ScopeLimits) -> str:
 
 
 def describe_scope(limits: ScopeLimits) -> str:
-    """One scope in full, as `status`, the reload log and the docs all print it.
-
-    Both halves whenever both are set, because they are two different limits and
-    a line naming one would leave the other to be discovered by being refused by
-    it.
-    """
+    """One scope in full, both halves when both are set, as `status` and logs print it."""
     parts = [
         part for part in (describe_rate(limits), describe_slots(limits)) if part != "off"
     ]
@@ -435,14 +328,7 @@ def describe_scope(limits: ScopeLimits) -> str:
 
 
 def describe_limits(limits: dict[str, ScopeLimits]) -> str:
-    """Every scope that asks for anything, narrowest first, or 'off' when none does.
-
-    Only the configured ones, because a relay with one number set is the common
-    case and two further lines saying off answer a question nobody asked. The
-    single "off" answers the one they did ask, which is whether anything here is
-    limited at all: without this line the only way to see the limits in effect
-    was to export the whole configuration and read the bundle.
-    """
+    """Every configured scope, narrowest first, or 'off' when none is."""
     named = [
         f"{scope} {describe_scope(limits[scope])}"
         for scope in SCOPES if limits[scope].configured()

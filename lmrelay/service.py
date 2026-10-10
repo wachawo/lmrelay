@@ -22,10 +22,9 @@ OLLAMA_UNIT_NAME   = "ollama.service"
 LAUNCHD_LABEL      = "com.lmrelay.relay"
 LAUNCHD_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
 
-# Set by the unit and the agent we install, and by nothing else. Both managers
-# report the service as active from the moment they exec it, so the ExecStart,
-# which is `lmrelay run`, would otherwise see its own unit running and refuse
-# to start, leaving autostart permanently in a restart loop.
+# Set only by the unit and agent we install. Both managers report the service
+# active once they exec it, so `lmrelay run` would otherwise see its own unit,
+# refuse to start, and loop on restarts.
 SERVICE_ENV_VAR = "LMRELAY_SERVICE"
 
 NO_MANAGER_MESSAGE = (
@@ -33,8 +32,8 @@ NO_MANAGER_MESSAGE = (
     "'lmrelay serve' runs the relay detached on any POSIX system"
 )
 
-# StartLimitBurst stops a start that keeps failing, a port still held by a
-# stale relay say, from restarting every two seconds for days.
+# StartLimitBurst stops a start that keeps failing (a port held by a stale
+# relay, say) from restarting every two seconds for days.
 SYSTEMD_UNIT_TEMPLATE = """[Unit]
 Description=lmrelay
 StartLimitIntervalSec=60
@@ -52,9 +51,8 @@ RestartSec=2
 WantedBy=default.target
 """
 
-# The system unit runs at boot without anybody logging in, which a user unit
-# does only with linger. It can also be ordered after a system Ollama, which a
-# user manager cannot see.
+# The system unit starts at boot without a login (a user unit needs linger),
+# and can be ordered after a system Ollama, which a user manager cannot see.
 SYSTEM_UNIT_TEMPLATE = """[Unit]
 Description=lmrelay
 Wants=network-online.target
@@ -124,9 +122,8 @@ def detect_manager() -> str:
 def relay_executable() -> str:
     """Return the command that starts this install of the relay, always absolute.
 
-    Taken from the running interpreter rather than from PATH: with two installs
-    on PATH, `which lmrelay` can name the other one. A bare 'lmrelay' in a unit
-    would also resolve against the manager's PATH at boot, not the shell's.
+    Taken from the running interpreter, not PATH: `which lmrelay` may name
+    another install, and a bare name resolves against the manager's PATH at boot.
     """
     entry_point = Path(sys.executable).parent / "lmrelay"
     if entry_point.is_file() and os.access(entry_point, os.X_OK):
@@ -157,9 +154,8 @@ def system_unit_text(
 
 def launchd_plist_text(executable: str, config_path: Path, log_path: Path) -> str:
     """Return the body of the launchd LaunchAgent plist."""
-    # ProgramArguments is a vector and launchd execs element zero verbatim, so the
-    # fallback executable ("<python> -m lmrelay") has to arrive as three elements
-    # rather than one unrunnable path.
+    # launchd execs element zero verbatim, so "<python> -m lmrelay" must be
+    # split into three elements.
     argv = [*shlex.split(executable), "run", "--config", str(config_path)]
     arguments = "\n".join(f"        <string>{escape(item)}</string>" for item in argv)
     return LAUNCHD_PLIST_TEMPLATE.format(
@@ -174,8 +170,7 @@ def launchd_plist_text(executable: str, config_path: Path, log_path: Path) -> st
 def run_service_command(argv: list[str]) -> None:
     """Run a service-manager command, raising with its own words on failure.
 
-    A 'systemctl enable' that fails quietly means the relay does not come back
-    after a reboot, and nobody finds out until it matters.
+    A quietly failed 'systemctl enable' surfaces only after the next reboot.
     """
     result = subprocess.run(argv, check=False, capture_output=True, text=True)
     if result.returncode == 0:
@@ -258,8 +253,7 @@ def enable_autostart(config_path: Path) -> str:
     """Install the unit or agent for this platform and start the relay under it."""
     manager = detect_manager()
     executable = relay_executable()
-    # The manager starts the relay from a working directory the operator never
-    # chose, so a relative --config would resolve somewhere else entirely.
+    # The manager's working directory is unknown, so --config must be absolute.
     target = config_path.expanduser().resolve()
 
     if manager == "systemd":
@@ -349,8 +343,7 @@ def disable_autostart() -> str:
                     f"system unit {SYSTEM_UNIT_PATH}: run 'lmrelay disable --system'"
                 )
             return f"lmrelay: no unit at {SYSTEMD_UNIT_PATH}; nothing to disable"
-        # Disabled before the file goes: systemctl refuses to disable a unit whose
-        # file has already vanished, which would leave it enabled and running.
+        # Disabled before the file goes: systemctl cannot disable a vanished unit.
         run_service_command(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT_NAME])
         SYSTEMD_UNIT_PATH.unlink(missing_ok=True)
         run_service_command(["systemctl", "--user", "daemon-reload"])
@@ -413,9 +406,8 @@ def is_unit_main_process(scope: str) -> bool:
 def service_is_active() -> bool:
     """Report whether a service manager is running the relay right now.
 
-    False inside the managed process itself: both managers report the service
-    active from the instant they exec it, so its own ExecStart asking this
-    question would always be told the port is taken, by itself.
+    False inside the managed process itself, which would otherwise find its
+    own unit active (see SERVICE_ENV_VAR).
     """
     if started_by_service_manager():
         return False
