@@ -10,6 +10,7 @@ under uvicorn against an upstream that answers slowly, and reads it with an
 ordinary HTTP client.
 """
 
+import socket
 import threading
 import time
 
@@ -24,7 +25,6 @@ from starlette.routing import Route
 # Local imports
 from lmrelay.config import CONFIG_ENV_VAR
 from lmrelay.state import STATE_ENV_VAR
-from tests.conftest import free_port
 
 CHUNKS = [b"first\n", b"second\n", b"third\n"]
 # Long enough that "the whole answer was written before anything was sent" and
@@ -53,26 +53,38 @@ class Server(uvicorn.Server):
         pass
 
 
-def run_server(app, port: int):
-    server = Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
+def bound_socket() -> socket.socket:
+    """A socket on a free loopback port, held open until uvicorn serves on it.
+
+    Handing uvicorn the bound socket, rather than a port number to bind later,
+    leaves no gap in which another process can take the port.
+    """
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    return sock
+
+
+def run_server(app, sock: socket.socket):
+    server = Server(uvicorn.Config(app, log_level="warning"))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
     deadline = time.monotonic() + 10
     while not server.started and time.monotonic() < deadline:
         time.sleep(0.02)
     if not server.started:
-        raise RuntimeError(f"the server on port {port} did not start")
+        raise RuntimeError(f"the server on {sock.getsockname()} did not start")
     return server, thread
 
 
 @pytest.fixture(scope="module")
 def relay_url(tmp_path_factory):
     """A real relay on a real port, in front of a real slow upstream."""
-    upstream_port = free_port()
-    relay_port = free_port()
+    upstream_socket, relay_socket = bound_socket(), bound_socket()
+    upstream_port = upstream_socket.getsockname()[1]
+    relay_port = relay_socket.getsockname()[1]
 
     upstream_app = Starlette(routes=[Route("/api/generate", dribble, methods=["POST"])])
-    upstream, upstream_thread = run_server(upstream_app, upstream_port)
+    servers = [run_server(upstream_app, upstream_socket)]
 
     config = tmp_path_factory.mktemp("relay") / "lmrelay.toml"
     config.write_text(
@@ -92,14 +104,18 @@ def relay_url(tmp_path_factory):
     try:
         from lmrelay.app import app
 
-        relay, relay_thread = run_server(app, relay_port)
+        servers.append(run_server(app, relay_socket))
         yield f"http://127.0.0.1:{relay_port}"
     finally:
-        relay.should_exit = True
-        upstream.should_exit = True
-        relay_thread.join(timeout=10)
-        upstream_thread.join(timeout=10)
+        # Only the servers that started: a relay that failed to start must not
+        # turn its own error into a NameError here.
+        for server, unused_thread in servers:
+            server.should_exit = True
+        for unused_server, thread in servers:
+            thread.join(timeout=10)
         patch.undo()
+        upstream_socket.close()
+        relay_socket.close()
 
 
 class TestStreamingOverASocket:
