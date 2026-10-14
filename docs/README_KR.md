@@ -181,15 +181,9 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 명령이 받습니다. 즉 `init`과 `disable`을 뺀 모든 명령이며, `init`은 언제나
 `~/.lmrelay/lmrelay.toml`에 쓰고 `disable`은 둘 다 읽지 않습니다.
 
-### 프로바이더 추가하기
+### 로컬 모델 서버
 
-각각 두 단계입니다. 키를 변수에 넣고, 그 변수를 `provider add`에 넘깁니다. 그러면 복사하는
-명령에는 비밀이 실리지 않고, 키는 프로바이더마다 한 번이 아니라 전체에서 한 번만 붙여 넣게
-됩니다. 프롬프트에서 입력한 `VAR=value`는 그래도 셸 히스토리에 남으므로, 그것이 문제가 되는
-자리에서는 `read -rs VAR` 형태를 쓰십시오.
-
-프리셋이 아는 이름에는 URL이 필요 없습니다. 그 밖의 모든 것에는 `--base-url`이 필요하고,
-릴레이는 추측하지 않고 그렇게 말해 줍니다.
+#### Ollama
 
 **Ollama**는 명령 자체가 필요 없습니다. 함께 배포되는 `lmrelay.toml`이 이미
 `[upstream.ollama]`를 `http://127.0.0.1:11434`에 두고 `default_upstream`으로 만듭니다.
@@ -201,6 +195,54 @@ lmrelay provider add ollama "" --base-url http://gpu102:11434
 
 빈 토큰은 의도한 것입니다. 로컬 Ollama는 자격 증명을 요구하지 않으므로 Ollama 프리셋은
 헤더를 하나도 갖지 않습니다.
+
+#### vLLM
+
+vLLM은 기본값으로 포트 8000에서 OpenAI 방언을 제공합니다. 릴레이만 입구가 되도록 loopback에
+묶고, 같은 머신의 다른 것도 릴레이를 우회해 닿지 못하도록 키를 줍니다.
+
+```bash
+VLLM_KEY=$(openssl rand -hex 24)
+vllm serve Qwen/Qwen2.5-7B-Instruct --host 127.0.0.1 --port 8000 --api-key $VLLM_KEY
+lmrelay provider add vllm $VLLM_KEY --base-url http://127.0.0.1:8000
+```
+
+`vllm`은 프리셋이 아니므로 URL을 줍니다. 방언은 기본값인 `openai`, 헤더는 기본값인
+`Authorization: Bearer`이고, 이것이 `--api-key`가 검사하는 형태입니다. 기본 URL은 호스트만
+씁니다. `/v1`은 클라이언트가 붙이므로, `/v1`로 끝나는 기본 URL은 `/v1/v1/...`로 전달하게
+됩니다.
+
+`--api-key` 없이 시작한 vLLM은 자격 증명을 요구하지 않습니다. 그럴 때는 함께 배포되는 설정이
+Ollama를 담고 있는 것처럼 테이블을 `lmrelay.toml`에 직접 적고 `lmrelay reload`를 실행합니다.
+
+```toml
+[upstream.vllm]
+base_url = "http://127.0.0.1:8000"
+dialect  = "openai"
+```
+
+클라이언트는 `/vllm/v1/...`로 닿습니다. 접두사 없는 모든 요청을 vLLM으로 보내려면
+`[server]`의 `default_upstream`을 바꿉니다. 그러면 `/api/chat` 같은 Ollama 고유 경로에는
+릴레이가 400을 돌려줍니다. vLLM은 Ollama API를 제공하지 않기 때문입니다.
+
+```toml
+[server]
+default_upstream = "vllm"
+```
+
+클라이언트는 vLLM이 모델을 제공하는 이름으로 요청합니다. `vllm serve`에
+`--served-model-name`을 주지 않았다면 Hugging Face ID, 여기서는
+`Qwen/Qwen2.5-7B-Instruct`입니다.
+
+### 프로바이더 추가하기
+
+각각 두 단계입니다. 키를 변수에 넣고, 그 변수를 `provider add`에 넘깁니다. 그러면 복사하는
+명령에는 비밀이 실리지 않고, 키는 프로바이더마다 한 번이 아니라 전체에서 한 번만 붙여 넣게
+됩니다. 프롬프트에서 입력한 `VAR=value`는 그래도 셸 히스토리에 남으므로, 그것이 문제가 되는
+자리에서는 `read -rs VAR` 형태를 쓰십시오.
+
+프리셋이 아는 이름에는 URL이 필요 없습니다. 그 밖의 모든 것에는 `--base-url`이 필요하고,
+릴레이는 추측하지 않고 그렇게 말해 줍니다.
 
 **OpenRouter**에는 프리셋이 없으므로 URL을 줍니다. `openai`가 기본 방언이고
 OpenRouter가 말하는 것도 그것이니 `--dialect`는 필요하지 않습니다.
@@ -253,6 +295,7 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /vllm/v1/chat/completions     -> vllm       /v1/chat/completions
 POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
 POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
@@ -268,6 +311,7 @@ OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
+OpenAI(base_url="http://relay:11435/vllm/v1", api_key=RELAY_TOKEN)  # vLLM
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 

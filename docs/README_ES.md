@@ -200,15 +200,9 @@ ya está ahí, y sin ninguna ruta el paquete sale por stdout y se lee de stdin, 
 lo acepta todo comando que lee la configuración o el estado, es decir, todos menos `init`, que
 siempre escribe `~/.lmrelay/lmrelay.toml`, y `disable`, que no lee ninguno de los dos.
 
-### Añadir los proveedores
+### Servidores de modelos locales
 
-Dos pasos cada uno: poner la clave en una variable y luego pasar la variable a
-`provider add`. El comando que copias no lleva ningún secreto, y la clave se pega una vez
-en lugar de una vez por proveedor. Un `VAR=value` escrito en el prompt sigue quedando en el
-historial del shell, así que `read -rs VAR` es la forma a usar cuando eso importa.
-
-Un nombre que un preset conoce no necesita URL. Todo lo demás necesita `--base-url`, y el
-relay lo dice en lugar de adivinar.
+#### Ollama
 
 **Ollama** no necesita ningún comando. La `lmrelay.toml` que viene incluida ya lleva
 `[upstream.ollama]` en `http://127.0.0.1:11434` y lo hace `default_upstream`. Nómbralo
@@ -220,6 +214,55 @@ lmrelay provider add ollama "" --base-url http://gpu102:11434
 
 El token vacío es deliberado: el preset de Ollama no lleva cabeceras, porque un Ollama
 local no pide credencial.
+
+#### vLLM
+
+vLLM sirve el dialecto OpenAI en el puerto 8000 por defecto. Átalo a loopback, para que el
+relay sea la única entrada, y dale una clave, para que nada en la propia máquina llegue a él
+saltándose el relay:
+
+```bash
+VLLM_KEY=$(openssl rand -hex 24)
+vllm serve Qwen/Qwen2.5-7B-Instruct --host 127.0.0.1 --port 8000 --api-key $VLLM_KEY
+lmrelay provider add vllm $VLLM_KEY --base-url http://127.0.0.1:8000
+```
+
+`vllm` no es un preset, así que recibe su URL y toma el dialecto por defecto, `openai`, y la
+cabecera por defecto, `Authorization: Bearer`, que es lo que comprueba `--api-key`. La URL
+base es el host a secas: los clientes ya llevan `/v1`, y una URL base terminada en `/v1`
+reenviaría `/v1/v1/...`.
+
+Arrancado sin `--api-key`, vLLM no pide credenciales. Entonces añade la tabla a
+`lmrelay.toml` a mano, igual que la configuración incluida lleva Ollama, y ejecuta
+`lmrelay reload`:
+
+```toml
+[upstream.vllm]
+base_url = "http://127.0.0.1:8000"
+dialect  = "openai"
+```
+
+Los clientes llegan a él en `/vllm/v1/...`. Para que toda petición sin prefijo vaya a vLLM,
+cambia `default_upstream` en `[server]`. Una ruta nativa de Ollama como `/api/chat` recibe
+entonces el 400 del relay, porque vLLM no sirve la API de Ollama:
+
+```toml
+[server]
+default_upstream = "vllm"
+```
+
+Un cliente pide el modelo por el nombre con el que vLLM lo sirve: el id de Hugging Face,
+aquí `Qwen/Qwen2.5-7B-Instruct`, salvo que `vllm serve` haya recibido `--served-model-name`.
+
+### Añadir los proveedores
+
+Dos pasos cada uno: poner la clave en una variable y luego pasar la variable a
+`provider add`. El comando que copias no lleva ningún secreto, y la clave se pega una vez
+en lugar de una vez por proveedor. Un `VAR=value` escrito en el prompt sigue quedando en el
+historial del shell, así que `read -rs VAR` es la forma a usar cuando eso importa.
+
+Un nombre que un preset conoce no necesita URL. Todo lo demás necesita `--base-url`, y el
+relay lo dice en lugar de adivinar.
 
 **OpenRouter** no tiene preset, así que recibe su URL. `openai` es el dialecto por
 defecto y el que habla OpenRouter, así que `--dialect` no hace falta:
@@ -276,6 +319,7 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /vllm/v1/chat/completions     -> vllm       /v1/chat/completions
 POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
 POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
@@ -291,6 +335,7 @@ OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
+OpenAI(base_url="http://relay:11435/vllm/v1", api_key=RELAY_TOKEN)  # vLLM
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 
