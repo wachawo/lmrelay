@@ -652,6 +652,10 @@ lmrelay provider list          # from the file and from state
 lmrelay provider delete local
 ```
 
+A local vLLM is that same shape, an OpenAI-dialect server on port 8000. The README's
+[Local model servers](../README.md#local-model-servers) section covers it with and without
+`--api-key`, beside Ollama.
+
 A provider added by the CLI wins over an `[upstream.<name>]` of the same name, and the
 startup log names what was shadowed. `provider delete` refuses a name that only
 `lmrelay.toml` owns: `provider list` shows such a name, and deleting nothing while reporting

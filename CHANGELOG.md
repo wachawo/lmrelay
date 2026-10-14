@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The README shows how to put vLLM behind the relay**, beside Ollama, under a new "Local model
+  servers" section in every translation: with a key through `lmrelay provider add`, without one
+  as a hand-written `[upstream.vllm]` table, and as the default upstream. The routing table and
+  the client examples gain `/vllm/v1`.
 - **`status`, `stop`, `restart` and `reload` drive a system unit** when one is installed, hand-written
   or generated, instead of falling back to the pidfile. `reload` signals the process directly, so it
   needs no root. The status line names the kind: `systemd user unit: enabled, active`.

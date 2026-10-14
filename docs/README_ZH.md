@@ -180,13 +180,9 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 的命令都接受 `--config PATH`，也就是除 `init` 和 `disable` 以外的全部命令；`init` 始终写入
 `~/.lmrelay/lmrelay.toml`，而 `disable` 两者都不读。
 
-### 添加提供方
+### 本地模型服务器
 
-每个都是两步：把密钥放进变量，再把变量交给 `provider add`。这样你复制的命令不带任何机密，密钥
-只粘贴一次，而不是每个提供方粘一次。在提示符下敲出的 `VAR=value` 仍然会留在 shell 历史里，所以
-在这一点重要时用 `read -rs VAR`。
-
-预设认识的名字不需要 URL。其余一切都需要 `--base-url`，而中继会明说，不会去猜。
+#### Ollama
 
 **Ollama** 完全不需要命令。随包的 `lmrelay.toml` 已经把 `[upstream.ollama]` 指向
 `http://127.0.0.1:11434`，并让它成为 `default_upstream`。只有要把它挪到别的机器上时才需要
@@ -197,6 +193,50 @@ lmrelay provider add ollama "" --base-url http://gpu102:11434
 ```
 
 空令牌是故意的：Ollama 预设不带任何头部，因为本地 Ollama 不要凭据。
+
+#### vLLM
+
+vLLM 默认在 8000 端口提供 OpenAI 方言。把它绑定到 loopback，让中继成为唯一入口；
+再给它一个密钥，让本机上的其他程序也无法绕过中继直接访问它：
+
+```bash
+VLLM_KEY=$(openssl rand -hex 24)
+vllm serve Qwen/Qwen2.5-7B-Instruct --host 127.0.0.1 --port 8000 --api-key $VLLM_KEY
+lmrelay provider add vllm $VLLM_KEY --base-url http://127.0.0.1:8000
+```
+
+`vllm` 不是预设，所以要给它 URL；方言取默认的 `openai`，请求头取默认的
+`Authorization: Bearer`，这正是 `--api-key` 检查的形式。基础 URL 只写主机：`/v1`
+由客户端自己带上，以 `/v1` 结尾的基础 URL 会转发成 `/v1/v1/...`。
+
+不带 `--api-key` 启动时，vLLM 不要求任何凭据。这时像随包配置写 Ollama 那样，把下面的表手写进
+`lmrelay.toml`，再执行 `lmrelay reload`：
+
+```toml
+[upstream.vllm]
+base_url = "http://127.0.0.1:8000"
+dialect  = "openai"
+```
+
+客户端通过 `/vllm/v1/...` 访问它。要让所有不带前缀的请求都发往 vLLM，就修改 `[server]` 中的
+`default_upstream`。此后 `/api/chat` 这类 Ollama 原生路径会收到中继返回的 400，因为 vLLM
+不提供 Ollama API：
+
+```toml
+[server]
+default_upstream = "vllm"
+```
+
+客户端按 vLLM 提供模型时用的名字来请求模型：除非给 `vllm serve` 传了 `--served-model-name`，
+否则就是 Hugging Face 的 ID，这里是 `Qwen/Qwen2.5-7B-Instruct`。
+
+### 添加提供方
+
+每个都是两步：把密钥放进变量，再把变量交给 `provider add`。这样你复制的命令不带任何机密，密钥
+只粘贴一次，而不是每个提供方粘一次。在提示符下敲出的 `VAR=value` 仍然会留在 shell 历史里，所以
+在这一点重要时用 `read -rs VAR`。
+
+预设认识的名字不需要 URL。其余一切都需要 `--base-url`，而中继会明说，不会去猜。
 
 **OpenRouter** 没有预设，所以要给它 URL。`openai` 是默认方言，也正是 OpenRouter 所讲的，
 因此不需要 `--dialect`：
@@ -249,6 +289,7 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /vllm/v1/chat/completions     -> vllm       /v1/chat/completions
 POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
 POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
@@ -263,6 +304,7 @@ OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
+OpenAI(base_url="http://relay:11435/vllm/v1", api_key=RELAY_TOKEN)  # vLLM
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 

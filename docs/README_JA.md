@@ -181,15 +181,9 @@ lmrelay: the relay's rate limit is exceeded: 10/30m ([limits.total])
 または state を読むすべてのコマンドが受け付ける。つまり `init` と `disable` 以外のすべてだ。
 `init` は常に `~/.lmrelay/lmrelay.toml` を書き、`disable` はどちらも読まない。
 
-### プロバイダーを追加する
+### ローカルのモデルサーバー
 
-どれも二段階です。鍵を変数に入れ、その変数を `provider add` に渡します。こうすればコピーする
-コマンドに秘密は乗らず、鍵を貼るのはプロバイダーごとに一度ではなく全体で一度になります。
-プロンプトで打った `VAR=value` はそれでもシェルの履歴に残るので、そこが問題になる場面では
-`read -rs VAR` の形を使ってください。
-
-プリセットが知っている名前に URL は要りません。それ以外には `--base-url` が必要で、リレーは
-推測せずにそう言います。
+#### Ollama
 
 **Ollama** はコマンドそのものが要りません。同梱の `lmrelay.toml` がすでに
 `[upstream.ollama]` を `http://127.0.0.1:11434` に置き、`default_upstream` にしています。
@@ -201,6 +195,55 @@ lmrelay provider add ollama "" --base-url http://gpu102:11434
 
 空のトークンは意図的です。ローカルの Ollama は資格情報を求めないので、Ollama プリセットは
 ヘッダーを一つも持ちません。
+
+#### vLLM
+
+vLLM は既定でポート 8000 に OpenAI 方言を提供します。リレーだけが入口になるよう loopback
+にバインドし、マシン上の他のプロセスからもリレーを迂回して届かないよう鍵を与えます。
+
+```bash
+VLLM_KEY=$(openssl rand -hex 24)
+vllm serve Qwen/Qwen2.5-7B-Instruct --host 127.0.0.1 --port 8000 --api-key $VLLM_KEY
+lmrelay provider add vllm $VLLM_KEY --base-url http://127.0.0.1:8000
+```
+
+`vllm` はプリセットではないので URL を渡します。方言は既定の `openai`、ヘッダーは既定の
+`Authorization: Bearer` で、これが `--api-key` の検査する形です。ベース URL
+はホストだけにします。`/v1` はクライアントが付けるので、末尾に `/v1` のあるベース URL では
+`/v1/v1/...` に転送されてしまいます。
+
+`--api-key` なしで起動した vLLM は資格情報を求めません。その場合は、同梱の設定が Ollama
+を持っているのと同じように、テーブルを `lmrelay.toml` に手で書き、`lmrelay reload`
+を実行します。
+
+```toml
+[upstream.vllm]
+base_url = "http://127.0.0.1:8000"
+dialect  = "openai"
+```
+
+クライアントは `/vllm/v1/...` で届きます。プレフィックスのないリクエストをすべて vLLM
+に送るには、`[server]` の `default_upstream` を変えます。すると `/api/chat` のような Ollama
+固有のパスにはリレーが 400 を返します。vLLM は Ollama API を提供しないためです。
+
+```toml
+[server]
+default_upstream = "vllm"
+```
+
+クライアントは、vLLM がモデルを提供している名前で指定します。`vllm serve` に
+`--served-model-name` を渡していなければ、Hugging Face の ID、ここでは
+`Qwen/Qwen2.5-7B-Instruct` です。
+
+### プロバイダーを追加する
+
+どれも二段階です。鍵を変数に入れ、その変数を `provider add` に渡します。こうすればコピーする
+コマンドに秘密は乗らず、鍵を貼るのはプロバイダーごとに一度ではなく全体で一度になります。
+プロンプトで打った `VAR=value` はそれでもシェルの履歴に残るので、そこが問題になる場面では
+`read -rs VAR` の形を使ってください。
+
+プリセットが知っている名前に URL は要りません。それ以外には `--base-url` が必要で、リレーは
+推測せずにそう言います。
 
 **OpenRouter** にはプリセットがないので、URL を渡します。`openai` は既定の方言で、
 OpenRouter が話すのもそれなので、`--dialect` は不要です。
@@ -253,6 +296,7 @@ POST /openai/v1/chat/completions   -> openai     /v1/chat/completions
 POST /anthropic/v1/messages        -> anthropic  /v1/messages
 POST /deepseek/v1/chat/completions -> deepseek   /v1/chat/completions
 POST /grok/v1/chat/completions     -> grok       /v1/chat/completions
+POST /vllm/v1/chat/completions     -> vllm       /v1/chat/completions
 POST /openrouter/v1/chat/completions        -> openrouter /v1/chat/completions
 POST /gemini/v1beta/openai/chat/completions -> gemini     /v1beta/openai/chat/completions
 ```
@@ -267,6 +311,7 @@ OpenAI(base_url="http://relay:11435/openai/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/openrouter/v1", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/gemini/v1beta/openai", api_key=RELAY_TOKEN)
 OpenAI(base_url="http://relay:11435/v1", api_key=RELAY_TOKEN)  # Ollama
+OpenAI(base_url="http://relay:11435/vllm/v1", api_key=RELAY_TOKEN)  # vLLM
 Anthropic(base_url="http://relay:11435/anthropic", api_key=RELAY_TOKEN)  # Claude
 ```
 
