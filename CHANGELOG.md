@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-10-14
+
 ### Added
 
 - **`lmrelay enable --system`** writes a systemd system unit, `/etc/systemd/system/lmrelay.service`,
@@ -233,7 +235,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Autostart through a systemd user unit or a launchd agent: `enable`, `disable`.
 - Caller tokens addressed by id, and providers by preset: `token`, `provider`, `auth`.
 
-[Unreleased]: https://github.com/wachawo/lmrelay/compare/0.0.8...HEAD
+[Unreleased]: https://github.com/wachawo/lmrelay/compare/0.0.9...HEAD
+[0.0.9]: https://github.com/wachawo/lmrelay/compare/0.0.8...0.0.9
 [0.0.8]: https://github.com/wachawo/lmrelay/compare/0.0.7...0.0.8
 [0.0.7]: https://github.com/wachawo/lmrelay/compare/0.0.6...0.0.7
 [0.0.6]: https://github.com/wachawo/lmrelay/compare/0.0.5...0.0.6

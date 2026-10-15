@@ -2,4 +2,4 @@
 # -*- coding: utf-8 -*-
 """lmrelay: a credentialed passthrough beside a local Ollama."""
 
-__version__ = "0.0.8"
+__version__ = "0.0.9"
